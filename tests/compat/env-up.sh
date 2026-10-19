@@ -7,8 +7,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 S=${COMPAT_WORK:-$HERE/work}
 RSBIN=${RSBIN:-$HERE/../../target/debug}
 pkill -x ergo || true
-pkill -f "$S/bin/soju -config" || true
-pkill -f "$RSBIN/soju -config" || true
+pkill -f "soju -config $S/env/go/config" || true
+pkill -f "soju -config $S/env/rs/config" || true
 sleep 0.5
 for port in 16667 16668; do
   D=$S/env/ergo-$port
