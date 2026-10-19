@@ -752,10 +752,42 @@ async fn resolve_ip_addr(host: &str) -> Result<IpAddr> {
         .ok_or_else(|| anyhow!("no such host"))
 }
 
+/// Formats an OS error like Go's syscall.Errno: the C error message with a
+/// lowercase first letter, without Rust's " (os error N)" suffix.
+pub fn go_errno_message(e: &std::io::Error) -> String {
+    let s = e.to_string();
+    let s = match s.rfind(" (os error ") {
+        Some(i) => &s[..i],
+        None => &s,
+    };
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Connects to a TCP address, with errors worded like Go's net.Dial.
+async fn connect_tcp(addr: &str) -> Result<tokio::net::TcpStream> {
+    let host = crate::conn::host_of(addr);
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(addr)
+        .await
+        .map_err(|_| anyhow!("dial tcp: lookup {host}: no such host"))?
+        .collect();
+    let mut last_err = anyhow!("dial tcp: lookup {host}: no such host");
+    for a in addrs {
+        match tokio::net::TcpStream::connect(a).await {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = anyhow!("dial tcp {a}: connect: {}", go_errno_message(&e)),
+        }
+    }
+    Err(last_err)
+}
+
 async fn dial_tcp(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::TcpStream> {
     let upstream_user_ips = srv.config().basic.upstream_user_ips.clone();
     if upstream_user_ips.is_empty() {
-        return Ok(tokio::net::TcpStream::connect(addr).await?);
+        return connect_tcp(addr).await;
     }
     let (host, port) = split_host_port(addr)?;
     let ip = resolve_ip_addr(&host)
@@ -771,9 +803,14 @@ async fn dial_tcp(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::
         tokio::net::TcpSocket::new_v4()?
     };
     if let Some(local) = local {
-        socket.bind(SocketAddr::new(local, 0))?;
+        socket
+            .bind(SocketAddr::new(local, 0))
+            .map_err(|e| anyhow!("dial tcp {remote}: bind: {}", go_errno_message(&e)))?;
     }
-    Ok(socket.connect(remote).await?)
+    socket
+        .connect(remote)
+        .await
+        .map_err(|e| anyhow!("dial tcp {remote}: connect: {}", go_errno_message(&e)))
 }
 
 /// Dials the upstream server. Returns the stream and the remote/local
@@ -853,7 +890,14 @@ async fn connect(
             {
                 let s = tokio::net::UnixStream::connect(&u.path)
                     .await
-                    .map_err(|e| anyhow!("failed to connect to Unix socket {:?}: {e}", u.path))?;
+                    .map_err(|e| {
+                        anyhow!(
+                            "failed to connect to Unix socket {:?}: dial unix {}: connect: {}",
+                            u.path,
+                            u.path,
+                            go_errno_message(&e)
+                        )
+                    })?;
                 Ok((Box::new(s), None, None))
             }
             #[cfg(not(unix))]
@@ -2885,6 +2929,14 @@ fn dequeue_command(u: &mut User, ni: usize, cmd: &str) -> Option<(u64, Message)>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errno_messages() {
+        let e = std::io::Error::from_raw_os_error(111);
+        assert_eq!(go_errno_message(&e), "connection refused");
+        let e = std::io::Error::from_raw_os_error(2);
+        assert_eq!(go_errno_message(&e), "no such file or directory");
+    }
 
     #[test]
     fn labels() {
