@@ -22,16 +22,43 @@ name = "sojuctl"
 path = "src/bin/sojuctl.rs"
 
 [dependencies]
+aes-gcm = "0.11.1"
 anyhow = "1.0.104"
+aws-lc-rs = "1.18.2"
 base64 = "0.23.1"
 bcrypt = "0.19.3"
 chrono = "0.4.45"
+futures-util = "0.3.34"
 gethostname = "1.1.0"
+hex = "0.4.3"
+hkdf = "0.13.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = "0.1.21"
 indexmap = "2.14.2"
 ipnet = "2.12.2"
+p256 = { version = "0.14.0", features = ["ecdh", "ecdsa"] }
+rand = "0.10.3"
+rcgen = { version = "0.14.10", features = ["aws_lc_rs", "pem"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustls = "0.23.46"
+rustls-native-certs = "0.8.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+time = "0.3.55"
+tokio = { version = "1.54.0", features = ["full"] }
+tokio-rustls = "0.26.6"
+tokio-tungstenite = "0.30.0"
+tokio-util = { version = "0.7.20", features = ["rt"] }
+webpki-roots = "1.0.9"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[dev-dependencies]
+tokio = { version = "1.54.0", features = ["full", "test-util"] }
