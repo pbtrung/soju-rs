@@ -7,7 +7,9 @@ mod memory;
 pub mod znclog;
 
 pub use db::DbStore;
-pub use fs::{FsStore, delete_messages_before as fs_delete_messages_before, escape_filename};
+pub use fs::{
+    CleanupError, FsStore, delete_messages_before as fs_delete_messages_before, escape_filename,
+};
 pub use memory::MemoryStore;
 
 use anyhow::{Result, anyhow, bail};
