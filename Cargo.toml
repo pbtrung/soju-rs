@@ -1,0 +1,29 @@
+[package]
+name = "soju"
+version = "0.99.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A user-friendly IRC bouncer (Rust port of soju)"
+license = "AGPL-3.0-only"
+repository = "https://github.com/pbtrung/soju-rs"
+readme = "README.md"
+default-run = "soju"
+
+[lib]
+name = "soju"
+path = "src/lib.rs"
+
+[[bin]]
+name = "soju"
+path = "src/bin/soju.rs"
+
+[[bin]]
+name = "sojuctl"
+path = "src/bin/sojuctl.rs"
+
+[dependencies]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
