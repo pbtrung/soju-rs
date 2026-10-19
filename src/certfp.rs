@@ -35,7 +35,8 @@ pub fn generate_certfp(key_type: &str, bits: usize) -> Result<(Vec<u8>, Vec<u8>)
         }
         "ecdsa" => KeyPair::generate_for(&PKCS_ECDSA_P521_SHA512)?,
         "ed25519" => KeyPair::generate_for(&PKCS_ED25519)?,
-        _ => bail!("unknown key type {key_type:?}"),
+        // Same error as upstream, which fails to marshal a nil key
+        _ => bail!("x509: unknown key type while marshaling PKCS#8: <nil>"),
     };
 
     let mut params = CertificateParams::default();

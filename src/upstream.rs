@@ -111,6 +111,17 @@ pub struct OutcomeError {
     pub temporary: bool,
 }
 
+#[derive(Debug)]
+struct TlsHandshakeError(String);
+
+impl std::fmt::Display for TlsHandshakeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "tls: {}", self.0)
+    }
+}
+
+impl std::error::Error for TlsHandshakeError {}
+
 /// How an upstream connection ended, reported to its runner.
 #[derive(Debug)]
 pub struct ConnOutcome {
@@ -640,6 +651,16 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
     };
     let (io, remote_addr, local_addr) = match connected {
         Ok(Ok(c)) => c,
+        // Upstream performs the TLS handshake lazily, on the first write:
+        // handshake errors surface while reading registration replies
+        Ok(Err(e)) if e.is::<TlsHandshakeError>() => {
+            let text = format!("failed to register: failed to read message: {e}");
+            return Err(OutcomeError {
+                event: text.clone(),
+                text,
+                temporary: true,
+            });
+        }
         Ok(Err(e)) => return Err(to_err(e)),
         Err(_) => return Err(to_err(anyhow!("i/o timeout"))),
     };
@@ -807,7 +828,7 @@ async fn connect(
             let tls = tokio_rustls::TlsConnector::from(tls_config)
                 .connect(server_name, tcp)
                 .await
-                .map_err(|e| anyhow!("TLS handshake failed: {e}"))?;
+                .map_err(|e| TlsHandshakeError(e.to_string()))?;
             Ok((Box::new(tls), remote, local))
         }
         "irc+insecure" => {

@@ -2,7 +2,6 @@
 name = "soju"
 version = "0.99.0"
 edition = "2024"
-rust-version = "1.88"
 description = "A user-friendly IRC bouncer (Rust port of soju)"
 license = "AGPL-3.0-only"
 repository = "https://github.com/pbtrung/soju-rs"
@@ -55,7 +54,7 @@ tokio = { version = "1.54.0", features = ["full"] }
 tokio-rustls = "0.26.6"
 tokio-tungstenite = "0.30.0"
 tokio-util = { version = "0.7.20", features = ["rt"] }
-webpki-roots = "1.0.9"
+webpki-roots = "1.0.10"
 
 [profile.release]
 lto = "thin"

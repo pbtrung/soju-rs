@@ -411,7 +411,10 @@ impl DownstreamSasl {
                             opts.token = v[PREFIX.len()..].to_owned();
                         }
                         _ => {
-                            return fail(self, &format!("Invalid response, unknown parameter: {k}"));
+                            return fail(
+                                self,
+                                &format!("Invalid response, unknown parameter: {k}"),
+                            );
                         }
                     }
                 }
@@ -1429,15 +1432,11 @@ async fn authenticate(
     }
 }
 
+/// Adds the username to an authentication error. Like upstream (which
+/// formats the error with %v), this drops the user-facing message, so the
+/// client gets a generic "Authentication failed".
 fn wrap_auth_err(e: anyhow::Error, username: &str) -> anyhow::Error {
-    match e.downcast::<crate::auth::AuthError>() {
-        Ok(ae) => crate::auth::AuthError {
-            internal: anyhow!("{} (username {username:?})", ae.internal),
-            external_msg: ae.external_msg,
-        }
-        .into(),
-        Err(e) => anyhow!("{e} (username {username:?})"),
-    }
+    anyhow!("{e} (username {username:?})")
 }
 
 async fn register(dc: &mut DownstreamConn) -> Result<()> {
