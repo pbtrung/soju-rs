@@ -24,10 +24,12 @@ path = "src/bin/sojuctl.rs"
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
+bcrypt = "0.19.3"
 chrono = "0.4.45"
 gethostname = "1.1.0"
 indexmap = "2.14.2"
 ipnet = "2.12.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 lto = "thin"
