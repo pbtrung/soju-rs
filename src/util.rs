@@ -15,8 +15,8 @@ impl std::error::Error for BadPattern {}
 /// Reports whether name matches the shell pattern, with the same semantics
 /// as Go's path.Match.
 pub fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> {
-    let mut pattern: Vec<char> = pattern.chars().collect();
-    let mut name: Vec<char> = name.chars().collect();
+    let pattern: Vec<char> = pattern.chars().collect();
+    let name: Vec<char> = name.chars().collect();
     let mut p = &pattern[..];
     let mut n = &name[..];
 
@@ -63,10 +63,7 @@ pub fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> {
         }
         return Ok(false);
     }
-    let res = n.is_empty();
-    pattern.clear();
-    name.clear();
-    Ok(res)
+    Ok(n.is_empty())
 }
 
 fn scan_chunk(mut p: &[char]) -> (bool, &[char], &[char]) {

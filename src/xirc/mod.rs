@@ -27,8 +27,9 @@ pub fn format_server_time(t: DateTime<Utc>) -> String {
 /// Parses a time with the IRCv3 server-time layout
 /// ("2006-01-02T15:04:05.000Z" in Go notation).
 ///
-/// Like Go's time.Parse, the fractional seconds may have any number of
-/// digits (or be omitted) since the layout's fraction follows a dot.
+/// The fractional seconds may have any number of digits or be omitted.
+/// This is more lenient than upstream, whose layout requires exactly three
+/// digits.
 pub fn parse_server_time(s: &str) -> Option<DateTime<Utc>> {
     let s = s.strip_suffix('Z')?;
     let (base, frac) = match s.split_once('.') {

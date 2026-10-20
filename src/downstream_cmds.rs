@@ -1318,7 +1318,6 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             )
         }
         _ => {
-            // TODO: support AROUND
             return Err(fail(&[
                 "CHATHISTORY",
                 "INVALID_PARAMS",
@@ -1455,13 +1454,15 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             }
         }
         "TARGETS" => {
-            let targets = match store.list_targets(
-                &net.record,
-                bounds[0].unwrap(),
-                bounds[1].unwrap(),
-                limit,
-                event_playback,
-            ) {
+            let [Some(start), Some(end)] = bounds else {
+                return Err(fail(&[
+                    "CHATHISTORY",
+                    "INVALID_PARAMS",
+                    &subcommand,
+                    "Invalid bounds",
+                ]));
+            };
+            let targets = match store.list_targets(&net.record, start, end, limit, event_playback) {
                 Ok(t) => t,
                 Err(e) => {
                     logf!(

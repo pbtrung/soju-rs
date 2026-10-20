@@ -811,7 +811,6 @@ fn handle_sasl_set_plain(
     net.record.sasl.plain_username = p.args[0].clone();
     net.record.sasl.plain_password = p.args[1].clone();
     net.record.sasl.mechanism = "PLAIN".to_owned();
-    net.sync_snapshot();
     ctx.srv.db.store_network(u.record.id, &mut net.record)?;
     net.sync_snapshot();
     ctx.print("credentials saved");

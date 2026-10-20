@@ -19,7 +19,7 @@ use crate::logger::Logger;
 use crate::metrics;
 use crate::server::Server;
 use crate::upstream::{UpstreamChannel, UpstreamConn};
-use crate::user::{User, dcs_for};
+use crate::user::User;
 use crate::xirc::{self, CapRegistry, CaseMapping, CaseMappingMap, Isupport};
 use crate::{debugf, logf, msg};
 
@@ -549,13 +549,6 @@ impl DownstreamConn {
         }
     }
 
-    pub fn registration_network_id(&self) -> Option<i64> {
-        self.registration
-            .as_ref()
-            .map(|r| r.network_id)
-            .filter(|id| *id != 0)
-    }
-
     pub fn prefix(&self) -> Prefix {
         Prefix::full(
             self.nick.clone(),
@@ -720,7 +713,7 @@ impl DownstreamConn {
 
     /// Sends a message with an internal ID, so that clients without
     /// chathistory acknowledge it via PING/PONG.
-    pub fn send_message_with_id(&mut self, msg: Message, id: &str, _has_chathistory: bool) {
+    pub fn send_message_with_id(&mut self, msg: Message, id: &str) {
         let supports_backlog = message_supports_backlog(&msg);
         self.send_message(msg);
         if id.is_empty() || !supports_backlog || self.caps.is_enabled("draft/chathistory") {
@@ -1072,8 +1065,7 @@ pub fn unmarshal_username(raw: &str) -> (String, String, String) {
 }
 
 /// Common handling for all downstream messages, before the command
-/// handler: labeled-response setup. Returns false if the message was fully
-/// handled.
+/// handler: labeled-response setup.
 fn begin_message(dc: &mut DownstreamConn, msg: &Message) {
     dc.label = None;
     if let Some(label) = msg.tags.get("label")
@@ -2295,10 +2287,10 @@ pub fn handle_metadata_sub(
 }
 
 /// Handles a message from a registered downstream connection.
-pub fn handle_message(u: &mut User, dc_id: u64, msg: Message) -> Result<()> {
+pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     metrics::inc(&u.srv.metrics.downstream_in_messages_total);
     let i = u.dc_index(dc_id).unwrap();
-    begin_message(&mut u.downstreams[i], &msg);
+    begin_message(&mut u.downstreams[i], msg);
     let res = match msg.command.as_str() {
         "QUIT" => {
             u.downstreams[i].conn.shutdown();
@@ -2324,7 +2316,7 @@ pub fn handle_message(u: &mut User, dc_id: u64, msg: Message) -> Result<()> {
                 Ok(())
             }
         }
-        _ => handle_message_registered(u, dc_id, &msg),
+        _ => handle_message_registered(u, dc_id, msg),
     };
     let Some(i) = u.dc_index(dc_id) else {
         return Ok(());
@@ -2370,13 +2362,6 @@ pub fn enqueue_upstream_command(u: &mut User, dc_idx: usize, ni: usize, msg: Mes
     let dc_id = u.downstreams[dc_idx].id;
     if let Some(uc) = u.networks[ni].upstream_mut() {
         crate::upstream::enqueue_command(uc, dc_id, label, msg);
-    }
-}
-
-/// Runs a closure on each downstream connection of a network.
-pub fn for_each_downstream(u: &mut User, net_id: i64, mut f: impl FnMut(&mut DownstreamConn)) {
-    for dc in dcs_for(&mut u.downstreams, net_id) {
-        f(dc);
     }
 }
 

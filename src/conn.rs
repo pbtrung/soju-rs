@@ -311,11 +311,6 @@ impl Conn {
         }
         let _ = self.shared.tx.send(Outgoing::Shutdown);
     }
-
-    /// A token cancelled when the connection is closed.
-    pub fn closed_token(&self) -> CancellationToken {
-        self.shared.cancel.clone()
-    }
 }
 
 /// The reading side of a connection.

@@ -1061,7 +1061,9 @@ fn forward_message(u: &mut User, net_id: i64, msg: &Message) {
 }
 
 /// Handles a message from the upstream server.
-pub fn handle_message(u: &mut User, ni: usize, mut msg: Message) -> Result<()> {
+/// Handles a message from the upstream server. Like upstream, it may remove
+/// tags from the message (e.g. label and batch).
+pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> {
     let net_id = u.networks[ni].id();
     let mut label = msg.tags.remove("label").unwrap_or_default();
 
@@ -1104,7 +1106,7 @@ pub fn handle_message(u: &mut User, ni: usize, mut msg: Message) -> Result<()> {
     let res = handle_message_inner(
         u,
         ni,
-        &mut msg,
+        msg,
         downstream_id,
         &downstream_label,
         msg_batch,
@@ -2660,15 +2662,13 @@ pub fn produce(
         .prefix
         .as_ref()
         .is_some_and(|p| cm(&p.name) == cm(&our_nick));
-    let has_chathistory_store = u.has_chathistory_store();
-
     for dc in dcs_for(&mut u.downstreams, net_id) {
         if blocked && !dc.metadata_subs.contains("soju.im/blocked") {
             continue;
         }
         let echo = dc.id == origin_id && from_us;
         if !detached && (!echo || dc.caps.is_enabled("echo-message")) {
-            dc.send_message_with_id(msg.clone(), &msg_id, has_chathistory_store);
+            dc.send_message_with_id(msg.clone(), &msg_id);
         } else {
             dc.advance_message_with_id(msg, &msg_id);
         }

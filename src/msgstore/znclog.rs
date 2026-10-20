@@ -1,7 +1,7 @@
 //! ZNC log line format, used by the fs message store.
 
 use anyhow::{Result, bail};
-use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 use crate::database::{Network, User, get_nick};
 use crate::irc::{Message, Prefix, Tags};
@@ -250,12 +250,6 @@ fn format_message(msg: &Message) -> String {
         },
         _ => String::new(),
     }
-}
-
-/// Returns the local date of a time.
-pub fn local_date(t: DateTime<Utc>) -> NaiveDate {
-    let l = t.with_timezone(&Local);
-    NaiveDate::from_ymd_opt(l.year(), l.month(), l.day()).unwrap()
 }
 
 #[cfg(test)]

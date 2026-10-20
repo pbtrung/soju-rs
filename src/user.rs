@@ -651,7 +651,7 @@ impl User {
                     );
                     return;
                 }
-                if let Err(e) = downstream::handle_message(self, dc_id, msg.clone())
+                if let Err(e) = downstream::handle_message(self, dc_id, &msg)
                     && let Some(i) = self.dc_index(dc_id)
                 {
                     logf!(
@@ -1539,12 +1539,12 @@ impl User {
         self.process_upstream_message(ni, msg);
     }
 
-    fn process_upstream_message(&mut self, ni: usize, msg: Message) {
+    fn process_upstream_message(&mut self, ni: usize, mut msg: Message) {
         let registered_before = self.networks[ni]
             .conn
             .as_ref()
             .is_some_and(|uc| uc.registered);
-        let res = upstream::handle_message(self, ni, msg.clone());
+        let res = upstream::handle_message(self, ni, &mut msg);
         let Some(uc) = self.networks[ni].conn.as_mut() else {
             return;
         };
