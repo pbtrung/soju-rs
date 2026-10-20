@@ -46,7 +46,8 @@ pub struct Parsed {
     pub args: Vec<String>,
 }
 
-fn parse_go_bool(s: &str) -> Option<bool> {
+/// Parses a boolean like Go's strconv.ParseBool.
+pub(crate) fn parse_go_bool(s: &str) -> Option<bool> {
     match s {
         "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
         "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),

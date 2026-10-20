@@ -40,10 +40,12 @@ fn parse_duration(s: &str) -> Result<Duration> {
         bail!("missing 'd' suffix in duration");
     };
     let v: f64 = v.parse().map_err(|e| anyhow!("invalid duration: {e}"))?;
-    if v < 0.0 {
-        bail!("duration must be positive");
+    // Upstream's conversion overflows to a negative duration for values
+    // out of range (including inf and NaN)
+    match Duration::try_from_secs_f64(v * 24.0 * 3600.0) {
+        Ok(d) if v >= 0.0 => Ok(d),
+        _ => bail!("duration must be positive"),
     }
-    Ok(Duration::from_secs_f64(v * 24.0 * 3600.0))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,12 +220,8 @@ fn single_pair(dirs: &[&Directive]) -> Result<Option<(String, String)>> {
 }
 
 fn parse_bool(s: &str) -> Result<bool> {
-    // Same as Go's strconv.ParseBool
-    match s {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
-        _ => bail!("strconv.ParseBool: parsing {s:?}: invalid syntax"),
-    }
+    crate::flags::parse_go_bool(s)
+        .ok_or_else(|| anyhow!("strconv.ParseBool: parsing {s:?}: invalid syntax"))
 }
 
 fn parse_driver_source(name: &str, params: &[String]) -> Result<(String, String)> {
@@ -397,8 +395,9 @@ pub fn parse(s: &str) -> Result<Server> {
         srv.basic.accept_proxy_unix =
             parse_bool(&s).map_err(|e| anyhow!("directive accept-proxy-unix: {e}"))?;
     }
-    if let Some(s) = single_string(&get("max-user-networks"))? {
-        let d = get("max-user-networks")[0];
+    let d = get("max-user-networks");
+    if let Some(s) = single_string(&d)? {
+        let d = d[0];
         srv.basic.max_user_networks = s.parse().map_err(|_| {
             anyhow!(
                 "line {}, directive {:?}, parameter 1: invalid int parameter: strconv.ParseInt: parsing {:?}: invalid syntax",
@@ -551,6 +550,17 @@ client-cert-auth true
         assert!(parse("upstream-user-ip 1.2.3.0/24 4.5.6.0/24").is_err());
         assert!(parse("max-user-networks x").is_err());
         assert!(parse("enable-user-on-auth maybe").is_err());
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(parse_duration("0d").unwrap(), Duration::ZERO);
+        assert_eq!(parse_duration("1.5d").unwrap(), Duration::from_secs(129600));
+        assert!(parse_duration("5").is_err());
+        for s in ["-1d", "infd", "nand", "1e20d"] {
+            let err = parse_duration(s).unwrap_err().to_string();
+            assert_eq!(err, "duration must be positive", "{s}");
+        }
     }
 
     #[test]
