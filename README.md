@@ -62,6 +62,11 @@ Behaviour changes:
 - Server times (e.g. CHATHISTORY bounds) may have any number of fractional
   second digits; upstream requires exactly three
 - HTTP listeners only speak HTTP/1.1 (no HTTP/2)
+- Behind a trusted proxy, the client address is the last element of
+  `X-Forwarded-For` (the one the proxy added), and must be an IP address.
+  Upstream uses the whole header, so a `client, proxy` list put spaces into
+  IRC prefixes and broke clients. Forwarded addresses with whitespace are
+  ignored
 - With `message-expiry` and the `db` message store, the SQLite database is
   vacuumed after expired messages are deleted (upstream leaves it to the
   admin)
