@@ -69,6 +69,7 @@ impl Database {
         // journal_mode returns a row
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "cache_size", -512)?;
         let db = Database {
             conn: Mutex::new(conn),
         };
@@ -983,15 +984,17 @@ impl Database {
         }
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
+        // Messages are stored one by one as they arrive: keep the statements
+        // compiled
+        tx.prepare_cached(
             "INSERT INTO MessageTarget(network, target)
             VALUES (:network, :target)
             ON CONFLICT DO NOTHING",
-            named_params! {":network": network_id, ":target": name},
-        )?;
+        )?
+        .execute(named_params! {":network": network_id, ":target": name})?;
         let mut ids = Vec::with_capacity(msgs.len());
         {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare_cached(
                 "INSERT INTO Message(target, raw, time, sender, text)
                 SELECT id, :raw, :time, :sender, :text
                 FROM MessageTarget as t
@@ -1105,6 +1108,11 @@ impl Database {
         let after = time_to_sql(options.after_time);
         let before = time_to_sql(options.before_time);
         let text = quote_fts_query(&options.text);
+        if !options.text.is_empty() && text.is_empty() {
+            // Nothing to search for, e.g. only punctuation: MATCH '' would
+            // be a syntax error
+            return Ok(Vec::new());
+        }
         let limit = options.limit as i64;
         let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> =
             vec![(":network", &network_id), (":target", &name)];
@@ -1330,6 +1338,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(db.list_messages(n.id, "#a", &opts).unwrap().len(), 2);
+        // Nothing to search for, rather than an FTS syntax error
+        let opts = MessageOptions {
+            limit: 10,
+            text: "!!!".into(),
+            ..Default::default()
+        };
+        assert!(db.list_messages(n.id, "#a", &opts).unwrap().is_empty());
         let opts = MessageOptions {
             limit: 10,
             text: "hello world".into(),
