@@ -1153,23 +1153,25 @@ impl Database {
         Ok(l)
     }
 
-    /// Deletes messages older than before, then reclaims the freed space with
-    /// VACUUM if any were deleted.
-    pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<()> {
-        let conn = self.conn();
-        let n = conn.execute(
+    /// Deletes messages older than before. Returns the number of deleted
+    /// messages.
+    pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<usize> {
+        Ok(self.conn().execute(
             "DELETE FROM Message WHERE time < ?",
             [xirc::format_server_time(before)],
+        )?)
+    }
+
+    /// Reclaims the disk space freed by deleted rows.
+    pub fn vacuum(&self) -> Result<()> {
+        let conn = self.conn();
+        // VACUUM goes through the WAL, which keeps its size on disk until
+        // truncated by a checkpoint
+        conn.execute_batch(
+            "INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');
+            VACUUM;",
         )?;
-        if n > 0 {
-            // VACUUM goes through the WAL, which keeps its size on disk
-            // until truncated by a checkpoint
-            conn.execute_batch(
-                "INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');
-                VACUUM;",
-            )?;
-            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        }
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
 }
@@ -1401,7 +1403,8 @@ mod tests {
             .unwrap();
         let before = size();
 
-        db.delete_messages_before(Utc::now()).unwrap();
+        assert_eq!(db.delete_messages_before(Utc::now()).unwrap(), 2000);
+        db.vacuum().unwrap();
         assert!(size() < before / 2, "{} >= {before} / 2", size());
         let wal = std::fs::metadata(dir.join("main.db-wal")).map_or(0, |m| m.len());
         assert_eq!(wal, 0);

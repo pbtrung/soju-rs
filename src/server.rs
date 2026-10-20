@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
@@ -22,7 +22,7 @@ use crate::logger::Logger;
 use crate::metrics::Metrics;
 use crate::user::{Event, User, UserHandle};
 use crate::webpush;
-use crate::{logf, msg};
+use crate::{logf, msg, xirc};
 
 pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -382,12 +382,34 @@ impl Server {
             return Ok(());
         }
         let before = Utc::now() - chrono::Duration::from_std(expiry)?;
+        let before_str = xirc::format_server_time(before);
         match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db => self
-                .db
-                .delete_messages_before(before)
-                .map_err(|e| anyhow!("failed to delete expired messages from db: {e}"))?,
+            MsgStoreDriver::Db => {
+                let n = self
+                    .db
+                    .delete_messages_before(before)
+                    .map_err(|e| anyhow!("failed to delete expired messages from db: {e}"))?;
+                logf!(
+                    self.logger,
+                    "deleted {n} expired messages older than {before_str} from db"
+                );
+                if n > 0 {
+                    let start = Instant::now();
+                    self.db
+                        .vacuum()
+                        .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
+                    logf!(
+                        self.logger,
+                        "vacuumed db in {:.1}s",
+                        start.elapsed().as_secs_f64()
+                    );
+                }
+            }
             MsgStoreDriver::Fs => {
+                logf!(
+                    self.logger,
+                    "deleting expired messages older than {before_str} from disk"
+                );
                 if let Err(e) =
                     crate::msgstore::fs_delete_messages_before(&cfg.basic.msg_store.source, before)
                 {
