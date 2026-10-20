@@ -2,14 +2,9 @@
 
 mod bare;
 mod db;
-mod fs;
 mod memory;
-pub mod znclog;
 
 pub use db::DbStore;
-pub use fs::{
-    CleanupError, FsStore, delete_messages_before as fs_delete_messages_before, escape_filename,
-};
 pub use memory::MemoryStore;
 
 use anyhow::{Result, anyhow, bail};
@@ -47,16 +42,11 @@ pub struct SearchMessageOptions {
 pub enum Store {
     Memory(MemoryStore),
     Db(DbStore),
-    Fs(FsStore),
 }
 
 impl Store {
     pub fn is_memory(&self) -> bool {
         matches!(self, Store::Memory(_))
-    }
-
-    pub fn is_fs(&self) -> bool {
-        matches!(self, Store::Fs(_))
     }
 
     /// Whether the store supports chat history operations.
@@ -76,23 +66,16 @@ impl Store {
                 Ok(())
             }
             Store::Db(_) => Ok(()),
-            Store::Fs(s) => s.close(),
         }
     }
 
-    /// Queries the last message ID for the given network, entity and date.
-    /// The message ID returned may not refer to a valid message, but can be
-    /// used in history queries.
-    pub fn last_msg_id(
-        &mut self,
-        network: &Network,
-        entity: &str,
-        t: DateTime<Utc>,
-    ) -> Result<String> {
+    /// Queries the last message ID for the given network and entity. The
+    /// message ID returned may not refer to a valid message, but can be used
+    /// in history queries.
+    pub fn last_msg_id(&mut self, network: &Network, entity: &str) -> Result<String> {
         match self {
             Store::Memory(s) => Ok(s.last_msg_id(network, entity)),
             Store::Db(s) => s.last_msg_id(network, entity),
-            Store::Fs(s) => s.last_msg_id(network, entity, t),
         }
     }
 
@@ -106,7 +89,6 @@ impl Store {
         match self {
             Store::Memory(s) => s.load_latest_id(id, options),
             Store::Db(s) => s.load_latest_id(id, options),
-            Store::Fs(s) => s.load_latest_id(id, options),
         }
     }
 
@@ -116,7 +98,6 @@ impl Store {
         match self {
             Store::Memory(s) => Ok(s.append(network, entity, msg)),
             Store::Db(s) => s.append(network, entity, msg),
-            Store::Fs(s) => s.append(network, entity, msg),
         }
     }
 
@@ -135,13 +116,12 @@ impl Store {
         match self {
             Store::Memory(_) => bail!("chat history unsupported"),
             Store::Db(s) => s.list_targets(network, start, end, limit, events),
-            Store::Fs(s) => s.list_targets(network, start, end, limit),
         }
     }
 
     /// Loads up to limit messages before start down to end. The returned
-    /// messages are between and excluding the provided bounds. A missing
-    /// start means now, a missing end means no bound.
+    /// messages are between and excluding the provided bounds. Missing
+    /// bounds mean no bound.
     pub fn load_before_time(
         &mut self,
         start: Option<DateTime<Utc>>,
@@ -151,13 +131,12 @@ impl Store {
         match self {
             Store::Memory(_) => bail!("chat history unsupported"),
             Store::Db(s) => s.load_before_time(start, end, options),
-            Store::Fs(s) => s.get_before_time(start, end, options, None),
         }
     }
 
     /// Loads up to limit messages after start up to end. The returned
-    /// messages are between and excluding the provided bounds. A missing
-    /// end means now.
+    /// messages are between and excluding the provided bounds. Missing
+    /// bounds mean no bound.
     pub fn load_after_time(
         &mut self,
         start: Option<DateTime<Utc>>,
@@ -167,7 +146,6 @@ impl Store {
         match self {
             Store::Memory(_) => bail!("chat history unsupported"),
             Store::Db(s) => s.load_after_time(start, end, options),
-            Store::Fs(s) => s.get_after_time(start, end, options, None),
         }
     }
 
@@ -179,21 +157,15 @@ impl Store {
         match self {
             Store::Memory(_) => bail!("search unsupported"),
             Store::Db(s) => s.search(network, options),
-            Store::Fs(s) => s.search(network, options),
-        }
-    }
-
-    /// Notifies the store of a network rename. Only the fs store cares.
-    pub fn rename_network(&mut self, old: &Network, new: &Network) -> Result<()> {
-        match self {
-            Store::Fs(s) => s.rename_network(old, new),
-            _ => Ok(()),
         }
     }
 }
 
 const MSG_ID_NONE: u64 = 0;
 const MSG_ID_MEMORY: u64 = 1;
+/// Used by upstream's fs store, which soju-rs doesn't support: such IDs may
+/// still be found in databases, e.g. in delivery receipts.
+#[cfg(test)]
 const MSG_ID_FS: u64 = 2;
 const MSG_ID_DB: u64 = 3;
 const MSG_ID_VERSION: u64 = 0;
@@ -249,7 +221,6 @@ fn body_err(e: anyhow::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Local, TimeZone};
 
     // Reference IDs produced by upstream Go soju
     #[test]
@@ -260,16 +231,6 @@ mod tests {
         );
         assert_eq!(db::format_db_msg_id(7, "bob", 99999), "AA4DYm9iA5-NBg");
         assert_eq!(db::format_db_msg_id(-3, "", 0), "AAUAAwA");
-        let d = Local.with_ymd_and_hms(2024, 3, 9, 0, 0, 0).unwrap();
-        assert_eq!(
-            fs::format_fs_msg_id(5, "#chan", d, 4096),
-            "AAoFI2NoYW4C0B8GEoBA"
-        );
-        let d = Local.with_ymd_and_hms(1999, 12, 31, 0, 0, 0).unwrap();
-        assert_eq!(
-            fs::format_fs_msg_id(5, "#chan", d, -1),
-            "AAoFI2NoYW4Cnh8YPgE"
-        );
 
         assert_eq!(
             parse_msg_id("AFQFI3NvanUBh61L").unwrap(),
@@ -281,9 +242,14 @@ mod tests {
         );
         assert!(db::parse_db_msg_id("AFQFI3NvanUBh61L").is_err());
         assert_eq!(db::parse_db_msg_id("AA4DYm9iA5-NBg").unwrap(), 99999);
-        let (net, entity, date, off) = fs::parse_fs_msg_id("AAoFI2NoYW4C0B8GEoBA").unwrap();
-        assert_eq!((net, entity.as_str(), off), (5, "#chan", 4096));
-        assert_eq!(date, Local.with_ymd_and_hms(2024, 3, 9, 0, 0, 0).unwrap());
+        // An fs store ID made by upstream: recognized, but not a DB one
+        assert_eq!(
+            parse_msg_id("AAoFI2NoYW4C0B8GEoBA").unwrap(),
+            (5, "#chan".to_owned())
+        );
+        let (_, _, body) = parse_msg_id_with("AAoFI2NoYW4C0B8GEoBA", MSG_ID_FS).unwrap();
+        assert!(!body.is_empty());
+        assert!(db::parse_db_msg_id("AAoFI2NoYW4C0B8GEoBA").is_err());
         assert!(parse_msg_id("!!!").is_err());
         assert!(parse_msg_id("").is_err());
     }

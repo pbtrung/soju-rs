@@ -8,7 +8,6 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use chrono::Utc;
 use sha2::{Digest, Sha512};
 
 use crate::conn::{Conn, ConnInfo, ConnReader};
@@ -504,7 +503,7 @@ impl DownstreamConn {
         // TODO: we should only enable chathistory after authentication and
         // then check that the user's message store supports it
         match cfg.basic.msg_store.driver {
-            crate::config::MsgStoreDriver::Fs | crate::config::MsgStoreDriver::Db => {
+            crate::config::MsgStoreDriver::Db => {
                 caps.available
                     .insert("draft/chathistory".to_owned(), String::new());
                 caps.available
@@ -1809,7 +1808,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 let net = &mut u.networks[ni];
                 let target_cm = net.casemap(&target);
                 let store = u.msg_store.as_mut().unwrap();
-                match store.last_msg_id(&net.record, &target_cm, Utc::now()) {
+                match store.last_msg_id(&net.record, &target_cm) {
                     Ok(last_id) => net.delivered.store_id(&target, &client, &last_id),
                     Err(e) => {
                         let i = u.dc_index(dc_id).unwrap();

@@ -1146,8 +1146,7 @@ fn handle_message_inner(
             .get("time")
             .and_then(xirc::parse_server_time)
             .unwrap_or_else(Utc::now);
-        msg.tags
-            .set("time", crate::user::format_server_time(&u.msg_store, t));
+        msg.tags.set("time", xirc::format_server_time(t));
     }
 
     let prefix_name = msg.prefix_name().to_owned();
@@ -2604,7 +2603,7 @@ pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> Strin
         // This is the first message we receive from this target. Save the
         // last message ID in delivery receipts, so that we can send the new
         // message in the backlog if an offline client reconnects.
-        let last_id = match store.last_msg_id(&net.record, &entity_cm, Utc::now()) {
+        let last_id = match store.last_msg_id(&net.record, &entity_cm) {
             Ok(id) => id,
             Err(e) => {
                 logf!(

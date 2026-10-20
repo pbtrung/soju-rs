@@ -38,6 +38,8 @@ Not supported:
 - File uploads (`file-upload`, `/uploads`, `soju.im/FILEHOST`)
 - PostgreSQL (`db postgres`), PAM authentication (`auth pam`) and
   `http+pprof://` listeners
+- The `fs` message store (`message-store fs`, ZNC-format log files): use
+  `db` (the default)
 - `sojudb` and the tools from upstream's `contrib/` directory: users are
   managed with `sojuctl` over the admin socket
 

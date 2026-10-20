@@ -14,7 +14,7 @@ specifications and the gamja web client. They start local servers on ports
 `setup.sh` takes `SOJU_REF` (upstream soju git ref) and `GAMJA_SRC` (local
 gamja checkout, defaults to cloning upstream). `EXTRA_CONFIG` adds lines to
 both bouncers' configuration, `%D%` being replaced by each bouncer's
-directory, e.g. `EXTRA_CONFIG="message-store fs %D%/logs" ./run-diff.sh`.
+directory, e.g. `EXTRA_CONFIG="motd %D%/motd.txt" ./run-diff.sh`.
 
 The differential harness (`diffharness.py`) runs each scenario against both
 bouncers, each connected to its own ergo instance, and compares the

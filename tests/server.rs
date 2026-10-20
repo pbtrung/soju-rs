@@ -70,7 +70,6 @@ struct Env {
     srv: Arc<Server>,
     network: database::Network,
     upstream: TcpListener,
-    _dir: Option<std::path::PathBuf>,
 }
 
 async fn setup(msg_store: MsgStore) -> Env {
@@ -96,7 +95,6 @@ async fn setup(msg_store: MsgStore) -> Env {
         srv,
         network,
         upstream,
-        _dir: None,
     }
 }
 
@@ -348,18 +346,6 @@ async fn chat_history_db() {
         source: String::new(),
     })
     .await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn chat_history_fs() {
-    let dir = std::env::temp_dir().join(format!("soju-rs-chathistory-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    chat_history(MsgStore {
-        driver: MsgStoreDriver::Fs,
-        source: dir.to_str().unwrap().to_owned(),
-    })
-    .await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Registers an upstream connection like register_upstream, advertising

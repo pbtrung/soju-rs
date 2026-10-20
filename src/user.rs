@@ -384,10 +384,6 @@ impl User {
             .with_prefix(format!("user {:?}: ", record.username));
         let cfg = srv.config();
         let msg_store = match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Fs => Some(Store::Fs(msgstore::FsStore::new(
-                &cfg.basic.msg_store.source,
-                &record,
-            ))),
             MsgStoreDriver::Db => Some(Store::Db(msgstore::DbStore::new(srv.db.clone()))),
             MsgStoreDriver::Memory => Some(Store::Memory(msgstore::MemoryStore::new())),
         };
@@ -431,10 +427,6 @@ impl User {
 
     pub fn has_chathistory_store(&self) -> bool {
         matches!(&self.msg_store, Some(s) if s.supports_chathistory())
-    }
-
-    pub fn format_server_time(&self, t: DateTime<Utc>) -> String {
-        format_server_time(&self.msg_store, t)
     }
 
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
@@ -976,19 +968,6 @@ impl User {
         // they keep using the network ID
         let old = self.networks.remove(i);
 
-        // The filesystem message store needs to be notified whenever the
-        // network is renamed
-        if updated.get_name() != old.get_name()
-            && let Some(store) = &mut self.msg_store
-            && let Err(e) = store.rename_network(&old.record, &updated.record)
-        {
-            logf!(
-                old.logger,
-                "failed to update message store network name to {:?}: {e}",
-                updated.get_name()
-            );
-        }
-
         // Transfer network attributes that aren't in the record
         let cm = old.casemap;
         updated.delivered = old.delivered;
@@ -1201,7 +1180,7 @@ impl User {
 
         if let Some(store) = &mut self.msg_store {
             let name_cm = (net.casemap)(&ch_name);
-            match store.last_msg_id(&net.record, &name_cm, Utc::now()) {
+            match store.last_msg_id(&net.record, &name_cm) {
                 Ok(id) => net.channels.get_mut(name).unwrap().detached_internal_msg_id = id,
                 Err(e) => {
                     logf!(
@@ -1380,17 +1359,6 @@ impl User {
             }
         }
     }
-}
-
-pub fn format_server_time(store: &Option<Store>, t: DateTime<Utc>) -> String {
-    let mut t = t;
-    if matches!(store, Some(s) if s.is_fs()) {
-        // The FS message store truncates message timestamps to the second,
-        // so truncate them here to get consistent timestamps.
-        use chrono::Timelike;
-        t = t.with_nanosecond(0).unwrap();
-    }
-    xirc::format_server_time(t)
 }
 
 /// The downstream connections bound to a network.

@@ -149,21 +149,19 @@ The following directives are supported:
 	- _sqlite3_ expects _source_ to be a path to the SQLite file. The database
 	  format is the same as upstream soju's.
 
-*message-store* <driver> [source]
+*message-store* <driver>
 	Set the database location for IRC messages. By default, _db_ is used.
 
 	Supported drivers:
 
 	- _db_ stores messages in the database. A full-text search index is used to
 	  speed up search queries.
-	- _fs_ stores messages on disk, in the same format as ZNC. _source_ is
-	  required and is the root directory path for the database. This on-disk
-	  format is lossy: some IRCv3 messages (e.g. TAGMSG) and all message tags
-	  are discarded.
 	- _memory_ stores messages in memory. For each channel/user, only the
 	  latest 4K messages are kept in memory, older messages are discarded. This
 	  driver is very basic and doesn't support features such as the
 	  _chathistory_ extension and search.
+
+	Upstream soju's _fs_ driver (ZNC-format log files) isn't supported.
 
 	(_log_ is a deprecated alias for this directive.)
 

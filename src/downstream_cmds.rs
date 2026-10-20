@@ -835,7 +835,7 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
                 msg.command
             );
             let mut btags = tags.clone();
-            btags.set("time", u.format_server_time(Utc::now()));
+            btags.set("time", xirc::format_server_time(Utc::now()));
             let bmsg = Message::new(msg.command.clone(), params)
                 .with_tags(btags)
                 .with_prefix(service_prefix());
@@ -859,7 +859,7 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         if name_cm == SERVICE_NICK_CM {
             if dc!(u, i).caps.is_enabled("echo-message") {
                 let mut etags = tags.clone();
-                etags.set("time", u.format_server_time(Utc::now()));
+                etags.set("time", xirc::format_server_time(Utc::now()));
                 let prefix = dc!(u, i).prefix();
                 dc!(u, i).send_message(
                     Message::new(msg.command.clone(), params.clone())
@@ -927,7 +927,7 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         if !echo_supported {
             let uc = u.networks[ni].upstream().unwrap();
             let mut etags = tags.clone();
-            etags.set("time", u.format_server_time(Utc::now()));
+            etags.set("time", xirc::format_server_time(Utc::now()));
             if !uc.account.is_empty() {
                 etags.set("account", uc.account.clone());
             }

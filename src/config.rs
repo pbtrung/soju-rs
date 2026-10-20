@@ -52,7 +52,6 @@ fn parse_duration(s: &str) -> Result<Duration> {
 pub enum MsgStoreDriver {
     Memory,
     Db,
-    Fs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,19 +308,13 @@ pub fn parse(s: &str) -> Result<Server> {
         let driver = match driver.as_str() {
             "memory" => MsgStoreDriver::Memory,
             "db" => MsgStoreDriver::Db,
-            "fs" => MsgStoreDriver::Fs,
+            "fs" => bail!("directive message-store: driver \"fs\" is not supported"),
             _ => bail!("directive message-store: unknown driver {driver:?}"),
         };
         match driver {
             MsgStoreDriver::Memory | MsgStoreDriver::Db if !source.is_empty() => {
                 bail!(
                     "directive message-store: driver {:?} requires zero parameters",
-                    params[0]
-                )
-            }
-            MsgStoreDriver::Fs if source.is_empty() => {
-                bail!(
-                    "directive message-store: driver {:?} requires a source",
                     params[0]
                 )
             }
@@ -478,7 +471,7 @@ hostname example.org
 title "My bouncer"
 tls cert.pem key.pem
 db sqlite3 /var/lib/soju/main.db
-message-store fs /var/lib/soju/logs
+message-store db
 auth oauth2 https://id:secret@auth.example.org
 http-origin https://*.example.org
 accept-proxy-ip localhost 10.0.0.1/8
@@ -497,7 +490,7 @@ client-cert-auth true
         assert_eq!(cfg.basic.title, "My bouncer");
         assert_eq!(cfg.basic.http_ingress, "https://example.org");
         assert_eq!(cfg.db.source, "/var/lib/soju/main.db");
-        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Fs);
+        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
         assert_eq!(cfg.auth.len(), 1);
         assert_eq!(cfg.auth[0].driver, AuthDriver::OAuth2);
         assert!(
@@ -543,7 +536,6 @@ client-cert-auth true
         assert!(parse("hostname a\nhostname b").is_err());
         assert!(parse("tls a").is_err());
         assert!(parse("db postgres x").is_err());
-        assert!(parse("message-store fs").is_err());
         assert!(parse("message-store db x").is_err());
         assert!(parse("auth http").is_err());
         assert!(parse("disable-inactive-user 30").is_err());
@@ -565,7 +557,22 @@ client-cert-auth true
 
     #[test]
     fn log_alias() {
-        let cfg = parse("log fs /tmp/logs").unwrap();
-        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Fs);
+        let cfg = parse("log memory").unwrap();
+        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Memory);
+    }
+
+    #[test]
+    fn fs_message_store_unsupported() {
+        for c in [
+            "message-store fs /tmp/logs",
+            "log fs /tmp/logs",
+            "message-store fs",
+        ] {
+            let err = parse(c).unwrap_err().to_string();
+            assert_eq!(
+                err, "directive message-store: driver \"fs\" is not supported",
+                "{c}"
+            );
+        }
     }
 }

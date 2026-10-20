@@ -415,21 +415,6 @@ impl Server {
                     );
                 }
             }
-            MsgStoreDriver::Fs => {
-                logf!(
-                    self.logger,
-                    "deleting expired messages older than {before_str} from disk"
-                );
-                if let Err(e) =
-                    crate::msgstore::fs_delete_messages_before(&cfg.basic.msg_store.source, before)
-                {
-                    if e.is::<crate::msgstore::CleanupError>() {
-                        logf!(self.logger, "failed to cleanup empty log directories: {e}");
-                    } else {
-                        bail!("failed to delete expired messages from disk: {e}");
-                    }
-                }
-            }
             MsgStoreDriver::Memory => {}
         }
         Ok(())
