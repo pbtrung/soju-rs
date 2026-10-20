@@ -8,10 +8,25 @@ pub use sqlite::Database;
 pub use utils::strip_ansi;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
+
+/// Runs database operations from async code, on tokio's blocking thread
+/// pool: SQLite calls block, and would otherwise stall a runtime worker and
+/// all the tasks queued on it.
+pub async fn run<T, F>(db: &Arc<Database>, f: F) -> Result<T>
+where
+    F: FnOnce(&Database) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || f(&db))
+        .await
+        .map_err(|e| anyhow!("database task failed: {e}"))?
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DuplicateDeviceCertificate;

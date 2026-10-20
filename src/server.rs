@@ -301,7 +301,11 @@ impl Server {
         if let Some(u) = self.get_user(username) {
             return Ok(u);
         }
-        if self.db.get_user(username)?.is_some() {
+        let name = username.to_owned();
+        if db::run(&self.db, move |db| db.get_user(&name))
+            .await?
+            .is_some()
+        {
             bail!(
                 "user {username:?} exists in the DB but hasn't been loaded by the bouncer -- a restart may help"
             );
@@ -311,9 +315,13 @@ impl Server {
         }
         // Can't find the user in the DB -- try to create it
         let record = db::User::new(username);
-        self.create_user(record).map_err(|e| {
-            anyhow!("failed to automatically create user {username:?} after successful authentication: {e}")
-        })
+        let srv = self.clone();
+        tokio::task::spawn_blocking(move || srv.create_user(record))
+            .await
+            .map_err(|e| anyhow!("database task failed: {e}"))?
+            .map_err(|e| {
+                anyhow!("failed to automatically create user {username:?} after successful authentication: {e}")
+            })
     }
 
     pub fn stats(&self) -> ServerStats {
@@ -334,9 +342,8 @@ impl Server {
             return Ok(());
         }
         let limit = Utc::now() - chrono::Duration::from_std(delay)?;
-        let usernames = self
-            .db
-            .list_inactive_usernames(limit)
+        let usernames = db::run(&self.db, move |db| db.list_inactive_usernames(limit))
+            .await
             .map_err(|e| anyhow!("failed to list inactive users: {e}"))?;
         if usernames.is_empty() {
             return Ok(());

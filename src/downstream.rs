@@ -1418,15 +1418,19 @@ async fn authenticate(
                 .map_err(|e| wrap_auth_err(e, &username))?;
             let mut impersonating = false;
             if !plain.identity.is_empty() && plain.identity != plain.username {
-                let u = srv
-                    .db
-                    .get_user(&username)?
+                let name = username.clone();
+                let u = db::run(&srv.db, move |db| db.get_user(&name))
+                    .await?
                     .ok_or_else(|| anyhow!("sql: no rows in result set (username {username:?})"))?;
                 if !u.admin {
                     bail!("SASL impersonation only allowed for admin users");
                 }
                 (username, client, network) = unmarshal_username(&plain.identity);
-                if srv.db.get_user(&username)?.is_none() {
+                let name = username.clone();
+                if db::run(&srv.db, move |db| db.get_user(&name))
+                    .await?
+                    .is_none()
+                {
                     bail!("sql: no rows in result set (username {username:?})");
                 }
                 impersonating = true;
@@ -1455,15 +1459,19 @@ async fn authenticate(
                 bail!("TLS client certificate not sent");
             };
             let h = Sha512::digest(cert);
-            let Some((user_id, mut device)) = srv.db.get_device_certificate(&h)? else {
+            let Some((user_id, mut device)) =
+                db::run(&srv.db, move |db| db.get_device_certificate(&h)).await?
+            else {
                 bail!("Unknown TLS client certificate");
             };
-            let username = srv
-                .db
-                .get_username_by_id(user_id)?
+            let username = db::run(&srv.db, move |db| db.get_username_by_id(user_id))
+                .await?
                 .ok_or_else(|| anyhow!("sql: no rows in result set"))?;
             device.mark_used(dc.info.remote_ip.map(|ip| std::net::SocketAddr::new(ip, 0)));
-            srv.db.store_device_certificate(user_id, &mut device)?;
+            db::run(&srv.db, move |db| {
+                db.store_device_certificate(user_id, &mut device)
+            })
+            .await?;
             Ok((username, String::new(), String::new(), false))
         }
         _ => bail!("unsupported SASL mechanism"),

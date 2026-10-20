@@ -430,7 +430,8 @@ impl User {
     }
 
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
-        let networks = match self.srv.db.list_networks(self.record.id) {
+        let user_id = self.record.id;
+        let networks = match db::run(&self.srv.db, move |db| db.list_networks(user_id)).await {
             Ok(mut n) => {
                 n.sort_by_key(|n| n.id);
                 n
@@ -447,7 +448,8 @@ impl User {
         };
 
         for record in networks {
-            let channels = match self.srv.db.list_channels(record.id) {
+            let net_id = record.id;
+            let channels = match db::run(&self.srv.db, move |db| db.list_channels(net_id)).await {
                 Ok(c) => c,
                 Err(e) => {
                     logf!(
@@ -461,7 +463,9 @@ impl User {
             };
             let mut network = Network::new(&self.logger, record, channels);
             if self.has_persistent_msg_store() {
-                match self.srv.db.list_delivery_receipts(network.id()) {
+                let receipts =
+                    db::run(&self.srv.db, move |db| db.list_delivery_receipts(net_id)).await;
+                match receipts {
                     Ok(receipts) => {
                         for rcpt in receipts {
                             network.delivered.store_id(
@@ -489,7 +493,10 @@ impl User {
         }
 
         while let Some(ev) = rx.recv().await {
-            self.handle_event(ev);
+            // Event handlers are synchronous and make blocking SQLite calls
+            // whose results they need: let the runtime move its other tasks
+            // to another worker meanwhile.
+            tokio::task::block_in_place(|| self.handle_event(ev));
             if self.stopped {
                 break;
             }
@@ -1397,7 +1404,11 @@ pub async fn broadcast_web_push(
     msg: Message,
 ) {
     let Some(sender) = srv.web_push() else { return };
-    let subs = match srv.db.list_web_push_subscriptions(user_id, net_id) {
+    let subs = db::run(&srv.db, move |db| {
+        db.list_web_push_subscriptions(user_id, net_id)
+    })
+    .await;
+    let subs = match subs {
         Ok(s) => s,
         Err(e) => {
             logf!(logger, "failed to list Web push subscriptions: {e}");
@@ -1409,7 +1420,10 @@ pub async fn broadcast_web_push(
         match res {
             Ok(()) => {}
             Err(e) if e.is::<crate::webpush::SubscriptionExpired>() => {
-                if let Err(e) = srv.db.delete_web_push_subscription(sub.id) {
+                let id = sub.id;
+                if let Err(e) =
+                    db::run(&srv.db, move |db| db.delete_web_push_subscription(id)).await
+                {
                     logf!(
                         logger,
                         "failed to delete expired Web Push subscription {:?}: {e}",
@@ -1434,7 +1448,10 @@ pub async fn broadcast_web_push(
                     .updated_at
                     .is_none_or(|t| Utc::now() - t > chrono::Duration::days(30));
                 if old {
-                    if let Err(e) = srv.db.delete_web_push_subscription(sub.id) {
+                    let id = sub.id;
+                    if let Err(e) =
+                        db::run(&srv.db, move |db| db.delete_web_push_subscription(id)).await
+                    {
                         logf!(
                             logger,
                             "failed to delete pruned Web Push subscription {:?}: {e}",

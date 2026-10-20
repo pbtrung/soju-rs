@@ -1127,7 +1127,7 @@ fn handle_user_delete(
         let srv = ctx.srv.clone();
         tokio::spawn(async move {
             handle.stop().await;
-            if let Err(e) = srv.db.delete_user(user_id) {
+            if let Err(e) = db::run(&srv.db, move |db| db.delete_user(user_id)).await {
                 logf!(srv.logger, "failed to delete user {username:?}: {e}");
             }
         });

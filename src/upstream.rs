@@ -1414,7 +1414,9 @@ fn handle_message_inner(
                 let m = msg.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
-                    match srv.db.get_read_receipt(net_id, &target_cm) {
+                    let receipt =
+                        db::run(&srv.db, move |db| db.get_read_receipt(net_id, &target_cm)).await;
+                    match receipt {
                         Err(e) => {
                             logf!(logger, "failed to get the read receipt for {buffer:?}: {e}");
                             return;
