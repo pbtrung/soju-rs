@@ -6,6 +6,15 @@ use indexmap::IndexMap;
 use crate::irc::{Message, Tags, numerics::*};
 use crate::xirc::{self, CaseMappingMap, Membership, MembershipSet};
 
+/// Formats a message for logs, hiding the parameters of commands carrying
+/// credentials.
+pub fn redact_for_log(msg: &Message) -> String {
+    match msg.command.as_str() {
+        "PASS" | "AUTHENTICATE" | "OPER" => format!("{} <redacted>", msg.command),
+        _ => msg.to_string(),
+    }
+}
+
 /// A set of user modes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UserModes(pub String);
@@ -16,7 +25,9 @@ impl UserModes {
     }
 
     pub fn add(&mut self, c: u8) {
-        if !self.has(c) {
+        // Mode letters are ASCII: other bytes would be stored as multi-byte
+        // chars, which del() can't remove by byte position
+        if c.is_ascii() && !self.has(c) {
             self.0.push(c as char);
         }
     }
@@ -340,6 +351,15 @@ pub fn split_words(s: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_modes_non_ascii() {
+        let mut m = UserModes::default();
+        m.apply("+iw\u{e9}").unwrap();
+        // Non-ASCII mode bytes are ignored, rather than panicking on removal
+        m.apply("-\u{e9}w").unwrap();
+        assert_eq!(m.0, "i");
+    }
 
     #[test]
     fn highlight() {

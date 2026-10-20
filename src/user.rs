@@ -656,7 +656,7 @@ impl User {
                     logf!(
                         self.downstreams[i].logger,
                         "failed to handle message {:?}: {e}",
-                        msg.to_string()
+                        crate::ircutil::redact_for_log(&msg)
                     );
                     self.downstreams[i].conn.close();
                 }

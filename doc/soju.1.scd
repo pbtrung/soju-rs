@@ -398,7 +398,8 @@ character.
 	Show a list of saved networks and their current status.
 
 *network info* [name]
-	Show the configuration of a network. Passwords are not displayed.
+	Show the configuration of a network. Passwords are not displayed, nor
+	the parameters of connect commands, which may contain secrets.
 
 	If _name_ is not specified, the current network is displayed.
 

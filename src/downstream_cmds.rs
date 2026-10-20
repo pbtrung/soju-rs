@@ -902,7 +902,9 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         let echo_supported = uc.caps.is_enabled("echo-message");
         let our_nick = uc.nick.clone();
 
+        // The lines of a multiline message aren't a single command
         if msg.command == "PRIVMSG"
+            && !text.contains('\n')
             && u.networks[ni].casemap(&name) == "nickserv"
             && let Some((username, password)) = parse_nickserv_credentials(&text, &our_nick)
         {

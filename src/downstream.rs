@@ -1236,7 +1236,7 @@ pub async fn run_until_registered(
         };
         metrics::inc(&dc.srv.metrics.downstream_in_messages_total);
 
-        let msg_str = msg.to_string();
+        let msg_str = ircutil::redact_for_log(&msg);
         if let Err(e) = handle_message_unregistered(dc, msg).await {
             bail!("failed to handle IRC command {msg_str:?}: {e}");
         }

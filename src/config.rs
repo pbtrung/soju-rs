@@ -40,10 +40,12 @@ fn parse_duration(s: &str) -> Result<Duration> {
         bail!("missing 'd' suffix in duration");
     };
     let v: f64 = v.parse().map_err(|e| anyhow!("invalid duration: {e}"))?;
-    // Upstream's conversion overflows to a negative duration for values
-    // out of range (including inf and NaN)
-    match Duration::try_from_secs_f64(v * 24.0 * 3600.0) {
-        Ok(d) if v >= 0.0 => Ok(d),
+    // Upstream's conversion to a time.Duration (int64 nanoseconds)
+    // overflows to a negative duration for values out of range (including
+    // inf and NaN)
+    let secs = v * 24.0 * 3600.0;
+    match Duration::try_from_secs_f64(secs) {
+        Ok(d) if v >= 0.0 && secs <= crate::service::MAX_GO_DURATION_SECS => Ok(d),
         _ => bail!("duration must be positive"),
     }
 }
@@ -549,7 +551,7 @@ client-cert-auth true
         assert_eq!(parse_duration("0d").unwrap(), Duration::ZERO);
         assert_eq!(parse_duration("1.5d").unwrap(), Duration::from_secs(129600));
         assert!(parse_duration("5").is_err());
-        for s in ["-1d", "infd", "nand", "1e20d"] {
+        for s in ["-1d", "infd", "nand", "1e20d", "1e9d"] {
             let err = parse_duration(s).unwrap_err().to_string();
             assert_eq!(err, "duration must be positive", "{s}");
         }

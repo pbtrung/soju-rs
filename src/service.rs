@@ -647,10 +647,10 @@ fn handle_network_info(
     params: &[String],
 ) -> Result<()> {
     let u = u.unwrap();
-    if params.len() > 1 {
-        bail!("expected at most one argument");
+    let (ni, rest) = get_network_from_arg(u, ctx, params)?;
+    if let Some(a) = rest.first() {
+        bail!("unexpected argument: {a}");
     }
-    let (ni, _) = get_network_from_arg(u, ctx, params)?;
     let net = &u.networks[ni].record;
     ctx.print(format!("name: {}", net.get_name()));
     ctx.print(format!("addr: {}", net.addr));
@@ -681,9 +681,22 @@ fn handle_network_info(
     ctx.print(format!("auto-away: {}", net.auto_away));
     ctx.print(format!("enabled: {}", net.enabled));
     for cmd in &net.connect_commands {
-        ctx.print(format!("connect-command: {cmd}"));
+        ctx.print(format!("connect-command: {}", redact_command(cmd)));
     }
     Ok(())
+}
+
+/// Shows a raw IRC command without its last parameters, which may contain
+/// secrets, e.g. "PRIVMSG NickServ :IDENTIFY <password>".
+fn redact_command(raw: &str) -> String {
+    let Ok(m) = Message::parse(raw) else {
+        return "(invalid)".to_owned();
+    };
+    match m.params.first() {
+        Some(target) if m.params.len() > 1 => format!("{} {target} (parameters hidden)", m.command),
+        Some(_) => format!("{} (parameters hidden)", m.command),
+        None => m.command,
+    }
 }
 
 fn handle_network_update(
@@ -1329,8 +1342,15 @@ pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
         };
         total += v * mult;
     }
-    Some(std::time::Duration::from_secs_f64(total))
+    // Like Go's time.Duration, an int64 of nanoseconds
+    if total > MAX_GO_DURATION_SECS {
+        return None;
+    }
+    std::time::Duration::try_from_secs_f64(total).ok()
 }
+
+/// The largest Go time.Duration, in seconds (about 292 years).
+pub const MAX_GO_DURATION_SECS: f64 = i64::MAX as f64 / 1e9;
 
 /// Formats a duration like Go's time.Duration.String, e.g. "1h30m0s", so that
 /// it can be passed back to parse_go_duration.
@@ -1728,6 +1748,15 @@ mod tests {
         assert_eq!(parse_go_duration("-1s"), None);
         assert_eq!(parse_go_duration("10"), None);
         assert_eq!(parse_go_duration("x"), None);
+        assert_eq!(
+            redact_command("PRIVMSG NickServ :IDENTIFY hunter2"),
+            "PRIVMSG NickServ (parameters hidden)"
+        );
+        assert_eq!(redact_command("OPER x"), "OPER (parameters hidden)");
+        assert_eq!(redact_command("AWAY"), "AWAY");
+        assert_eq!(parse_go_duration("9999999999999999h"), None);
+        assert_eq!(parse_go_duration(&format!("{}s", "9".repeat(400))), None);
+        assert!(parse_go_duration("2562047h").is_some());
 
         assert_eq!(format_go_duration(Duration::ZERO), "0s");
         assert_eq!(format_go_duration(Duration::from_secs(300)), "5m0s");
