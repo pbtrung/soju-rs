@@ -31,12 +31,16 @@ fn time_from_sql(s: Option<String>) -> Result<Option<DateTime<Utc>>> {
     }
 }
 
-/// Reads a text column without requiring valid UTF-8. Go soju stores
-/// whatever bytes the upstream server sent, so a database it wrote may hold
-/// e.g. Latin-1 messages.
+/// Reads a text column without requiring valid UTF-8, NULL being read as an
+/// empty string. Go soju stores whatever bytes the upstream server sent, so
+/// a database it wrote may hold e.g. Latin-1 messages or channel names.
+/// Invalid sequences are replaced, so the result may not match the stored
+/// value in later lookups by that column.
 fn lossy_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<String> {
-    let b = r.get_ref(i)?.as_bytes()?;
-    Ok(String::from_utf8_lossy(b).into_owned())
+    match r.get_ref(i)? {
+        rusqlite::types::ValueRef::Null => Ok(String::new()),
+        v => Ok(String::from_utf8_lossy(v.as_bytes()?).into_owned()),
+    }
 }
 
 fn null_string(s: &str) -> Option<&str> {
@@ -144,8 +148,8 @@ impl Database {
             username,
             password: r.get::<_, Option<String>>(1 + off)?.unwrap_or_default(),
             admin: r.get(2 + off)?,
-            nick: r.get::<_, Option<String>>(3 + off)?.unwrap_or_default(),
-            realname: r.get::<_, Option<String>>(4 + off)?.unwrap_or_default(),
+            nick: lossy_string(r, 3 + off)?,
+            realname: lossy_string(r, 4 + off)?,
             enabled: r.get(5 + off)?,
             downstream_interacted_at: None,
             max_networks: r.get(7 + off)?,
@@ -327,10 +331,8 @@ impl Database {
             WHERE user = ?",
         )?;
         let rows = stmt.query_map([user_id], |r| {
-            let s = |i: usize| -> rusqlite::Result<String> {
-                Ok(r.get::<_, Option<String>>(i)?.unwrap_or_default())
-            };
-            let connect_commands: Option<String> = r.get(8)?;
+            let s = |i: usize| lossy_string(r, i);
+            let connect_commands = s(8)?;
             Ok(Network {
                 id: r.get(0)?,
                 name: s(1)?,
@@ -340,9 +342,10 @@ impl Database {
                 realname: s(5)?,
                 certfp: s(6)?,
                 pass: s(7)?,
-                connect_commands: match connect_commands {
-                    Some(c) => c.split("\r\n").map(str::to_owned).collect(),
-                    None => Vec::new(),
+                connect_commands: if connect_commands.is_empty() {
+                    Vec::new()
+                } else {
+                    connect_commands.split("\r\n").map(str::to_owned).collect()
                 },
                 sasl: Sasl {
                     mechanism: s(9)?,
@@ -468,10 +471,10 @@ impl Database {
             let detach_after: i64 = r.get(7)?;
             Ok(Channel {
                 id: r.get(0)?,
-                name: r.get(1)?,
-                key: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                name: lossy_string(r, 1)?,
+                key: lossy_string(r, 2)?,
                 detached: r.get(3)?,
-                detached_internal_msg_id: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                detached_internal_msg_id: lossy_string(r, 4)?,
                 relay_detached: MessageFilter::from_i64(r.get(5)?),
                 reattach_on: MessageFilter::from_i64(r.get(6)?),
                 detach_after: Duration::from_secs(detach_after.max(0) as u64),
@@ -668,9 +671,9 @@ impl Database {
         let rows = stmt.query_map([network_id], |r| {
             Ok(DeliveryReceipt {
                 id: r.get(0)?,
-                target: r.get(1)?,
-                client: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                internal_msg_id: r.get(3)?,
+                target: lossy_string(r, 1)?,
+                client: lossy_string(r, 2)?,
+                internal_msg_id: lossy_string(r, 3)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -930,7 +933,7 @@ impl Database {
         let rows = stmt.query_map([network_id], |r| {
             Ok(MessageTarget {
                 id: r.get(0)?,
-                target: r.get(1)?,
+                target: lossy_string(r, 1)?,
                 pinned: r.get(2)?,
                 muted: r.get(3)?,
                 blocked: r.get(4)?,
@@ -1439,6 +1442,27 @@ mod tests {
         let l = db.list_messages(n.id, "#a", &opts).unwrap();
         assert_eq!(l.len(), 2);
         assert_eq!(l[0].params, vec!["#a", "caf\u{fffd}"]);
+
+        // Channel names and delivery receipt targets come from upstream too
+        let name: &[u8] = b"#caf\xe9";
+        db.conn()
+            .execute(
+                "INSERT INTO Channel(network, name) VALUES (?1, CAST(?2 AS TEXT))",
+                rusqlite::params![n.id, name],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO DeliveryReceipt(network, target, internal_msgid)
+                VALUES (?1, CAST(?2 AS TEXT), 'x')",
+                rusqlite::params![n.id, name],
+            )
+            .unwrap();
+        let channels = db.list_channels(n.id).unwrap();
+        assert_eq!(channels[0].name, "#caf\u{fffd}");
+        let receipts = db.list_delivery_receipts(n.id).unwrap();
+        assert_eq!(receipts[0].target, "#caf\u{fffd}");
+        assert_eq!(receipts[0].client, "");
     }
 
     #[test]

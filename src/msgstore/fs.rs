@@ -87,6 +87,31 @@ struct OpenFile {
 
 type Selector<'a> = Option<&'a dyn Fn(&Message) -> bool>;
 
+/// Like [`BufRead::lines`], but decodes invalid UTF-8 lossily instead of
+/// failing: logs written by Go soju or ZNC may contain e.g. Latin-1.
+struct LossyLines<R>(R);
+
+impl<R: BufRead> Iterator for LossyLines<R> {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = Vec::new();
+        match self.0.read_until(b'\n', &mut buf) {
+            Ok(0) => None,
+            Ok(_) => {
+                if buf.ends_with(b"\n") {
+                    buf.pop();
+                    if buf.ends_with(b"\r") {
+                        buf.pop();
+                    }
+                }
+                Some(Ok(String::from_utf8_lossy(&buf).into_owned()))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 /// A per-user on-disk store for IRC messages.
 pub struct FsStore {
     root: PathBuf,
@@ -238,9 +263,7 @@ impl FsStore {
             // skip till next newline
             skip_first = true;
         }
-        let lines = BufReader::new(f)
-            .lines()
-            .skip(if skip_first { 1 } else { 0 });
+        let lines = LossyLines(BufReader::new(f)).skip(if skip_first { 1 } else { 0 });
         Ok(Some(Box::new(lines)))
     }
 
@@ -668,6 +691,16 @@ mod tests {
     use super::*;
     use crate::irc::Prefix;
     use crate::msg;
+
+    #[test]
+    fn lossy_lines() {
+        let data: &[u8] = b"[01:02:03] <a> caf\xe9\r\n[01:02:04] <b> ok\nlast";
+        let lines: Vec<String> = LossyLines(data).map(Result::unwrap).collect();
+        assert_eq!(
+            lines,
+            vec!["[01:02:03] <a> caf\u{fffd}", "[01:02:04] <b> ok", "last"]
+        );
+    }
 
     fn tmpdir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("soju-rs-fs-{name}-{}", std::process::id()));

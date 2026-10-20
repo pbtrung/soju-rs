@@ -58,7 +58,9 @@ impl Reader<'_> {
         }
         let (s, rest) = self.0.split_at(n);
         self.0 = rest;
-        Ok(String::from_utf8(s.to_vec())?)
+        // Go doesn't validate UTF-8: IDs it made may hold e.g. Latin-1
+        // targets
+        Ok(String::from_utf8_lossy(s).into_owned())
     }
 }
 
