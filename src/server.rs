@@ -26,6 +26,14 @@ use crate::{logf, msg, xirc};
 
 pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Message expiry vacuums the database when this fraction of it was free
+/// before deleting messages. With steady traffic, the space freed each day
+/// is reused the next day: vacuuming would only shrink the file for it to
+/// grow back, and rewriting the whole database blocks all users meanwhile.
+/// Free space only builds up when less is stored, e.g. after shortening
+/// message-expiry.
+const VACUUM_FREE_RATIO: f64 = 0.25;
+
 /// Runs a future to completion from synchronous code running on the tokio
 /// runtime (e.g. a user's event handlers), blocking the current worker
 /// thread like upstream blocks its per-user goroutine.
@@ -157,10 +165,12 @@ impl Server {
         });
 
         // The first tick completes immediately: expired messages are deleted
-        // on startup, then daily
+        // on startup, then daily. The database is always vacuumed on
+        // startup, when clients are reconnecting anyway.
         let srv = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(24 * 3600));
+            let mut startup = true;
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {}
@@ -169,7 +179,10 @@ impl Server {
                 // Deleting and vacuuming can take a while: keep it off the
                 // async runtime's workers
                 let s = srv.clone();
-                match tokio::task::spawn_blocking(move || s.delete_expired_messages()).await {
+                let force_vacuum = std::mem::replace(&mut startup, false);
+                match tokio::task::spawn_blocking(move || s.delete_expired_messages(force_vacuum))
+                    .await
+                {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => logf!(srv.logger, "failed to delete expired messages: {e}"),
                     Err(e) => logf!(srv.logger, "failed to delete expired messages: {e}"),
@@ -387,7 +400,9 @@ impl Server {
         Ok(())
     }
 
-    fn delete_expired_messages(&self) -> Result<()> {
+    /// Deletes expired messages. The database is vacuumed if force_vacuum is
+    /// set, or if enough of it is free, see VACUUM_FREE_RATIO.
+    fn delete_expired_messages(&self, force_vacuum: bool) -> Result<()> {
         let cfg = self.config();
         let expiry = cfg.basic.message_expiry;
         if expiry.is_zero() {
@@ -402,6 +417,13 @@ impl Server {
         );
         match cfg.basic.msg_store.driver {
             MsgStoreDriver::Db => {
+                // Measured before deleting: the space freed by the previous
+                // run has normally been reused since, what's still free is
+                // wasted
+                let free = self
+                    .db
+                    .free_page_ratio()
+                    .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
                 let n = self
                     .db
                     .delete_messages_before(before)
@@ -413,12 +435,24 @@ impl Server {
                 if n > 0 {
                     let start = Instant::now();
                     self.db
+                        .optimize()
+                        .map_err(|e| anyhow!("failed to optimize db: {e}"))?;
+                    logf!(
+                        self.logger,
+                        "optimized db in {:.1}s",
+                        start.elapsed().as_secs_f64()
+                    );
+                }
+                if force_vacuum || free >= VACUUM_FREE_RATIO {
+                    let start = Instant::now();
+                    self.db
                         .vacuum()
                         .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
                     logf!(
                         self.logger,
-                        "vacuumed db in {:.1}s",
-                        start.elapsed().as_secs_f64()
+                        "vacuumed db in {:.1}s ({:.0}% of it was free)",
+                        start.elapsed().as_secs_f64(),
+                        free * 100.0
                     );
                 }
             }

@@ -1173,15 +1173,35 @@ impl Database {
         )?)
     }
 
-    /// Reclaims the disk space freed by deleted rows.
+    /// The fraction of the database file made of free pages: space freed by
+    /// deleted rows, reused for new rows, or reclaimed by vacuum.
+    pub fn free_page_ratio(&self) -> Result<f64> {
+        let conn = self.conn();
+        let pages: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let free: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+        Ok(if pages > 0 {
+            free as f64 / pages as f64
+        } else {
+            0.0
+        })
+    }
+
+    /// Merges the search index after deleting messages. Without this, the
+    /// index keeps growing with segments full of deleted entries.
+    pub fn optimize(&self) -> Result<()> {
+        let conn = self.conn();
+        conn.execute_batch("INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');")?;
+        // Keep the WAL from staying as large as what was rewritten
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Reclaims the free pages, by rewriting the whole database file.
     pub fn vacuum(&self) -> Result<()> {
         let conn = self.conn();
+        conn.execute_batch("VACUUM;")?;
         // VACUUM goes through the WAL, which keeps its size on disk until
         // truncated by a checkpoint
-        conn.execute_batch(
-            "INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');
-            VACUUM;",
-        )?;
         conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
@@ -1421,8 +1441,12 @@ mod tests {
             .unwrap();
         let before = size();
 
+        assert!(db.free_page_ratio().unwrap() < 0.05);
         assert_eq!(db.delete_messages_before(Utc::now()).unwrap(), 2000);
+        assert!(db.free_page_ratio().unwrap() > 0.5);
+        db.optimize().unwrap();
         db.vacuum().unwrap();
+        assert_eq!(db.free_page_ratio().unwrap(), 0.0);
         assert!(size() < before / 2, "{} >= {before} / 2", size());
         let wal = std::fs::metadata(dir.join("main.db-wal")).map_or(0, |m| m.len());
         assert_eq!(wal, 0);

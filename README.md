@@ -74,9 +74,10 @@ Behaviour changes:
   bounded by the bouncer's clock, and MARKREAD may set a read marker up to
   the latest message even when it's in the future
 - `soju -version` prints the version, which is also logged on startup
-- With `message-expiry` and the `db` message store, the SQLite database is
-  vacuumed after expired messages are deleted (upstream leaves it to the
-  admin)
+- With `message-expiry` and the `db` message store, the search index is
+  optimized after expired messages are deleted, and the SQLite database is
+  vacuumed on startup and when a quarter of it or more is unused (upstream
+  leaves it to the admin)
 
 ## Testing
 
