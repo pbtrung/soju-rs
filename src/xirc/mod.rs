@@ -15,8 +15,6 @@ use std::collections::HashMap;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use indexmap::{IndexMap, IndexSet};
 
-use crate::irc::Message;
-
 pub const MAX_MESSAGE_LENGTH: usize = 512;
 pub const MAX_MESSAGE_PARAMS: usize = 15;
 pub const MAX_SASL_LENGTH: usize = 400;
@@ -52,24 +50,6 @@ pub fn parse_server_time(s: &str) -> Option<DateTime<Utc>> {
     }
     let t = naive.and_utc() + chrono::Duration::nanoseconds(nanos as i64);
     Some(t)
-}
-
-/// Parses a CTCP message. CTCP is defined in
-/// https://tools.ietf.org/html/draft-oakley-irc-ctcp-02
-pub fn parse_ctcp_message(msg: &Message) -> Option<(String, String)> {
-    if (msg.command != "PRIVMSG" && msg.command != "NOTICE") || msg.params.len() < 2 {
-        return None;
-    }
-    let text = &msg.params[1];
-    if !text.starts_with('\x01') {
-        return None;
-    }
-    let text = text.trim_matches('\x01');
-    let (cmd, params) = match text.split_once(' ') {
-        Some((c, p)) => (c, p),
-        None => (text, ""),
-    };
-    Some((cmd.to_uppercase(), params.to_owned()))
 }
 
 /// A set of capabilities, with the available ones and the enabled ones.
@@ -266,16 +246,5 @@ mod tests {
     fn isupport_value() {
         assert_eq!(decode_isupport_value("a\\x20b\\x5Cc"), "a b\\c");
         assert_eq!(encode_isupport_value("a b\\c"), "a\\x20b\\x5Cc");
-    }
-
-    #[test]
-    fn ctcp() {
-        let m = crate::msg!("PRIVMSG", "#a", "\x01ACTION waves\x01");
-        assert_eq!(
-            parse_ctcp_message(&m),
-            Some(("ACTION".into(), "waves".into()))
-        );
-        let m = crate::msg!("PRIVMSG", "#a", "\x01version");
-        assert_eq!(parse_ctcp_message(&m), Some(("VERSION".into(), "".into())));
     }
 }

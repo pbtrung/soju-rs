@@ -53,7 +53,8 @@ pub fn http_client() -> reqwest::Client {
         .expect("failed to build HTTP client")
 }
 
-fn rustls_client_config() -> rustls::ClientConfig {
+/// A TLS client configuration for HTTP/1.1 clients.
+pub(crate) fn rustls_client_config() -> rustls::ClientConfig {
     let cfg = crate::tls::client_config("", None).expect("failed to build TLS config");
     let mut cfg = (*cfg).clone();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];

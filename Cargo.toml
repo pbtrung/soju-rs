@@ -26,7 +26,6 @@ anyhow = "1.0.104"
 aws-lc-rs = "1.18.2"
 base64 = "0.23.1"
 bcrypt = "0.19.3"
-bytes = "1.12.1"
 chrono = "0.4.45"
 futures-util = "0.3.34"
 gethostname = "1.1.0"
@@ -40,7 +39,7 @@ ipnet = "2.12.2"
 libc = "0.2.191"
 p256 = { version = "0.14.0", features = ["ecdh", "ecdsa"] }
 rand = "0.10.3"
-rcgen = { version = "0.14.10", features = ["aws_lc_rs", "pem"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustls = "0.23.46"
@@ -49,12 +48,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha1 = "0.11.0"
 sha2 = "0.11.1"
-socket2 = { version = "0.6.5", features = ["all"] }
+socket2 = "0.6.5"
 time = "0.3.55"
 tokio = { version = "1.54.0", features = ["full"] }
 tokio-rustls = "0.26.6"
 tokio-tungstenite = "0.30.0"
-tokio-util = { version = "0.7.20", features = ["rt"] }
+tokio-util = "0.7.20"
 webpki-roots = "1.0.10"
 
 [profile.release]

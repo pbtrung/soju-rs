@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use bytes::Bytes;
 use http_body_util::Full;
+use hyper::body::Bytes;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
 use hyper::{Request, Response, StatusCode};
@@ -254,7 +254,9 @@ fn is_af_unsupported(e: &std::io::Error) -> bool {
     false
 }
 
-fn fmt_addr(a: SocketAddr) -> String {
+/// Formats an address as "host:port", with IPv4-mapped IPv6 addresses as
+/// IPv4.
+pub fn fmt_addr(a: SocketAddr) -> String {
     join_host_port(&a.ip().to_canonical().to_string(), &a.port().to_string())
 }
 
@@ -384,7 +386,7 @@ async fn handle_accepted(
     };
 
     if kind == Kind::Http || kind == Kind::Prometheus {
-        serve_http(srv, kind, io, a.remote, a.unix, peer_cert).await;
+        serve_http(srv, kind, io, a.remote, peer_cert).await;
         return;
     }
 
@@ -568,7 +570,6 @@ async fn serve_http(
     kind: Kind,
     io: BoxIo,
     remote: Option<SocketAddr>,
-    unix: bool,
     peer_cert: Option<Vec<u8>>,
 ) {
     let service = hyper::service::service_fn(move |req: Request<Incoming>| {
@@ -583,7 +584,7 @@ async fn serve_http(
                 );
                 r
             } else {
-                handle_http_request(srv, req, remote, unix, peer_cert).await
+                handle_http_request(srv, req, remote, peer_cert).await
             };
             Ok::<_, Infallible>(resp)
         }
@@ -602,11 +603,10 @@ async fn handle_http_request(
     srv: Arc<Server>,
     req: Request<Incoming>,
     remote: Option<SocketAddr>,
-    unix: bool,
     peer_cert: Option<Vec<u8>>,
 ) -> Response<Full<Bytes>> {
     match req.uri().path() {
-        "/socket" => handle_websocket(srv, req, remote, unix, peer_cert),
+        "/socket" => handle_websocket(srv, req, remote, peer_cert),
         "/icon" => {
             let cfg = srv.config();
             if cfg.icon_path.is_empty() {
@@ -645,7 +645,6 @@ fn handle_websocket(
     srv: Arc<Server>,
     mut req: Request<Incoming>,
     remote: Option<SocketAddr>,
-    unix: bool,
     peer_cert: Option<Vec<u8>>,
 ) -> Response<Full<Bytes>> {
     let headers = req.headers();
@@ -711,9 +710,9 @@ fn handle_websocket(
         .map(str::to_owned);
 
     // Only trust the Forwarded header field if this is a trusted proxy IP,
-    // to prevent users from spoofing the remote address
+    // to prevent users from spoofing the remote address. Unix sockets have
+    // no remote address: proxy headers are ignored there.
     let accept_proxy = remote.is_some_and(|r| cfg.basic.accept_proxy_ips.contains(r.ip()));
-    let _ = unix;
     let mut remote_addr = match remote {
         Some(r) => fmt_addr(r),
         None => "@".to_owned(),

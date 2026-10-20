@@ -17,9 +17,7 @@ use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::conn::{BoxIo, Conn, RateLimit, RateLimitFlag};
-use crate::database::{
-    self as db, get_nick, get_realname, get_username, join_host_port, split_host_port,
-};
+use crate::database::{self as db, get_nick, get_realname, get_username, split_host_port};
 use crate::downstream::{self, DownstreamConn, LabelContext};
 use crate::irc::{Message, Prefix, numerics::*};
 use crate::ircutil::{self, ChannelModeType, ChannelModes, UserModes};
@@ -260,8 +258,6 @@ pub struct UpstreamConn {
     pub delayed_messages: Option<Vec<Message>>,
 
     pub server_prefix: Prefix,
-    pub server_name: String,
-    pub available_user_modes: String,
     pub available_channel_modes: IndexMap<u8, ChannelModeType>,
     pub available_channel_types: String,
     pub available_status_msg: String,
@@ -315,8 +311,6 @@ impl UpstreamConn {
             attached: false,
             delayed_messages: None,
             server_prefix: Prefix::new("*"),
-            server_name: String::new(),
-            available_user_modes: String::new(),
             available_channel_modes: ircutil::std_channel_modes(),
             available_channel_types: ircutil::STD_CHANNEL_TYPES.to_owned(),
             available_status_msg: String::new(),
@@ -996,9 +990,7 @@ impl<'a> IdentdEntry<'a> {
         tcp: &tokio::net::TcpStream,
         ident: &str,
     ) -> Option<IdentdEntry<'a>> {
-        let fmt = |a: SocketAddr| {
-            join_host_port(&a.ip().to_canonical().to_string(), &a.port().to_string())
-        };
+        let fmt = crate::listen::fmt_addr;
         let entry = IdentdEntry {
             identd: identd?,
             remote: fmt(tcp.peer_addr().ok()?),
@@ -1627,10 +1619,8 @@ fn handle_message_inner(
             logf!(uc.logger, "connection registered with nick {:?}", uc.nick);
         }
         RPL_MYINFO => {
+            // Registration info, not forwarded: downstreams get our own
             need_params(msg, 5)?;
-            let uc = uc!(u, ni);
-            uc.server_name = msg.params[1].clone();
-            uc.available_user_modes = msg.params[3].clone();
         }
         RPL_ISUPPORT => {
             need_params(msg, 2)?;
@@ -2756,9 +2746,7 @@ fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
 /// Appends a message to the message store. Returns the internal message
 /// ID, or an empty string if the message isn't stored.
 pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> String {
-    let Some(store) = &mut u.msg_store else {
-        return String::new();
-    };
+    let store = &mut u.msg_store;
     if msg.command == "TAGMSG"
         && !msg
             .tags

@@ -65,10 +65,6 @@ impl<V> CaseMappingMap<V> {
         }
     }
 
-    pub fn casemap(&self) -> CaseMapping {
-        self.casemap
-    }
-
     pub fn has(&self, name: &str) -> bool {
         self.m.contains_key(&(self.casemap)(name))
     }
@@ -87,11 +83,6 @@ impl<V> CaseMappingMap<V> {
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut V> {
         self.m.get_mut(&(self.casemap)(name)).map(|(_, v)| v)
-    }
-
-    /// Returns the original spelling of a key.
-    pub fn get_key(&self, name: &str) -> Option<&str> {
-        self.m.get(&(self.casemap)(name)).map(|(k, _)| k.as_str())
     }
 
     /// Sets a value. If the key already exists, its original spelling is
@@ -161,7 +152,8 @@ mod tests {
         assert!(m.has("foo["));
         m.set("FOO[", 2);
         assert_eq!(m.get("foo{"), Some(&2));
-        assert_eq!(m.get_key("foo{"), Some("Foo{"));
+        // The original spelling is kept
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["Foo{"]);
         m.set_casemapping(CASEMAPPING_ASCII);
         assert!(!m.has("foo["));
         assert!(m.has("FOO{"));

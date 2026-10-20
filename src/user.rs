@@ -228,7 +228,7 @@ impl Network {
             channels: m,
             delivered: DeliveredStore::new(cm),
             last_error: None,
-            casemap: ircutil_std_casemapping(),
+            casemap: xirc::CASEMAPPING_RFC1459,
             push_targets: Arc::new(Mutex::new(CaseMappingMap::new(cm))),
         }
     }
@@ -260,12 +260,6 @@ impl Network {
 
     pub fn equal_casemap(&self, a: &str, b: &str) -> bool {
         (self.casemap)(a) == (self.casemap)(b)
-    }
-
-    /// Updates the record, and the snapshot shared with the runner.
-    pub fn set_record(&mut self, record: db::Network) {
-        *self.record_snapshot.lock().unwrap() = record.clone();
-        self.record = record;
     }
 
     pub fn sync_snapshot(&self) {
@@ -314,10 +308,6 @@ impl Network {
             None => self.equal_casemap(nick, get_nick(user, Some(&self.record))),
         }
     }
-}
-
-fn ircutil_std_casemapping() -> CaseMapping {
-    xirc::CASEMAPPING_RFC1459
 }
 
 /// The ident sent to upstream servers. For privacy reasons, it doesn't
@@ -373,7 +363,7 @@ pub struct User {
 
     pub networks: Vec<Network>,
     pub downstreams: Vec<DownstreamConn>,
-    pub msg_store: Option<Store>,
+    pub msg_store: Store,
     next_runner_id: u64,
     stopped: bool,
 }
@@ -390,8 +380,8 @@ impl User {
             .with_prefix(format!("user {:?}: ", record.username));
         let cfg = srv.config();
         let msg_store = match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db => Some(Store::Db(msgstore::DbStore::new(srv.db.clone()))),
-            MsgStoreDriver::Memory => Some(Store::Memory(msgstore::MemoryStore::new())),
+            MsgStoreDriver::Db => Store::Db(msgstore::DbStore::new(srv.db.clone())),
+            MsgStoreDriver::Memory => Store::Memory(msgstore::MemoryStore::new()),
         };
         User {
             srv,
@@ -428,11 +418,11 @@ impl User {
     }
 
     pub fn has_persistent_msg_store(&self) -> bool {
-        matches!(&self.msg_store, Some(s) if !s.is_memory())
+        !self.msg_store.is_memory()
     }
 
     pub fn has_chathistory_store(&self) -> bool {
-        matches!(&self.msg_store, Some(s) if s.supports_chathistory())
+        self.msg_store.supports_chathistory()
     }
 
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
@@ -511,9 +501,7 @@ impl User {
     }
 
     fn close_msg_store(&mut self) {
-        if let Some(store) = &mut self.msg_store
-            && let Err(e) = store.close()
-        {
+        if let Err(e) = self.msg_store.close() {
             logf!(
                 self.logger,
                 "failed to close message store for user {:?}: {e}",
@@ -1199,19 +1187,18 @@ impl User {
         ch.detached = true;
         let ch_name = ch.name.clone();
 
-        if let Some(store) = &mut self.msg_store {
-            let name_cm = (net.casemap)(&ch_name);
-            match store.last_msg_id(&net.record, &name_cm) {
-                Ok(id) => net.channels.get_mut(name).unwrap().detached_internal_msg_id = id,
-                Err(e) => {
-                    logf!(
-                        net.logger,
-                        "failed to get last message ID for channel {ch_name:?}: {e}"
-                    );
-                    net.channels.get_mut(name).unwrap().detached_internal_msg_id = String::new();
-                }
+        let name_cm = (net.casemap)(&ch_name);
+        let id = match self.msg_store.last_msg_id(&net.record, &name_cm) {
+            Ok(id) => id,
+            Err(e) => {
+                logf!(
+                    net.logger,
+                    "failed to get last message ID for channel {ch_name:?}: {e}"
+                );
+                String::new()
             }
-        }
+        };
+        net.channels.get_mut(name).unwrap().detached_internal_msg_id = id;
 
         if let Some(uc) = net.upstream_mut()
             && let Some(uch) = uc.channels.get_mut(&ch_name)

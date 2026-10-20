@@ -31,7 +31,7 @@ pub(crate) fn fail(params: &[&str]) -> anyhow::Error {
 pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     let i = u.dc_index(dc_id).unwrap();
     match msg.command.as_str() {
-        "CAP" => return handle_cap(u, dc_id, msg),
+        "CAP" => return u.downstreams[i].handle_cap(msg),
         "PING" => {
             need_params(msg, 1)?;
             let source = msg.params[0].clone();
@@ -199,11 +199,6 @@ pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Res
         }
     }
     Ok(())
-}
-
-fn handle_cap(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
-    u.downstreams[i].handle_cap(msg)
 }
 
 fn handle_pong(u: &mut User, i: usize, token: &str) {
@@ -1435,7 +1430,7 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         limit,
         events: event_playback,
     };
-    let store = u.msg_store.as_mut().unwrap();
+    let store = &mut u.msg_store;
 
     // No upper bound rather than now: if the upstream server's clock is
     // ahead of ours, its latest messages are in our future
@@ -1626,9 +1621,8 @@ fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             // clock is ahead of ours, i.e. if we have a message more recent
             // than now in history
             let mut limit = now;
-            if let Some(store) = u.msg_store.as_mut()
-                && store.supports_chathistory()
-            {
+            if u.msg_store.supports_chathistory() {
+                let store = &mut u.msg_store;
                 let options = LoadMessageOptions {
                     network: &u.networks[ni].record,
                     entity: &target_cm,
@@ -1719,7 +1713,7 @@ fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 
 fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     check_queue(u, i, "SEARCH")?;
-    if !matches!(&u.msg_store, Some(s) if s.supports_search()) {
+    if !u.msg_store.supports_search() {
         let nick = dc!(u, i).nick.clone();
         return Err(irc_error(msg!(
             ERR_UNKNOWNCOMMAND,
@@ -1787,12 +1781,7 @@ fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         opts.limit = SEARCH_MAX_LIMIT;
     }
 
-    let messages = match u
-        .msg_store
-        .as_mut()
-        .unwrap()
-        .search(&u.networks[ni].record, &opts)
-    {
+    let messages = match u.msg_store.search(&u.networks[ni].record, &opts) {
         Ok(m) => m,
         Err(e) => {
             logf!(dc!(u, i).logger, "failed fetching messages for search: {e}");

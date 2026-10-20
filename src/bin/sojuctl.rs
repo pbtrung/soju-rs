@@ -42,17 +42,18 @@ fn quote_words(words: &[String]) -> String {
     words.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ")
 }
 
+/// The admin socket path, parsed like the server parses listen directives.
 fn admin_socket_path(cfg: &config::Server) -> Option<String> {
-    for listen in &cfg.listen {
-        let Some(rest) = listen.strip_prefix("unix+admin://") else {
-            continue;
-        };
-        if rest.is_empty() {
-            return Some(config::DEFAULT_UNIX_ADMIN_PATH.to_owned());
-        }
-        return Some(rest.to_owned());
-    }
-    None
+    cfg.listen.iter().find_map(
+        |listen| match soju::listen::parse_listen_uri(listen).ok()? {
+            soju::listen::Listener {
+                kind: soju::listen::Kind::Admin,
+                addr: soju::listen::Address::Unix(path),
+                ..
+            } => Some(path),
+            _ => None,
+        },
+    )
 }
 
 #[cfg(unix)]

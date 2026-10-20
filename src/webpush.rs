@@ -256,8 +256,7 @@ pub struct Sender {
 
 impl Sender {
     pub fn new(vapid_public: &str, vapid_private: &str) -> Sender {
-        let mut tls = (*crate::tls::client_config("", None).expect("TLS config")).clone();
-        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let tls = crate::auth::rustls_client_config();
         // Internal addresses are rejected: hostnames by the resolver, IP
         // literals in the endpoint and in redirects by check_external_url
         let redirect = reqwest::redirect::Policy::custom(|attempt| {

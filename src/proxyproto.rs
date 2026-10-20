@@ -40,10 +40,6 @@ impl<S> Prefixed<S> {
             inner,
         }
     }
-
-    pub fn get_ref(&self) -> &S {
-        &self.inner
-    }
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for Prefixed<S> {

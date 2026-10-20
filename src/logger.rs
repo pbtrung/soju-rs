@@ -49,12 +49,6 @@ impl Logger {
         let line = format!("{now} {}{args}\n", self.prefix);
         let _ = std::io::stderr().lock().write_all(line.as_bytes());
     }
-
-    pub fn debug(&self, args: Arguments) {
-        if self.debug_enabled() {
-            self.print(args);
-        }
-    }
 }
 
 /// Logs a line: `logf!(logger, "x = {}", x)`.

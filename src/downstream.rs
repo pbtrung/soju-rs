@@ -450,8 +450,6 @@ pub struct DownstreamConn {
     pub network_id: Option<i64>,
     pub client_name: String,
     pub impersonating: bool,
-    pub user_admin: bool,
-    pub user_username: String,
 
     pub nick: String,
     pub nick_cm: String,
@@ -532,8 +530,6 @@ impl DownstreamConn {
             network_id: None,
             client_name: String::new(),
             impersonating: false,
-            user_admin: false,
-            user_username: String::new(),
             nick: "*".to_owned(),
             nick_cm: "*".to_owned(),
             realname: String::new(),
@@ -1732,8 +1728,6 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
     {
         let dc = &mut u.downstreams[i];
         assert!(dc.registered, "tried to welcome an unregistered connection");
-        dc.user_admin = u.record.admin;
-        dc.user_username = u.record.username.clone();
         dc.logger = u.srv.logger.with_prefix(format!(
             "user {:?}: downstream {:?}: ",
             u.record.username, dc.info.remote_addr
@@ -1866,7 +1860,6 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
 
     if let Some(ni) = net_idx
         && !u.downstreams[i].caps.is_enabled("draft/chathistory")
-        && u.msg_store.is_some()
     {
         // Only send history if we're the first connected client with that
         // name for the network
@@ -1888,7 +1881,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 // Fast-forward history to last message
                 let net = &mut u.networks[ni];
                 let target_cm = net.casemap(&target);
-                let store = u.msg_store.as_mut().unwrap();
+                let store = &mut u.msg_store;
                 match store.last_msg_id(&net.record, &target_cm) {
                     Ok(last_id) => net.delivered.store_id(&target, &client, &last_id),
                     Err(e) => {
@@ -1909,7 +1902,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
 /// Sends the backlog of a target since a message ID, for clients without
 /// chathistory.
 pub fn send_target_backlog(u: &mut User, dc_idx: usize, ni: usize, target: &str, msg_id: &str) {
-    if u.downstreams[dc_idx].caps.is_enabled("draft/chathistory") || u.msg_store.is_none() {
+    if u.downstreams[dc_idx].caps.is_enabled("draft/chathistory") {
         return;
     }
     let net = &u.networks[ni];
@@ -1921,7 +1914,7 @@ pub fn send_target_backlog(u: &mut User, dc_idx: usize, ni: usize, target: &str,
         limit: BACKLOG_LIMIT,
         events: false,
     };
-    let history = match u.msg_store.as_mut().unwrap().load_latest_id(msg_id, &opts) {
+    let history = match u.msg_store.load_latest_id(msg_id, &opts) {
         Ok(h) => h,
         Err(e) => {
             logf!(

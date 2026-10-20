@@ -1683,10 +1683,8 @@ fn handle_server_debug(
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
-    let enabled = match params[0].as_str() {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => true,
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => false,
-        v => bail!("strconv.ParseBool: parsing {v:?}: invalid syntax"),
+    let Some(enabled) = crate::flags::parse_go_bool(&params[0]) else {
+        bail!("strconv.ParseBool: parsing {:?}: invalid syntax", params[0]);
     };
     let previous = ctx.srv.logger.set_debug(enabled);
     if previous != enabled {
