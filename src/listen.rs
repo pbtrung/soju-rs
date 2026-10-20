@@ -16,7 +16,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 
 use crate::conn::{BoxIo, Conn, ConnInfo};
 use crate::database::{join_host_port, parse_url, split_host_port};
@@ -208,11 +208,25 @@ fn set_keepalive(s: &tokio::net::TcpStream) -> std::io::Result<()> {
 async fn bind(addr: &Address) -> Result<BoundListener> {
     match addr {
         Address::Tcp(a) => {
-            let a = a
-                .strip_prefix(':')
-                .map(|p| format!("[::]:{p}"))
-                .unwrap_or_else(|| a.clone());
-            Ok(BoundListener::Tcp(tokio::net::TcpListener::bind(&a).await?))
+            if let Some(port) = a.strip_prefix(':') {
+                // All interfaces, IPv4 only if IPv6 is unavailable
+                return match tokio::net::TcpListener::bind(format!("[::]:{port}")).await {
+                    Ok(l) => Ok(BoundListener::Tcp(l)),
+                    Err(e) if is_af_unsupported(&e) => Ok(BoundListener::Tcp(
+                        tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?,
+                    )),
+                    Err(e) => Err(e.into()),
+                };
+            }
+            // Like upstream, prefer the first IPv4 address of a hostname,
+            // e.g. 127.0.0.1 for localhost rather than ::1
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host(a.as_str()).await?.collect();
+            let Some(addr) = addrs.iter().find(|a| a.is_ipv4()).or(addrs.first()) else {
+                bail!("no addresses found for {a:?}");
+            };
+            Ok(BoundListener::Tcp(
+                tokio::net::TcpListener::bind(addr).await?,
+            ))
         }
         #[cfg(unix)]
         Address::Unix(path) => {
@@ -228,6 +242,15 @@ async fn bind(addr: &Address) -> Result<BoundListener> {
         #[cfg(not(unix))]
         Address::Unix(_) => bail!("Unix sockets are not supported on this platform"),
     }
+}
+
+/// Whether an error means the address family isn't supported, e.g. IPv6
+/// disabled in the kernel.
+fn is_af_unsupported(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    return e.raw_os_error() == Some(libc::EAFNOSUPPORT);
+    #[cfg(not(unix))]
+    false
 }
 
 fn fmt_addr(a: SocketAddr) -> String {
@@ -700,7 +723,7 @@ fn handle_websocket(
             }
         };
         let io: BoxIo = Box::new(TokioIo::new(upgraded));
-        let ws = WebSocketStream::from_raw_socket(io, Role::Server, None).await;
+        let ws = WebSocketStream::from_raw_socket(io, Role::Server, Some(websocket_config())).await;
         crate::metrics_guard(&srv, async {
             let logger = srv
                 .logger
@@ -725,6 +748,16 @@ fn handle_websocket(
         h.insert(header::SEC_WEBSOCKET_PROTOCOL, v);
     }
     r
+}
+
+/// Upstream's WebSocket library limits messages to 32 KiB by default:
+/// bigger ones close the connection.
+const WEBSOCKET_READ_LIMIT: usize = 32768;
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(WEBSOCKET_READ_LIMIT))
+        .max_frame_size(Some(WEBSOCKET_READ_LIMIT))
 }
 
 #[cfg(test)]

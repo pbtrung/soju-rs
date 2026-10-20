@@ -233,6 +233,20 @@ impl reqwest::dns::Resolve for ExternalResolver {
     }
 }
 
+/// Fails if the URL's host is an internal IP address.
+fn check_external_url(url: &reqwest::Url) -> Result<(), &'static str> {
+    // The parsed URL's host is normalized: IPv4 in dotted-decimal form,
+    // IPv6 in brackets
+    let host = url.host_str().unwrap_or("");
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_internal_ip(ip)
+    {
+        return Err(INTERNAL_IP_ERROR);
+    }
+    Ok(())
+}
+
 /// Sends Web Push notifications with a fixed VAPID key pair.
 pub struct Sender {
     pub vapid_public: String,
@@ -244,9 +258,22 @@ impl Sender {
     pub fn new(vapid_public: &str, vapid_private: &str) -> Sender {
         let mut tls = (*crate::tls::client_config("", None).expect("TLS config")).clone();
         tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        // Internal addresses are rejected: hostnames by the resolver, IP
+        // literals in the endpoint and in redirects by check_external_url
+        let redirect = reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("stopped after 10 redirects")
+            } else if let Err(e) = check_external_url(attempt.url()) {
+                attempt.error(e)
+            } else {
+                attempt.follow()
+            }
+        });
         let client = reqwest::Client::builder()
             .use_preconfigured_tls(tls)
             .dns_resolver(Arc::new(ExternalResolver))
+            .redirect(redirect)
+            .no_proxy()
             .user_agent("soju")
             .timeout(Duration::from_secs(15))
             .build()
@@ -272,14 +299,11 @@ impl Sender {
         if vapid_pub_key != self.vapid_public {
             bail!("unknown VAPID public key {vapid_pub_key:?}");
         }
-        let u = crate::database::parse_url(endpoint)?;
-        let host = crate::conn::host_of(&u.host);
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        if let Ok(ip) = host.parse::<IpAddr>()
-            && is_internal_ip(ip)
-        {
-            bail!(INTERNAL_IP_ERROR);
-        }
+        crate::database::parse_url(endpoint)?;
+        // Parse like the HTTP client does: it normalizes hosts such as
+        // "2130706433" or "127.1" to IP addresses
+        let url = reqwest::Url::parse(endpoint)?;
+        check_external_url(&url).map_err(|e| anyhow!(e))?;
 
         let body = encrypt(payload, auth, p256dh)?;
         let authorization = vapid_authorization(
@@ -402,6 +426,27 @@ mod tests {
         }
         for ip in ["1.1.1.1", "2606:4700::1111"] {
             assert!(!is_internal_ip(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn external_url() {
+        // Hosts which the URL parser normalizes to internal IP addresses
+        for u in [
+            "http://127.0.0.1/x",
+            "http://2130706433/x",
+            "http://0x7f.1/x",
+            "http://127.1/x",
+            "https://[::1]:8443/x",
+            "http://[::ffff:127.0.0.1]/x",
+            "http://10.0.0.1/x",
+        ] {
+            let url = reqwest::Url::parse(u).unwrap();
+            assert!(check_external_url(&url).is_err(), "{u}");
+        }
+        for u in ["https://push.example.org/x", "https://1.1.1.1/x"] {
+            let url = reqwest::Url::parse(u).unwrap();
+            assert!(check_external_url(&url).is_ok(), "{u}");
         }
     }
 }
