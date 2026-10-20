@@ -467,7 +467,7 @@ impl Server {
                     let (res, prints) = tokio::task::spawn_blocking(move || {
                         let rt = tokio::runtime::Handle::current();
                         let _guard = rt.enter();
-                        let mut ctx = crate::service::ServiceContext::for_user(srv, true);
+                        let mut ctx = crate::service::ServiceContext::for_user(srv, true, false);
                         let res = crate::service::handle_global_service_command(&mut ctx, &text);
                         (res, ctx.take_prints())
                     })

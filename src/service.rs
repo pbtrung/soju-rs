@@ -52,7 +52,10 @@ impl ServiceContext {
         }
     }
 
-    pub fn for_user(srv: Arc<Server>, admin: bool) -> ServiceContext {
+    /// A context for commands run without a downstream: from the admin
+    /// socket, or from another user's event loop (user run). The latter
+    /// must not wait forever on other users, see wait.
+    pub fn for_user(srv: Arc<Server>, admin: bool, in_event_loop: bool) -> ServiceContext {
         ServiceContext {
             srv,
             nick: String::new(),
@@ -60,7 +63,8 @@ impl ServiceContext {
             peer_cert: None,
             remote_ip: None,
             admin,
-            deadline: None,
+            deadline: in_event_loop
+                .then(|| tokio::time::Instant::now() + HANDLE_DOWNSTREAM_MESSAGE_TIMEOUT),
             prints: Vec::new(),
         }
     }
@@ -153,7 +157,7 @@ fn commands() -> &'static [Command] {
                 vec![
                     Command::leaf(
                         "create",
-                        "-addr <addr> [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit ignore-limit] [-connect-command command]...",
+                        "-addr <addr> [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit] [-connect-command command]...",
                         "add a new network",
                         handle_network_create,
                     ),
@@ -166,11 +170,11 @@ fn commands() -> &'static [Command] {
                     Command::leaf("info", "[name]", "show the configuration of a network", handle_network_info),
                     Command::leaf(
                         "update",
-                        "[name] [-addr addr] [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit ignore-limit] [-connect-command command]...",
+                        "[name] [-addr addr] [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit] [-connect-command command]...",
                         "update a network",
                         handle_network_update,
                     ),
-                    Command::leaf("delete", "[name]", "delete a network", handle_network_delete),
+                    Command::leaf("delete", "<name>", "delete a network", handle_network_delete),
                     Command::leaf("quote", "[name] <command>", "send a raw line to a network", handle_network_quote),
                 ],
             ),
@@ -217,7 +221,7 @@ fn commands() -> &'static [Command] {
                         .global(),
                     Command::leaf(
                         "create",
-                        "-username <username> -password <password> [-disable-password] [-admin true|false] [-nick <nick>] [-realname <realname>] [-enabled true|false]  [-max-networks <max-networks>]",
+                        "-username <username> -password <password> [-disable-password] [-admin] [-nick <nick>] [-realname <realname>] [-enabled=false] [-max-networks <max-networks>]",
                         "create a new soju user",
                         handle_user_create,
                     )
@@ -1421,6 +1425,8 @@ fn handle_channel_create(
         ..Default::default()
     };
     update_channel_from_flags(&p, &mut ch)?;
+    // The channel isn't joined yet: no need to detach it from clients
+    ch.detached = p.get_bool("detached").unwrap_or(false);
     let net_id = net.id();
     net.channels.set(&name, ch);
     let ch = net.channels.get_mut(&name).unwrap();
@@ -1595,7 +1601,9 @@ fn handle_device_cert_delete(
     let fingerprint = &params[0];
     let h = match hex::decode(fingerprint.replace(':', "")) {
         Ok(h) if h.len() <= 64 && h.len() >= DEVICE_CERTIFICATE_DISPLAY_BYTES => h,
-        _ => bail!("the certificate fingerprint must be hex-encoded SHA-256"),
+        _ => bail!(
+            "the certificate fingerprint must be a hex-encoded SHA-512 hash, or a prefix of it"
+        ),
     };
     let certs = ctx
         .srv

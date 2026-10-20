@@ -181,10 +181,10 @@ The following directives are supported:
 	By default, this is _https://<hostname>_.
 
 *accept-proxy-ip* <cidr...>
-	Allow the specified IPs to act as a proxy. Proxys have the ability to
-	overwrite the remote and local connection addresses (via the PROXY protocol,
-	the Forwarded HTTP header field defined in RFC 7239 or the X-Forwarded-\*
-	HTTP header fields). The special name "localhost" accepts the loopback
+	Allow the specified IPs to act as a proxy. Proxies have the ability to
+	overwrite the remote connection address (via the PROXY protocol, the
+	Forwarded HTTP header field defined in RFC 7239 or the X-Forwarded-For
+	HTTP header field). The special name "localhost" accepts the loopback
 	addresses 127.0.0.0/8 and ::1/128.
 
 	By default, all IPs are rejected.
@@ -355,7 +355,7 @@ character.
 		Enable or disable the network. If the network is disabled, the bouncer
 		won't connect to it. By default, the network is enabled.
 
-	*-ignore-limit* true|false
+	*-ignore-limit*
 		Ignore the max networks limit for this command.
 		Only admin users can ignore the limit.
 
@@ -384,10 +384,8 @@ character.
 
 	If _name_ is not specified, the current network is updated.
 
-*network delete* [name]
+*network delete* <name>
 	Disconnect and delete a network.
-
-	If _name_ is not specified, the current network is deleted.
 
 *network quote* [name] <command>
 	Send a raw IRC line as-is to a network.
@@ -533,7 +531,8 @@ character.
 		_ed25519_. _ecdsa_ uses the NIST P-521 curve.
 
 	*-bits* <bits>
-		Size of RSA key to generate. Ignored for other key types.
+		Size of RSA key to generate: 2048, 3072 (the default), 4096 or 8192.
+		Ignored for other key types.
 
 *certfp fingerprint* [options...]
 	Show SHA-1 and SHA-256 fingerprints for the certificate
@@ -595,7 +594,7 @@ character.
 	*-disable-password*
 		Disable password authentication. The user will be unable to login.
 
-	*-admin* true|false
+	*-admin*
 		Make the new user an administrator.
 
 	*-nick* <nick>
@@ -606,7 +605,7 @@ character.
 		Set the user's realname. This is used as a fallback if there is no
 		realname set for a network.
 
-	*-enabled* true|false
+	*-enabled*=true|false
 		Enable or disable the user. If the user is disabled, the bouncer will
 		not connect to any of their networks, and downstream connections will
 		be immediately closed. By default, users are enabled.
@@ -617,7 +616,9 @@ character.
 		_max-user-networks_ configuration value.
 
 *user update* [username] [options...]
-	Update a user. The options are the same as the _user create_ command.
+	Update a user. The options are the same as the _user create_ command,
+	except that _-admin_ and _-enabled_ take a value: _-admin_ true|false,
+	_-enabled_ true|false.
 
 	If _username_ is omitted, the current user is updated. Only admins can
 	update other users.

@@ -119,6 +119,8 @@ fn main() -> ExitCode {
 async fn run(args: Args) -> ExitCode {
     let logger = Logger::new(args.debug);
     logf!(logger, "starting soju-rs v{}", soju::VERSION);
+    // Before starting: the default action of SIGHUP would kill us
+    let signals = Signals::new();
 
     let mut raw = match load_config(&args.config_path) {
         Ok(c) => c,
@@ -182,35 +184,59 @@ async fn run(args: Args) -> ExitCode {
         return fatal(&logger, e);
     }
 
-    wait_for_signals(&srv, &args, &certs).await;
+    signals.wait(&srv, &args, &certs).await;
     srv.shutdown().await;
     ExitCode::SUCCESS
 }
 
 #[cfg(unix)]
-async fn wait_for_signals(srv: &Arc<Server>, args: &Args, certs: &Arc<tls::CertStore>) {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut hup = signal(SignalKind::hangup()).expect("failed to install SIGHUP handler");
-    let mut term = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
-    let mut int = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-    loop {
-        tokio::select! {
-            _ = hup.recv() => {
-                logf!(srv.logger, "reloading configuration");
-                match reload(args, certs).await {
-                    Ok(cfg) => srv.set_config(cfg),
-                    Err(e) => logf!(srv.logger, "failed to reloading configuration: {e}"),
+struct Signals {
+    hup: tokio::signal::unix::Signal,
+    term: tokio::signal::unix::Signal,
+    int: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl Signals {
+    fn new() -> Signals {
+        use tokio::signal::unix::{SignalKind, signal};
+        Signals {
+            hup: signal(SignalKind::hangup()).expect("failed to install SIGHUP handler"),
+            term: signal(SignalKind::terminate()).expect("failed to install SIGTERM handler"),
+            int: signal(SignalKind::interrupt()).expect("failed to install SIGINT handler"),
+        }
+    }
+
+    /// Reloads the configuration on SIGHUP, until SIGTERM or SIGINT.
+    async fn wait(mut self, srv: &Arc<Server>, args: &Args, certs: &Arc<tls::CertStore>) {
+        loop {
+            tokio::select! {
+                _ = self.hup.recv() => {
+                    logf!(srv.logger, "reloading configuration");
+                    match reload(args, certs).await {
+                        Ok(cfg) => srv.set_config(cfg),
+                        Err(e) => logf!(srv.logger, "failed to reload configuration: {e}"),
+                    }
                 }
+                _ = self.term.recv() => return,
+                _ = self.int.recv() => return,
             }
-            _ = term.recv() => return,
-            _ = int.recv() => return,
         }
     }
 }
 
 #[cfg(not(unix))]
-async fn wait_for_signals(_srv: &Arc<Server>, _args: &Args, _certs: &Arc<tls::CertStore>) {
-    let _ = tokio::signal::ctrl_c().await;
+struct Signals;
+
+#[cfg(not(unix))]
+impl Signals {
+    fn new() -> Signals {
+        Signals
+    }
+
+    async fn wait(self, _srv: &Arc<Server>, _args: &Args, _certs: &Arc<tls::CertStore>) {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// Reloads the configuration file, the TLS certificate and the MOTD.

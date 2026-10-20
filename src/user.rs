@@ -719,7 +719,8 @@ impl User {
                 // user run can only be run by an admin, so run with admin
                 // rights. This enables admins to e.g. add a network past the
                 // user limit.
-                let mut ctx = crate::service::ServiceContext::for_user(self.srv.clone(), true);
+                let mut ctx =
+                    crate::service::ServiceContext::for_user(self.srv.clone(), true, true);
                 let res = crate::service::handle_service_command(self, &mut ctx, &params);
                 for line in ctx.take_prints() {
                     let _ = tx.send(UserRunMsg::Message(line));
