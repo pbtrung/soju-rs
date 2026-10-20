@@ -169,6 +169,18 @@ impl Prefix {
         }
     }
 
+    /// The length of the formatted prefix, without formatting it.
+    pub fn formatted_len(&self) -> usize {
+        let mut n = self.name.len();
+        if !self.user.is_empty() {
+            n += 1 + self.user.len();
+        }
+        if !self.host.is_empty() {
+            n += 1 + self.host.len();
+        }
+        n
+    }
+
     pub fn parse(s: &str) -> Prefix {
         let (mut name, host) = match s.split_once('@') {
             Some((n, h)) => (n, h),

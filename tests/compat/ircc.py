@@ -112,8 +112,14 @@ class Client:
         self.send(f"NICK {nick}")
         self.send(f"USER {user} 0 * :{nick}")
         if caps is not None:
-            ls = self.expect("CAP")
-            offered = {c.split("=")[0] for c in ls["params"][-1].split()}
+            # CAP LS 302 replies may span several lines, all but the last
+            # marked with "*"
+            offered = set()
+            while True:
+                ls = self.expect("CAP")
+                offered |= {c.split("=")[0] for c in ls["params"][-1].split()}
+                if ls["params"][-2] != "*":
+                    break
             caps = [c for c in caps if c in offered]
             if caps:
                 self.send("CAP REQ :" + " ".join(caps))

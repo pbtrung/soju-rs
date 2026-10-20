@@ -353,33 +353,33 @@ impl UpstreamConn {
         if !self.caps.is_enabled("message-tags") {
             msg.tags.clear();
         }
-        if matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") && msg.params.len() >= 2 {
-            let max = self.max_text_length(&msg.command, &msg.params[0]);
-            let multiline = self.caps.is_enabled("batch")
-                && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
-                && (xirc::is_multiline(&msg) || msg.params[1].len() > max);
-            if multiline {
+        let prepared = xirc::prepare_text_message(
+            msg,
+            self.multiline_limits().is_some(),
+            || self.prefix_len(),
+            || {
                 let r = self.next_batch_ref.get() + 1;
                 self.next_batch_ref.set(r);
-                let r = r.to_string();
-                for m in xirc::generate_multiline_batch(&msg, &r, max) {
+                r.to_string()
+            },
+        );
+        match prepared {
+            xirc::TextMessage::Single(m) => self.raw_send(m),
+            xirc::TextMessage::Batch(l) => {
+                for m in l {
                     self.raw_send(m);
                 }
-                return;
-            } else if xirc::is_multiline(&msg) {
-                for (i, mut m) in xirc::generate_multiline_fallback(&msg, max)
-                    .into_iter()
-                    .enumerate()
-                {
+            }
+            xirc::TextMessage::Lines(l) => {
+                // Only the first message carries the label
+                for (i, mut m) in l.into_iter().enumerate() {
                     if i > 0 {
                         m.tags.remove("label");
                     }
                     self.raw_send(m);
                 }
-                return;
             }
         }
-        self.raw_send(msg);
     }
 
     fn raw_send(&self, msg: Message) {
@@ -387,18 +387,16 @@ impl UpstreamConn {
         self.conn.send_message(msg);
     }
 
-    /// The maximum length of the text of a PRIVMSG/NOTICE line we send.
-    fn max_text_length(&self, command: &str, target: &str) -> usize {
-        // The server relays our message with our full prefix. Assume the
-        // longest hostname if we don't know ours.
+    /// The length of the prefix the server relays our messages with.
+    fn prefix_len(&self) -> usize {
+        // Assume the longest hostname if we don't know ours
         let host_len = if self.hostname.is_empty() {
             63
         } else {
             self.hostname.len()
         };
         let user_len = self.username.len().max(10);
-        let prefix_len = self.nick.len() + 1 + user_len + 1 + host_len;
-        xirc::max_text_length(&"x".repeat(prefix_len), command, target)
+        self.nick.len() + 1 + user_len + 1 + host_len
     }
 
     /// The draft/multiline limits of the server, if supported.
@@ -417,7 +415,7 @@ impl UpstreamConn {
 
     /// Returns the number of lines a multiline message would be sent as.
     pub fn multiline_line_count(&self, msg: &Message) -> usize {
-        let max = self.max_text_length(&msg.command, msg.param(0));
+        let max = xirc::max_text_length(self.prefix_len(), &msg.command, msg.param(0));
         xirc::split_multiline(msg.param(1), max).len()
     }
 
@@ -1213,7 +1211,7 @@ fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline>
         }) = uc.batches.get_mut(r)
     {
         // The server's limits only apply to what we send, use our own
-        batch.push(msg, &xirc::MultilineLimits::parse(""));
+        batch.push(msg, &xirc::MultilineLimits::default());
         return Ok(Multiline::Consumed);
     }
     Ok(Multiline::Passthrough)
@@ -1231,19 +1229,18 @@ pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> 
     let net_id = u.networks[ni].id();
     let mut label = msg.tags.remove("label").unwrap_or_default();
 
-    let mut msg_batch: Option<UpstreamBatch> = None;
     let mut batch_name = String::new();
     let mut batch_label = false;
     if let Some(bn) = msg.tags.remove("batch") {
         let uc = uc!(u, ni);
-        let Some(b) = uc.batches.get(&bn).cloned() else {
+        let Some(b) = uc.batches.get(&bn) else {
             bail!("unexpected batch reference: batch was not defined: {bn:?}");
         };
+        // Messages in a labeled batch belong to its labeled response
         if label.is_empty() {
             batch_label = true;
             label = b.label.clone();
         }
-        msg_batch = Some(b);
         batch_name = bn;
     }
 
@@ -1267,15 +1264,7 @@ pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> 
         }
     }
 
-    let res = handle_message_inner(
-        u,
-        ni,
-        msg,
-        downstream_id,
-        &downstream_label,
-        msg_batch,
-        &label,
-    );
+    let res = handle_message_inner(u, ni, msg, downstream_id, &downstream_label, &label);
 
     for id in labeled_dcs {
         if let Some(i) = u.dc_index(id) {
@@ -1294,7 +1283,6 @@ fn handle_message_inner(
     msg: &mut Message,
     mut downstream_id: u64,
     downstream_label: &str,
-    msg_batch: Option<UpstreamBatch>,
     label: &str,
 ) -> Result<()> {
     let net_id = u.networks[ni].id();
@@ -1372,27 +1360,28 @@ fn handle_message_inner(
             let self_msg = is_our_nick(cm, uc, &prefix_name);
             let mut highlight = false;
             let mut detached = false;
-            let ch = u.networks[ni].channels.get(&buffer_name).cloned();
-            if let Some(ch) = &ch
+            let ch = (u.networks[ni].channels.get(&buffer_name))
+                .map(|c| (c.detached, c.detach_on, c.relay_detached));
+            if let Some((was_detached, detach_on, relay_detached)) = ch
                 && is_text
                 && !self_msg
             {
-                if ch.detached {
+                if was_detached {
                     handle_detached_message(u, ni, &buffer_name, msg);
                 }
                 highlight = u.networks[ni].is_highlight(&u.record, msg);
-                if ch.detach_on == db::MessageFilter::Message
-                    || ch.detach_on == db::MessageFilter::Default
-                    || (ch.detach_on == db::MessageFilter::Highlight && highlight)
+                if detach_on == db::MessageFilter::Message
+                    || detach_on == db::MessageFilter::Default
+                    || (detach_on == db::MessageFilter::Highlight && highlight)
                 {
                     update_channel_auto_detach(u, ni, &buffer_name);
                 }
-                let ch = u.networks[ni]
-                    .channels
-                    .get(&buffer_name)
-                    .cloned()
-                    .unwrap_or(ch.clone());
-                if ch.detached && ch.relay_detached == db::MessageFilter::None {
+                // The message may have reattached the channel
+                let (is_detached, relay_detached) = (u.networks[ni].channels.get(&buffer_name))
+                    .map_or((was_detached, relay_detached), |c| {
+                        (c.detached, c.relay_detached)
+                    });
+                if is_detached && relay_detached == db::MessageFilter::None {
                     detached = true;
                 }
             }
@@ -1754,16 +1743,11 @@ fn handle_message_inner(
                     bail!("unexpected BATCH reference tag: batch was already defined: {tag:?}");
                 }
                 need_params(msg, 2)?;
-                let mut batch_label = label.to_owned();
-                if batch_label.is_empty()
-                    && let Some(b) = &msg_batch
-                {
-                    batch_label = b.label.clone();
-                }
+                // label is the batch's own, or else the one of its parent
                 uc.batches.insert(
                     tag.to_owned(),
                     UpstreamBatch {
-                        label: batch_label,
+                        label: label.to_owned(),
                         multiline: None,
                     },
                 );
@@ -2644,20 +2628,20 @@ fn handle_message_inner(
 
 fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message) {
     let net = &u.networks[ni];
-    let Some(ch) = net.channels.get(name).cloned() else {
+    let Some(ch) = net.channels.get(name) else {
         return;
     };
     let net_id = net.id();
-    if net.detached_message_needs_relay(&u.record, &ch, msg) {
+    let relay = net.detached_message_needs_relay(&u.record, ch, msg);
+    let reattach = ch.reattach_on == db::MessageFilter::Message
+        || (ch.reattach_on == db::MessageFilter::Highlight && net.is_highlight(&u.record, msg));
+    if relay {
         let highlight = net.is_highlight(&u.record, msg);
         for dc in dcs_for(&mut u.downstreams, net_id) {
             downstream::relay_detached_message(dc, highlight, msg);
         }
     }
-    let net = &u.networks[ni];
-    if ch.reattach_on == db::MessageFilter::Message
-        || (ch.reattach_on == db::MessageFilter::Highlight && net.is_highlight(&u.record, msg))
-    {
+    if reattach {
         u.attach_channel(ni, name);
         u.store_channel(ni, name);
     }

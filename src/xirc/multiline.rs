@@ -26,14 +26,21 @@ pub struct MultilineLimits {
     pub max_lines: usize,
 }
 
+/// soju's own upper bounds.
+impl Default for MultilineLimits {
+    fn default() -> MultilineLimits {
+        MultilineLimits {
+            max_bytes: MAX_MULTILINE_BYTES,
+            max_lines: MAX_MULTILINE_LINES,
+        }
+    }
+}
+
 impl MultilineLimits {
     /// Parses a capability value such as "max-bytes=4096,max-lines=24".
     /// Missing or invalid limits default to soju's own upper bounds.
     pub fn parse(v: &str) -> MultilineLimits {
-        let mut limits = MultilineLimits {
-            max_bytes: MAX_MULTILINE_BYTES,
-            max_lines: MAX_MULTILINE_LINES,
-        };
+        let mut limits = MultilineLimits::default();
         for kv in v.split(',') {
             let Some((k, v)) = kv.split_once('=') else {
                 continue;
@@ -55,20 +62,51 @@ impl MultilineLimits {
 }
 
 /// Returns the maximum length of the text of a PRIVMSG/NOTICE line, so that
-/// the full line fits in an IRC message.
-pub fn max_text_length(prefix: &str, command: &str, target: &str) -> usize {
+/// the full line fits in an IRC message with a prefix of prefix_len bytes.
+pub fn max_text_length(prefix_len: usize, command: &str, target: &str) -> usize {
     // ":<prefix> <command> <target> :<text>\r\n"
-    let overhead = 1 + prefix.len() + 1 + command.len() + 1 + target.len() + 2 + 2;
+    let overhead = 1 + prefix_len + 1 + command.len() + 1 + target.len() + 2 + 2;
     MAX_MESSAGE_LENGTH
         .saturating_sub(overhead)
         .max(MIN_LINE_LENGTH)
 }
 
-/// Returns whether a message is a PRIVMSG/NOTICE spanning several lines.
-pub fn is_multiline(msg: &Message) -> bool {
-    matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE")
-        && msg.params.len() >= 2
-        && msg.params[1].contains('\n')
+/// How to send a message to a peer, see prepare_text_message.
+pub enum TextMessage {
+    /// The message as is
+    Single(Message),
+    /// A draft/multiline batch: BATCH +, the lines, BATCH -
+    Batch(Vec<Message>),
+    /// One message per line, without draft/multiline support
+    Lines(Vec<Message>),
+}
+
+/// Prepares a message for a peer: a PRIVMSG/NOTICE spanning several lines,
+/// or too long for a single line, is sent as a draft/multiline batch if the
+/// peer supports it (multiline), or else line by line. The length of the
+/// prefix the peer will see and the batch reference are only computed when
+/// needed.
+pub fn prepare_text_message(
+    msg: Message,
+    multiline: bool,
+    prefix_len: impl FnOnce() -> usize,
+    batch_ref: impl FnOnce() -> String,
+) -> TextMessage {
+    if !matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") || msg.params.len() < 2 {
+        return TextMessage::Single(msg);
+    }
+    let breaks = msg.params[1].contains('\n');
+    if !breaks && !multiline {
+        return TextMessage::Single(msg);
+    }
+    let max = max_text_length(prefix_len(), &msg.command, &msg.params[0]);
+    if multiline && (breaks || msg.params[1].len() > max) {
+        TextMessage::Batch(generate_multiline_batch(&msg, &batch_ref(), max))
+    } else if breaks {
+        TextMessage::Lines(generate_multiline_fallback(&msg, max))
+    } else {
+        TextMessage::Single(msg)
+    }
 }
 
 /// Splits the text of a multiline message into lines of at most max bytes.

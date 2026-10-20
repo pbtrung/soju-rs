@@ -225,9 +225,17 @@ fn handle_pong(u: &mut User, i: usize, token: &str) {
     let Some(ni) = u.net_index(net_id) else {
         return;
     };
+    // The ID comes from the client: don't let it add targets without bounds
+    let delivered = &mut u.networks[ni].delivered;
+    if !delivered.has_target(&entity) && delivered.len() >= MAX_DELIVERY_TARGETS {
+        return;
+    }
     let client = dc!(u, i).client_name.clone();
     u.networks[ni].delivered.store_id(&entity, &client, msg_id);
 }
+
+/// The maximum number of targets with delivery receipts per network.
+const MAX_DELIVERY_TARGETS: usize = 10_000;
 
 fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
@@ -985,11 +993,12 @@ fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Message) -> Resu
         "PLAIN" => {
             let plain = credentials.plain.clone().unwrap();
             if !plain.identity.is_empty() && plain.identity != plain.username {
-                return Err(irc_error(msg!(
+                dc!(u, i).end_sasl(Some(msg!(
                     ERR_SASLFAIL,
                     nick,
                     "SASL PLAIN identity not supported"
                 )));
+                return Ok(());
             }
             let uc = u.networks[ni].upstream_mut().unwrap();
             logf!(
@@ -1122,6 +1131,7 @@ fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 2)?;
     let target = msg.params[0].clone();
+    check_target("METADATA", &target)?;
     let subcommand = msg.params[1].clone();
     let net_idx = dc_network(u, i);
     let net_id = net_idx.map(|ni| u.networks[ni].id());
@@ -1532,6 +1542,15 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     Ok(())
 }
 
+/// Rejects a target which can't be a middle parameter of our replies: it
+/// would corrupt them, e.g. "a b" would be read as two parameters.
+fn check_target(cmd: &str, target: &str) -> Result<()> {
+    if target.is_empty() || target.contains(' ') || target.starts_with(':') {
+        return Err(fail(&[cmd, "INVALID_TARGET", "*", "Invalid target"]));
+    }
+    Ok(())
+}
+
 fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     if msg.params.is_empty() {
         return Err(fail(&[
@@ -1541,6 +1560,7 @@ fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         ]));
     }
     let target = msg.params[0].clone();
+    check_target(&msg.command, &target)?;
     let criteria = msg.params.get(1).cloned().unwrap_or_default();
 
     // We don't save read receipts for our service
@@ -1916,19 +1936,7 @@ fn handle_bouncer(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
                 "Cannot bind to a network after registration",
             ]));
         }
-        "LISTNETWORKS" => {
-            let msgs: Vec<Message> = (0..u.networks.len())
-                .map(|ni| {
-                    msg!(
-                        "BOUNCER",
-                        "NETWORK",
-                        u.networks[ni].id().to_string(),
-                        u.network_attrs(ni).to_string()
-                    )
-                })
-                .collect();
-            dc!(u, i).send_batch("soju.im/bouncer-networks", &[], msgs);
-        }
+        "LISTNETWORKS" => crate::downstream::send_bouncer_networks(u, i),
         "ADDNETWORK" => {
             need_params(msg, 2)?;
             let attrs = Tags::parse(&msg.params[1]);

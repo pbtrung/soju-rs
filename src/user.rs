@@ -144,6 +144,11 @@ impl DeliveredStore {
         self.m.has(target)
     }
 
+    /// The number of targets with receipts.
+    pub fn len(&self) -> usize {
+        self.m.len()
+    }
+
     pub fn load_id(&self, target: &str, client: &str) -> String {
         self.m
             .get(target)

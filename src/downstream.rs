@@ -621,28 +621,30 @@ impl DownstreamConn {
             msg.prefix = Some(self.srv.prefix());
         }
 
-        if matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") && msg.params.len() >= 2 {
-            let prefix = match &msg.prefix {
-                Some(p) => p.to_string(),
-                None => self.srv.prefix().to_string(),
-            };
-            let max = xirc::max_text_length(&prefix, &msg.command, &msg.params[0]);
-            let multiline = self.caps.is_enabled("batch")
-                && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
-                && (xirc::is_multiline(&msg) || msg.params[1].len() > max);
-            if multiline {
-                self.last_batch_ref += 1;
-                let r = self.last_batch_ref.to_string();
-                self.send_reply(xirc::generate_multiline_batch(&msg, &r, max));
-                return;
-            } else if xirc::is_multiline(&msg) {
-                for m in xirc::generate_multiline_fallback(&msg, max) {
+        let multiline =
+            self.caps.is_enabled("batch") && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE);
+        let prefix_len = msg.prefix.as_ref().map(|p| p.formatted_len());
+        let srv = &self.srv;
+        let last_batch_ref = &mut self.last_batch_ref;
+        let prepared = xirc::prepare_text_message(
+            msg,
+            multiline,
+            || prefix_len.unwrap_or_else(|| srv.prefix().formatted_len()),
+            || {
+                *last_batch_ref += 1;
+                last_batch_ref.to_string()
+            },
+        );
+        match prepared {
+            xirc::TextMessage::Single(m) => self.send_reply(vec![m]),
+            // A multiline batch is a single reply
+            xirc::TextMessage::Batch(l) => self.send_reply(l),
+            xirc::TextMessage::Lines(l) => {
+                for m in l {
                     self.send_reply(vec![m]);
                 }
-                return;
             }
         }
-        self.send_reply(vec![msg]);
     }
 
     /// Sends a reply made of one or more messages. The reply is wrapped in
@@ -830,6 +832,38 @@ impl DownstreamConn {
         self.monitored.set_casemapping(cm);
     }
 
+    /// Sends a CAP LS or LIST reply. With CAP 302, it's split over several
+    /// lines if needed, all but the last marked with "*", so that each line
+    /// fits in an IRC message.
+    fn send_cap_list(&mut self, subcmd: &str, caps: &[String], prefix: Prefix) {
+        // Room for ":<prefix> CAP <nick> <subcmd> * :" in 512 bytes
+        let max = xirc::MAX_MESSAGE_LENGTH
+            - 2
+            - (prefix.formatted_len() + 2)
+            - (self.nick.len() + subcmd.len() + 10);
+        let mut lines: Vec<String> = vec![String::new()];
+        for cap in caps {
+            let line = lines.last_mut().unwrap();
+            if self.cap_version >= 302 && !line.is_empty() && line.len() + 1 + cap.len() > max {
+                lines.push(cap.clone());
+            } else {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(cap);
+            }
+        }
+        let n = lines.len();
+        for (i, line) in lines.into_iter().enumerate() {
+            let mut params = vec![self.nick.clone(), subcmd.to_owned()];
+            if i + 1 < n {
+                params.push("*".to_owned());
+            }
+            params.push(line);
+            self.send_message(Message::new("CAP", params).with_prefix(prefix.clone()));
+        }
+    }
+
     pub fn handle_cap(&mut self, msg: &Message) -> Result<()> {
         need_params(msg, 1)?;
         let cmd = msg.params[0].to_uppercase();
@@ -851,7 +885,7 @@ impl DownstreamConn {
                     }
                     self.caps.available.insert(
                         xirc::MULTILINE_BATCH_TYPE.to_owned(),
-                        xirc::MultilineLimits::parse("").cap_value(),
+                        xirc::MultilineLimits::default().cap_value(),
                     );
                 }
                 let caps: Vec<String> = self
@@ -866,9 +900,7 @@ impl DownstreamConn {
                         }
                     })
                     .collect();
-                // TODO: multi-line replies
-                let nick = self.nick.clone();
-                self.send_message(msg!("CAP", nick, "LS", caps.join(" ")).with_prefix(p));
+                self.send_cap_list("LS", &caps, p);
                 if self.cap_version >= 302 {
                     // CAP version 302 implicitly enables cap-notify
                     self.caps.set_enabled("cap-notify", true);
@@ -881,9 +913,7 @@ impl DownstreamConn {
             }
             "LIST" => {
                 let caps: Vec<String> = self.caps.enabled.iter().cloned().collect();
-                // TODO: multi-line replies
-                let nick = self.nick.clone();
-                self.send_message(msg!("CAP", nick, "LIST", caps.join(" ")).with_prefix(p));
+                self.send_cap_list("LIST", &caps, p);
             }
             "REQ" => {
                 let Some(arg) = args.first() else {
@@ -1150,6 +1180,18 @@ pub struct IsupportCtx<'a> {
     pub network_id: Option<i64>,
     pub chathistory: bool,
     pub upstream: Option<&'a UpstreamConn>,
+}
+
+/// The ISUPPORT tokens of a registered downstream connection.
+fn build_user_isupport(u: &User, i: usize) -> Isupport {
+    let dc = &u.downstreams[i];
+    let ctx = IsupportCtx {
+        has_user: true,
+        network_id: dc.network_id,
+        chathistory: u.has_chathistory_store(),
+        upstream: dc_network(u, i).and_then(|ni| u.networks[ni].upstream()),
+    };
+    build_isupport(dc, &ctx)
 }
 
 pub fn build_isupport(dc: &DownstreamConn, ctx: &IsupportCtx) -> Isupport {
@@ -1707,13 +1749,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
 
     let i = u.dc_index(dc_id).unwrap();
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
-    let nick = match net_idx {
-        Some(ni) => match u.networks[ni].upstream() {
-            Some(uc) => uc.nick.clone(),
-            None => get_nick(&u.record, Some(&u.networks[ni].record)).to_owned(),
-        },
-        None => u.record.username.clone(),
-    };
+    let nick = current_nick(u, net_idx);
     let cfg = u.srv.config();
     {
         let dc = &mut u.downstreams[i];
@@ -1779,17 +1815,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
         .caps
         .is_enabled("soju.im/bouncer-networks-notify")
     {
-        let msgs: Vec<Message> = (0..u.networks.len())
-            .map(|ni| {
-                msg!(
-                    "BOUNCER",
-                    "NETWORK",
-                    u.networks[ni].id().to_string(),
-                    u.network_attrs(ni).to_string()
-                )
-            })
-            .collect();
-        u.downstreams[i].send_batch("soju.im/bouncer-networks", &[], msgs);
+        send_bouncer_networks(u, i);
     }
 
     if u.downstreams[i].caps.is_enabled("draft/metadata-2") {
@@ -1935,6 +1961,22 @@ pub fn send_target_backlog(u: &mut User, dc_idx: usize, ni: usize, target: &str,
     dc.end_batch(&r);
 }
 
+/// Sends the list of the user's networks, in a soju.im/bouncer-networks
+/// batch.
+pub fn send_bouncer_networks(u: &mut User, i: usize) {
+    let msgs: Vec<Message> = (0..u.networks.len())
+        .map(|ni| {
+            msg!(
+                "BOUNCER",
+                "NETWORK",
+                u.networks[ni].id().to_string(),
+                u.network_attrs(ni).to_string()
+            )
+        })
+        .collect();
+    u.downstreams[i].send_batch("soju.im/bouncer-networks", &[], msgs);
+}
+
 pub fn relay_detached_message(dc: &mut DownstreamConn, highlight: bool, msg: &Message) {
     if msg.command != "PRIVMSG" && msg.command != "NOTICE" {
         return;
@@ -2022,14 +2064,7 @@ pub fn update_isupport(u: &mut User, dc_id: u64) {
     if !dc.registered && !dc.caps.is_enabled("draft/extended-isupport") {
         return;
     }
-    let net_idx = dc.network_id.and_then(|id| u.net_index(id));
-    let ctx = IsupportCtx {
-        has_user: true,
-        network_id: dc.network_id,
-        chathistory: u.has_chathistory_store(),
-        upstream: net_idx.and_then(|ni| u.networks[ni].upstream()),
-    };
-    let isupport = build_isupport(dc, &ctx);
+    let isupport = build_user_isupport(u, i);
 
     let mut changed = Isupport::new();
     for (k, v) in &isupport {
@@ -2049,16 +2084,22 @@ pub fn update_isupport(u: &mut User, dc_id: u64) {
     dc.isupport = isupport;
 }
 
-pub fn update_nick(u: &mut User, dc_id: u64) {
-    let Some(i) = u.dc_index(dc_id) else { return };
-    let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
-    let nick = match net_idx {
+/// The nick of a downstream connection: our nick on its network, or the
+/// user's for a bouncer connection.
+fn current_nick(u: &User, net_idx: Option<usize>) -> String {
+    match net_idx {
         Some(ni) => match u.networks[ni].upstream() {
             Some(uc) => uc.nick.clone(),
             None => get_nick(&u.record, Some(&u.networks[ni].record)).to_owned(),
         },
         None => get_nick(&u.record, None).to_owned(),
-    };
+    }
+}
+
+pub fn update_nick(u: &mut User, dc_id: u64) {
+    let Some(i) = u.dc_index(dc_id) else { return };
+    let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
+    let nick = current_nick(u, net_idx);
     let dc = &mut u.downstreams[i];
     if nick == dc.nick {
         return;
@@ -2272,6 +2313,8 @@ pub fn handle_metadata_sub(
     let subcommand = msg.params[1].as_str();
     match subcommand {
         "SUB" | "UNSUB" => {
+            // Listed once, for all keys
+            let mut mts: Option<Vec<db::MessageTarget>> = None;
             for k in &msg.params[2..] {
                 let k = k.to_lowercase();
                 if !matches!(
@@ -2297,24 +2340,25 @@ pub fn handle_metadata_sub(
                     // guarantees that servers MAY send these messages at any
                     // time.
                     if let Some(targets) = targets {
-                        let mts = match targets() {
-                            Ok(t) => t,
-                            Err(e) => {
-                                logf!(
-                                    dc.logger,
-                                    "failed to list message targets for METADATA SUB: {e}"
-                                );
-                                return Some(Err(irc_error(msg!(
-                                    "FAIL",
-                                    "METADATA",
-                                    "INTERNAL_ERROR",
-                                    "*",
-                                    "Internal error"
-                                ))));
-                            }
-                        };
-                        for mt in mts {
-                            for (key, v) in get_message_target_metadata(&mt) {
+                        if mts.is_none() {
+                            mts = match targets() {
+                                Ok(t) => Some(t),
+                                Err(e) => {
+                                    logf!(
+                                        dc.logger,
+                                        "failed to list message targets for METADATA SUB: {e}"
+                                    );
+                                    return Some(Err(fail(&[
+                                        "METADATA",
+                                        "INTERNAL_ERROR",
+                                        "*",
+                                        "Internal error",
+                                    ])));
+                                }
+                            };
+                        }
+                        for mt in mts.iter().flatten() {
+                            for (key, v) in get_message_target_metadata(mt) {
                                 if key == k {
                                     dc.send_message(msg!(
                                         "METADATA",
@@ -2367,10 +2411,12 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         let res = if msg.param(1) != xirc::MULTILINE_BATCH_TYPE
             || !dc.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
         {
+            let typ = msg.param(1);
+            let typ = if typ.is_empty() { "*" } else { typ };
             Err(fail(&[
                 "BATCH",
                 "UNKNOWN_TYPE",
-                msg.param(1),
+                typ,
                 "Unsupported batch type",
             ]))
         } else if r.is_empty()
@@ -2421,7 +2467,7 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     match res {
         Ok(m) => handle_message_labeled(u, dc_id, &m),
         Err(e) => {
-            let limits = limits.unwrap_or(xirc::MultilineLimits::parse(""));
+            let limits = limits.unwrap_or_default();
             let err = match e {
                 xirc::MultilineError::MaxBytes => fail(&[
                     "BATCH",
@@ -2459,7 +2505,7 @@ pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     if let Some(r) = msg.tags.get("batch")
         && u.downstreams[i].multiline_batches.contains_key(r)
     {
-        let limits = multiline_limits(u, i).unwrap_or(xirc::MultilineLimits::parse(""));
+        let limits = multiline_limits(u, i).unwrap_or_default();
         if let Some(b) = u.downstreams[i].multiline_batches.get_mut(r) {
             b.push(msg, &limits);
         }
@@ -2482,15 +2528,7 @@ fn handle_message_labeled(u: &mut User, dc_id: u64, msg: &Message) -> Result<()>
             if !u.downstreams[i].caps.is_enabled("draft/extended-isupport") {
                 Err(unknown_command(&msg.command))
             } else {
-                let dc = &u.downstreams[i];
-                let net_idx = dc.network_id.and_then(|id| u.net_index(id));
-                let ctx = IsupportCtx {
-                    has_user: true,
-                    network_id: dc.network_id,
-                    chathistory: u.has_chathistory_store(),
-                    upstream: net_idx.and_then(|ni| u.networks[ni].upstream()),
-                };
-                let isupport = build_isupport(dc, &ctx);
+                let isupport = build_user_isupport(u, i);
                 let dc = &mut u.downstreams[i];
                 send_isupport(dc, &isupport);
                 dc.isupport = isupport;

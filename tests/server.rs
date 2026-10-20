@@ -393,6 +393,21 @@ async fn register_downstream_caps(
     c.roundtrip().await;
 }
 
+/// Reads a CAP LS 302 reply, possibly split over several lines, each of
+/// which must fit in an IRC message. Returns the capabilities.
+async fn read_cap_ls(c: &mut TestConn) -> Vec<String> {
+    let mut caps = Vec::new();
+    loop {
+        let m = c.expect("CAP").await;
+        assert_eq!(m.params[1], "LS", "{m}");
+        assert!(m.to_string().len() + 2 <= 512, "CAP LS line too long: {m}");
+        caps.extend(m.params.last().unwrap().split(' ').map(str::to_owned));
+        if m.params[2] != "*" {
+            return caps;
+        }
+    }
+}
+
 /// Reads messages until one with the given command.
 async fn read_until(c: &mut TestConn, cmd: &str) -> Message {
     loop {
@@ -462,7 +477,11 @@ async fn cap_req_removal() {
     let env = setup(db_store()).await;
     let mut dc = connect_downstream(&env.srv);
     dc.send(msg!("CAP", "LS", "302"));
-    dc.expect("CAP").await;
+    let caps = read_cap_ls(&mut dc).await;
+    assert!(
+        caps.iter().any(|c| c.starts_with("draft/multiline=")),
+        "{caps:?}"
+    );
     dc.send(msg!("CAP", "REQ", "batch server-time"));
     let m = dc.expect("CAP").await;
     assert_eq!(m.params[1..], ["ACK", "batch server-time"]);
@@ -519,7 +538,7 @@ async fn sasl_errors() {
     // Invalid base64 fails the exchange but keeps the connection
     let mut dc = connect_downstream(&env.srv);
     dc.send(msg!("CAP", "LS", "302"));
-    dc.expect("CAP").await;
+    read_cap_ls(&mut dc).await;
     dc.send(msg!("CAP", "REQ", "sasl"));
     dc.expect("CAP").await;
     dc.send(msg!("AUTHENTICATE", "PLAIN"));
