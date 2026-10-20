@@ -27,6 +27,9 @@ pub mod util;
 pub mod webpush;
 pub mod xirc;
 
+/// The soju-rs version.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Counts a downstream connection in the metrics while it's being served.
 pub async fn metrics_guard<F: std::future::Future>(srv: &server::Server, f: F) -> F::Output {
     use std::sync::atomic::Ordering;

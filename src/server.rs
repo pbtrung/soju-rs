@@ -388,6 +388,11 @@ impl Server {
         }
         let before = Utc::now() - chrono::Duration::from_std(expiry)?;
         let before_str = xirc::format_server_time(before);
+        logf!(
+            self.logger,
+            "soju-rs v{}: running message expiry",
+            crate::VERSION
+        );
         match cfg.basic.msg_store.driver {
             MsgStoreDriver::Db => {
                 let n = self

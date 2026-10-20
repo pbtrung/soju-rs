@@ -108,6 +108,7 @@ fn main() -> ExitCode {
 
 async fn run(args: Args) -> ExitCode {
     let logger = Logger::new(args.debug);
+    logf!(logger, "starting soju-rs v{}", soju::VERSION);
 
     let mut raw = match load_config(&args.config_path) {
         Ok(c) => c,
