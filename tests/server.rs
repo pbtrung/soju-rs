@@ -361,3 +361,291 @@ async fn chat_history_fs() {
     .await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Registers an upstream connection like register_upstream, advertising
+/// ISUPPORT tokens.
+async fn register_upstream_with(c: &mut TestConn, isupport: &[&str]) -> String {
+    c.expect("CAP").await;
+    let nick = c.expect("NICK").await.params[0].clone();
+    c.expect("USER").await;
+    let p = server_prefix();
+    c.send(msg!("001", nick.clone(), "Welcome!").with_prefix(p.clone()));
+    let mut params = vec![nick.clone()];
+    params.extend(isupport.iter().map(|s| s.to_string()));
+    params.push("are supported".to_owned());
+    c.send(Message::new("005", params).with_prefix(p.clone()));
+    c.send(msg!("422", nick.clone(), "No MOTD").with_prefix(p));
+    nick
+}
+
+/// Registers a downstream connection after negotiating capabilities, bound
+/// to a network or else to the bouncer itself.
+async fn register_downstream_caps(
+    c: &mut TestConn,
+    network: Option<&database::Network>,
+    caps: &str,
+) {
+    c.send(msg!("CAP", "LS", "302"));
+    c.send(msg!("CAP", "REQ", caps));
+    let ack = loop {
+        let m = c.expect("CAP").await;
+        if m.params[1] != "LS" {
+            break m;
+        }
+    };
+    assert_eq!(ack.params[1], "ACK", "{ack}");
+    c.send(msg!("PASS", TEST_PASSWORD));
+    c.send(msg!("NICK", TEST_USERNAME));
+    let username = match network {
+        Some(n) => format!("{TEST_USERNAME}/{}", n.name),
+        None => TEST_USERNAME.to_owned(),
+    };
+    c.send(msg!("USER", username, "0", "*", TEST_USERNAME));
+    c.send(msg!("CAP", "END"));
+    // cap-notify may remove caps the upstream doesn't support first
+    read_until(c, "001").await;
+    c.roundtrip().await;
+}
+
+/// Reads messages until one with the given command.
+async fn read_until(c: &mut TestConn, cmd: &str) -> Message {
+    loop {
+        let m = c.read().await;
+        if m.command == cmd {
+            return m;
+        }
+    }
+}
+
+fn db_store() -> MsgStore {
+    MsgStore {
+        driver: MsgStoreDriver::Db,
+        source: String::new(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statusmsg_keeps_sigil() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream_with(&mut uc, &["STATUSMSG=@+"]).await;
+
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, Some(&env.network), "echo-message").await;
+
+    // A message to "@#chan" must only reach channel operators
+    dc.send(msg!("PRIVMSG", "@#chan", "ops only"));
+    let m = read_until(&mut uc, "PRIVMSG").await;
+    assert_eq!(m.params, vec!["@#chan", "ops only"]);
+    // The upstream doesn't support echo-message: the bouncer echoes it
+    let echo = read_until(&mut dc, "PRIVMSG").await;
+    assert_eq!(echo.params, vec!["@#chan", "ops only"]);
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upstream_malformed_messages() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    // Multi-byte membership prefixes used to panic when parsing NAMES
+    let nick = register_upstream_with(&mut uc, &["PREFIX=(abc)\u{FFFD}"]).await;
+
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream(&mut dc, &env.network).await;
+    dc.roundtrip().await;
+
+    // Messages without a prefix come from the server, they used to panic
+    for cmd in ["NICK", "JOIN", "SETNAME", "ACCOUNT"] {
+        uc.send(msg!(cmd, "x"));
+    }
+    let us = Prefix::full(nick.clone(), "u", "h");
+    uc.send(msg!("JOIN", "#c").with_prefix(us));
+    uc.send(msg!("353", nick.clone(), "=", "#c", "\u{F000}x @y").with_prefix(server_prefix()));
+    uc.send(msg!("366", nick.clone(), "#c", "End of /NAMES list").with_prefix(server_prefix()));
+    uc.roundtrip().await;
+
+    // The user's event loop is still alive
+    uc.send(msg!("NOTICE", nick, "still alive").with_prefix(Prefix::new("bob")));
+    let m = read_until(&mut dc, "NOTICE").await;
+    assert_eq!(m.params[1], "still alive");
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cap_req_removal() {
+    let env = setup(db_store()).await;
+    let mut dc = connect_downstream(&env.srv);
+    dc.send(msg!("CAP", "LS", "302"));
+    dc.expect("CAP").await;
+    dc.send(msg!("CAP", "REQ", "batch server-time"));
+    let m = dc.expect("CAP").await;
+    assert_eq!(m.params[1..], ["ACK", "batch server-time"]);
+    dc.send(msg!("CAP", "REQ", "-batch"));
+    let m = dc.expect("CAP").await;
+    assert_eq!(m.params[1..], ["ACK", "-batch"]);
+    // A REQ is atomic: one unavailable cap rejects all of them
+    dc.send(msg!("CAP", "REQ", "batch bogus-cap"));
+    let m = dc.expect("CAP").await;
+    assert_eq!(m.params[1..], ["NAK", "batch bogus-cap"]);
+    dc.send(msg!("CAP", "LIST"));
+    let m = dc.expect("CAP").await;
+    assert_eq!(m.params[1], "LIST");
+    let mut caps: Vec<&str> = m.params[2].split(' ').collect();
+    caps.sort();
+    assert_eq!(caps, ["cap-notify", "server-time"]);
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn labeled_response_ack() {
+    let env = setup(db_store()).await;
+    // labeled-response is passed through from the upstream: use a bouncer
+    // connection, which has none
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, None, "labeled-response batch").await;
+
+    // A labeled command without any reply gets an ACK
+    dc.send(msg!("PONG", "foo").with_tag("label", "z"));
+    let m = dc.expect("ACK").await;
+    assert_eq!(m.tags.get("label"), Some("z"));
+
+    // Errors keep the label, without a batch around them
+    dc.send(msg!("CHATHISTORY", "WHAT", "#x").with_tag("label", "e"));
+    let m = dc.expect("FAIL").await;
+    assert_eq!(m.tags.get("label"), Some("e"));
+    assert_eq!(m.params[..3], ["CHATHISTORY", "INVALID_PARAMS", "WHAT"]);
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sasl_errors() {
+    let env = setup(db_store()).await;
+
+    // AUTHENTICATE needs the sasl capability
+    let mut dc = connect_downstream(&env.srv);
+    dc.send(msg!("AUTHENTICATE", "PLAIN"));
+    let m = dc.expect("904").await;
+    assert_eq!(
+        m.params[1],
+        "AUTHENTICATE requires the \"sasl\" capability to be enabled"
+    );
+
+    // Invalid base64 fails the exchange but keeps the connection
+    let mut dc = connect_downstream(&env.srv);
+    dc.send(msg!("CAP", "LS", "302"));
+    dc.expect("CAP").await;
+    dc.send(msg!("CAP", "REQ", "sasl"));
+    dc.expect("CAP").await;
+    dc.send(msg!("AUTHENTICATE", "PLAIN"));
+    let m = dc.expect("AUTHENTICATE").await;
+    assert_eq!(m.params, vec!["+"]);
+    dc.send(msg!("AUTHENTICATE", "!!!!"));
+    let m = dc.expect("904").await;
+    assert_eq!(m.params[1], "Invalid base64-encoded response");
+
+    // A new exchange still works
+    use base64::Engine;
+    let creds = format!("\0{TEST_USERNAME}\0{TEST_PASSWORD}");
+    dc.send(msg!("AUTHENTICATE", "PLAIN"));
+    dc.expect("AUTHENTICATE").await;
+    dc.send(msg!(
+        "AUTHENTICATE",
+        base64::engine::general_purpose::STANDARD.encode(creds)
+    ));
+    read_until(&mut dc, "903").await;
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_history_params() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    let nick = register_upstream_with(&mut uc, &[]).await;
+    let base = Utc.with_ymd_and_hms(2023, 5, 23, 6, 0, 0).unwrap();
+    for i in 0..3 {
+        uc.send(
+            msg!("PRIVMSG", nick.clone(), format!("msg {i}"))
+                .with_prefix(Prefix::new("Foo"))
+                .with_tag(
+                    "time",
+                    xirc::format_server_time(base + chrono::Duration::seconds(i)),
+                ),
+        );
+    }
+    uc.roundtrip().await;
+
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(
+        &mut dc,
+        Some(&env.network),
+        "batch server-time draft/chathistory",
+    )
+    .await;
+
+    for limit in ["-1", "1001", "abc"] {
+        dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", limit));
+        let m = dc.expect("FAIL").await;
+        assert_eq!(
+            m.params,
+            [
+                "CHATHISTORY",
+                "INVALID_PARAMS",
+                "LATEST",
+                limit,
+                "Invalid limit"
+            ],
+        );
+    }
+
+    // Targets are casemapped; LATEST returns the most recent messages
+    dc.send(msg!("CHATHISTORY", "LATEST", "FOO", "*", "2"));
+    let start = dc.expect("BATCH").await;
+    assert_eq!(start.params[1], "chathistory");
+    let name = start.params[0].trim_start_matches('+').to_owned();
+    let mut texts = Vec::new();
+    loop {
+        let m = dc.read().await;
+        if m.command == "BATCH" {
+            assert_eq!(m.params[0], format!("-{name}"));
+            break;
+        }
+        assert_eq!(m.tags.get("batch"), Some(name.as_str()));
+        assert!(m.tags.contains("time"), "{m}");
+        texts.push(m.params[1].clone());
+    }
+    assert_eq!(texts, ["msg 1", "msg 2"]);
+
+    // A limit of 0 gives an empty batch
+    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "0"));
+    dc.expect("BATCH").await;
+    let end = dc.expect("BATCH").await;
+    assert!(end.params[0].starts_with('-'));
+    env.srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_marker() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream(&mut uc).await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, Some(&env.network), "draft/read-marker").await;
+
+    dc.send(msg!("MARKREAD", "#rm"));
+    let m = dc.expect("MARKREAD").await;
+    assert_eq!(m.params, vec!["#rm", "*"]);
+
+    let ts = "timestamp=2024-01-01T00:00:00.000Z";
+    dc.send(msg!("MARKREAD", "#RM", ts));
+    let m = dc.expect("MARKREAD").await;
+    assert_eq!(m.params[1], ts);
+    // Read markers only move forward, and targets are casemapped
+    dc.send(msg!(
+        "MARKREAD",
+        "#rm",
+        "timestamp=2023-01-01T00:00:00.000Z"
+    ));
+    let m = dc.expect("MARKREAD").await;
+    assert_eq!(m.params[1], ts);
+    env.srv.shutdown().await;
+}
