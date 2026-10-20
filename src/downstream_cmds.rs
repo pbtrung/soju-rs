@@ -1290,8 +1290,25 @@ fn set_message_target_metadata(
     }
 }
 
+/// History replies are refused while a client has this many messages it
+/// hasn't read yet, so that a client which stops reading can't make us queue
+/// replies without bounds.
+const MAX_QUEUED_FOR_HISTORY: usize = 10 * CHAT_HISTORY_LIMIT;
+
+fn check_queue(u: &User, i: usize, cmd: &str) -> Result<()> {
+    if u.downstreams[i].conn.queued() > MAX_QUEUED_FOR_HISTORY {
+        return Err(fail(&[
+            cmd,
+            "TEMPORARILY_UNAVAILABLE",
+            "Too many messages waiting to be sent, try again later",
+        ]));
+    }
+    Ok(())
+}
+
 fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
+    check_queue(u, i, "CHATHISTORY")?;
     let subcommand = msg.params[0].clone();
     let (target, bounds_str, limit_str): (String, [String; 2], String) = match subcommand.as_str() {
         "AFTER" | "BEFORE" | "AROUND" | "LATEST" => {
@@ -1681,6 +1698,7 @@ fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 }
 
 fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()> {
+    check_queue(u, i, "SEARCH")?;
     if !matches!(&u.msg_store, Some(s) if s.supports_search()) {
         let nick = dc!(u, i).nick.clone();
         return Err(irc_error(msg!(

@@ -4,6 +4,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -13,7 +14,7 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
@@ -415,7 +416,6 @@ async fn handle_accepted(
     let info = ConnInfo {
         remote_addr: remote_addr.clone(),
         remote_ip: remote.map(|r| r.ip().to_canonical()),
-        local_addr: String::new(),
         peer_cert,
     };
 
@@ -559,6 +559,10 @@ fn response(status: StatusCode, body: impl Into<Bytes>) -> Response<Full<Bytes>>
     r
 }
 
+/// How long a client may take to send the headers of a request, including
+/// the first one.
+const HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 async fn serve_http(
     srv: Arc<Server>,
     kind: Kind,
@@ -584,7 +588,11 @@ async fn serve_http(
             Ok::<_, Infallible>(resp)
         }
     });
+    // Without a timer, hyper doesn't enforce its header read timeout: idle
+    // connections would be kept forever
     let _ = hyper::server::conn::http1::Builder::new()
+        .timer(TokioTimer::new())
+        .header_read_timeout(HTTP_HEADER_READ_TIMEOUT)
         .serve_connection(TokioIo::new(io), service)
         .with_upgrades()
         .await;
@@ -726,7 +734,6 @@ fn handle_websocket(
     let info = ConnInfo {
         remote_addr: remote_addr.clone(),
         remote_ip: None,
-        local_addr: String::new(),
         peer_cert: cert,
     };
     tokio::spawn(async move {
@@ -767,7 +774,7 @@ fn handle_websocket(
 
 /// Upstream's WebSocket library limits messages to 32 KiB by default:
 /// bigger ones close the connection.
-const WEBSOCKET_READ_LIMIT: usize = 32768;
+const WEBSOCKET_READ_LIMIT: usize = crate::conn::MAX_LINE_LENGTH;
 
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()

@@ -3,13 +3,14 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{
-    AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+    AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadHalf,
+    WriteHalf,
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
@@ -24,8 +25,10 @@ use crate::{debugf, logf};
 
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Maximum length of an incoming line on stream connections.
-const MAX_LINE_LENGTH: usize = 1 << 20;
+/// Maximum length of an incoming line or WebSocket message. IRCv3 lines are
+/// at most 8191 bytes of tags plus 512 bytes: leave room for servers with a
+/// larger LINELEN.
+pub const MAX_LINE_LENGTH: usize = 32768;
 
 pub trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
@@ -40,7 +43,6 @@ pub struct ConnInfo {
     pub remote_addr: String,
     /// Remote IP for TCP connections (possibly from a trusted proxy)
     pub remote_ip: Option<IpAddr>,
-    pub local_addr: String,
     /// DER-encoded TLS client certificate
     pub peer_cert: Option<Vec<u8>>,
 }
@@ -51,12 +53,15 @@ pub enum Reader {
 }
 
 enum Writer {
-    Stream(WriteHalf<BoxIo>),
+    /// Buffered: lines are flushed once no more are queued
+    Stream(BufWriter<WriteHalf<BoxIo>>),
     Ws(futures_util::stream::SplitSink<WebSocketStream<BoxIo>, WsMessage>),
 }
 
 impl Writer {
-    async fn write(&mut self, msg: &Message) -> Result<()> {
+    /// Writes a message. With flush unset, it may stay buffered until the
+    /// next flushed write.
+    async fn write(&mut self, msg: &Message, flush: bool) -> Result<()> {
         let mut line = msg.to_string();
         if line.contains(['\r', '\n']) {
             // Multiline messages must be split before being sent: never let
@@ -67,10 +72,15 @@ impl Writer {
             Writer::Stream(w) => {
                 line.push_str("\r\n");
                 w.write_all(line.as_bytes()).await?;
-                w.flush().await?;
+                if flush {
+                    w.flush().await?;
+                }
             }
             Writer::Ws(w) => {
-                w.send(WsMessage::text(line)).await?;
+                w.feed(WsMessage::text(line)).await?;
+                if flush {
+                    w.flush().await?;
+                }
             }
         }
         Ok(())
@@ -162,13 +172,13 @@ async fn read_line_limited(r: &mut BufReader<ReadHalf<BoxIo>>, buf: &mut Vec<u8>
             Some(i) => (true, i + 1),
             None => (false, available.len()),
         };
+        if buf.len() + used > MAX_LINE_LENGTH {
+            return Err(anyhow!("line too long"));
+        }
         buf.extend_from_slice(&available[..used]);
         r.consume(used);
         if done {
             return Ok(buf.len());
-        }
-        if buf.len() > MAX_LINE_LENGTH {
-            return Err(anyhow!("line too long"));
         }
     }
 }
@@ -180,6 +190,8 @@ enum Outgoing {
 
 struct Shared {
     tx: mpsc::UnboundedSender<Outgoing>,
+    /// The number of messages queued and not written yet
+    queued: AtomicUsize,
     closed: AtomicBool,
     cancel: CancellationToken,
     logger: Logger,
@@ -214,7 +226,7 @@ impl Conn {
         let (r, w) = tokio::io::split(io);
         Self::spawn(
             Reader::Lines(BufReader::with_capacity(8192, r)),
-            Writer::Stream(w),
+            Writer::Stream(BufWriter::new(w)),
             logger,
             rate,
         )
@@ -234,6 +246,7 @@ impl Conn {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             tx,
+            queued: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             logger: logger.clone(),
@@ -255,8 +268,12 @@ impl Conn {
                     Some(Outgoing::Msg(m)) => m,
                     Some(Outgoing::Shutdown) | None => break,
                 };
-                if let (Some(l), Some((_, flag))) = (limiter.as_mut(), rate.as_ref())
-                    && flag.load(Ordering::Relaxed)
+                c.shared.queued.fetch_sub(1, Ordering::Relaxed);
+                let limited = rate
+                    .as_ref()
+                    .is_some_and(|(_, f)| f.load(Ordering::Relaxed));
+                if let Some(l) = limiter.as_mut()
+                    && limited
                 {
                     tokio::select! {
                         _ = l.wait() => {}
@@ -264,7 +281,10 @@ impl Conn {
                     }
                 }
                 debugf!(c.shared.logger, "sent: {msg}");
-                match tokio::time::timeout(WRITE_TIMEOUT, writer.write(&msg)).await {
+                // Batch lines in a write when more are ready, e.g. backlog.
+                // Rate limited lines are sent as soon as allowed.
+                let flush = limited || rx.is_empty();
+                match tokio::time::timeout(WRITE_TIMEOUT, writer.write(&msg, flush)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
                         logf!(c.shared.logger, "failed to write message: {e}");
@@ -307,7 +327,14 @@ impl Conn {
         if self.is_closed() {
             return;
         }
+        self.shared.queued.fetch_add(1, Ordering::Relaxed);
         let _ = self.shared.tx.send(Outgoing::Msg(msg));
+    }
+
+    /// The number of messages queued and not written yet, e.g. because the
+    /// peer doesn't read fast enough.
+    pub fn queued(&self) -> usize {
+        self.shared.queued.load(Ordering::Relaxed)
     }
 
     /// Gracefully closes the connection, flushing pending messages first.

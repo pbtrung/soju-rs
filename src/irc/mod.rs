@@ -5,17 +5,18 @@ pub mod numerics;
 use std::fmt;
 
 /// Characters which are escaped in tag values.
-fn escape_tag_value(v: &str, out: &mut String) {
+fn escape_tag_value(v: &str, out: &mut impl fmt::Write) -> fmt::Result {
     for c in v.chars() {
         match c {
-            ';' => out.push_str("\\:"),
-            ' ' => out.push_str("\\s"),
-            '\\' => out.push_str("\\\\"),
-            '\r' => out.push_str("\\r"),
-            '\n' => out.push_str("\\n"),
-            c => out.push(c),
+            ';' => out.write_str("\\:")?,
+            ' ' => out.write_str("\\s")?,
+            '\\' => out.write_str("\\\\")?,
+            '\r' => out.write_str("\\r")?,
+            '\n' => out.write_str("\\n")?,
+            c => out.write_char(c)?,
         }
     }
+    Ok(())
 }
 
 /// Parses an encoded tag value.
@@ -116,18 +117,17 @@ impl Tags {
 
 impl fmt::Display for Tags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = String::new();
         for (i, (k, v)) in self.0.iter().enumerate() {
             if i > 0 {
-                s.push(';');
+                f.write_str(";")?;
             }
-            s.push_str(k);
+            f.write_str(k)?;
             if !v.is_empty() {
-                s.push('=');
-                escape_tag_value(v, &mut s);
+                f.write_str("=")?;
+                escape_tag_value(v, f)?;
             }
         }
-        f.write_str(&s)
+        Ok(())
     }
 }
 
@@ -319,33 +319,28 @@ impl Message {
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = String::with_capacity(64);
         if !self.tags.is_empty() {
-            s.push('@');
-            s.push_str(&self.tags.to_string());
-            s.push(' ');
+            write!(f, "@{} ", self.tags)?;
         }
         if let Some(prefix) = &self.prefix
             && !prefix.name.is_empty()
         {
-            s.push(':');
-            s.push_str(&prefix.to_string());
-            s.push(' ');
+            write!(f, ":{prefix} ")?;
         }
-        s.push_str(&self.command);
+        f.write_str(&self.command)?;
         if let Some((trailing, args)) = self.params.split_last() {
             for arg in args {
-                s.push(' ');
-                s.push_str(arg);
+                f.write_str(" ")?;
+                f.write_str(arg)?;
             }
             if trailing.is_empty() || trailing.contains(' ') || trailing.starts_with(':') {
-                s.push_str(" :");
+                f.write_str(" :")?;
             } else {
-                s.push(' ');
+                f.write_str(" ")?;
             }
-            s.push_str(trailing);
+            f.write_str(trailing)?;
         }
-        f.write_str(&s)
+        Ok(())
     }
 }
 
