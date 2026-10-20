@@ -18,12 +18,26 @@ const USAGE: &str = "Usage of soju:
     \tenable debug logging
   -listen value
     \tlistening address
+  -version
+    \tprint the version and exit
 ";
 
 struct Args {
     config_path: String,
     debug: bool,
     listen: Vec<String>,
+    version: bool,
+}
+
+/// Parses the optional value of a boolean flag like Go's flag package.
+fn bool_flag(name: &str, value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None | Some("1" | "t" | "T" | "TRUE" | "true" | "True") => Ok(true),
+        Some("0" | "f" | "F" | "FALSE" | "false" | "False") => Ok(false),
+        Some(v) => Err(format!(
+            "invalid boolean value {v:?} for -{name}: parse error"
+        )),
+    }
 }
 
 /// Parses flags like Go's flag package: -flag value, -flag=value and
@@ -33,6 +47,7 @@ fn parse_args() -> Result<Args, String> {
         config_path: config::DEFAULT_PATH.to_owned(),
         debug: false,
         listen: Vec::new(),
+        version: false,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
@@ -58,17 +73,8 @@ fn parse_args() -> Result<Args, String> {
         match name.as_str() {
             "config" => args.config_path = take_value()?,
             "listen" => args.listen.push(take_value()?),
-            "debug" => {
-                args.debug = match value.as_deref() {
-                    None | Some("1" | "t" | "T" | "TRUE" | "true" | "True") => true,
-                    Some("0" | "f" | "F" | "FALSE" | "false" | "False") => false,
-                    Some(v) => {
-                        return Err(format!(
-                            "invalid boolean value {v:?} for -debug: parse error"
-                        ));
-                    }
-                };
-            }
+            "debug" => args.debug = bool_flag(&name, value.as_deref())?,
+            "version" => args.version = bool_flag(&name, value.as_deref())?,
             "h" | "help" => return Err(String::new()),
             _ => return Err(format!("flag provided but not defined: -{name}")),
         }
@@ -99,6 +105,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.version {
+        println!("soju-rs v{}", soju::VERSION);
+        return ExitCode::SUCCESS;
+    }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

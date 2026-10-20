@@ -73,6 +73,7 @@ Behaviour changes:
   the unmerged upstream PR #430): CHATHISTORY LATEST/AFTER/AROUND aren't
   bounded by the bouncer's clock, and MARKREAD may set a read marker up to
   the latest message even when it's in the future
+- `soju -version` prints the version, which is also logged on startup
 - With `message-expiry` and the `db` message store, the SQLite database is
   vacuumed after expired messages are deleted (upstream leaves it to the
   admin)

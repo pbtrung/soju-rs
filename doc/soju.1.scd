@@ -66,6 +66,9 @@ message from the special _BouncerServ_ service.
 *-listen* <uri>
 	Listening URI (default: ":6697"). Can be specified multiple times.
 
+*-version*
+	Print the version and quit.
+
 # CONFIG FILE
 
 The config file has one directive per line.
