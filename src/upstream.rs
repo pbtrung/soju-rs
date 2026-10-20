@@ -490,11 +490,15 @@ impl UpstreamConn {
     /// Starts an auto-detach timer for a channel.
     pub fn start_detach_timer(&self, name: &str, dur: Duration) -> AbortHandle {
         let tx = self.events.clone();
-        let net_id = self.net_id;
+        let (net_id, conn_id) = (self.net_id, self.id);
         let name = name.to_owned();
         tokio::spawn(async move {
             tokio::time::sleep(dur).await;
-            let _ = tx.send(Event::ChannelDetach { net_id, name });
+            let _ = tx.send(Event::ChannelDetach {
+                net_id,
+                conn_id,
+                name,
+            });
         })
         .abort_handle()
     }
@@ -1066,11 +1070,17 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     // Some channels require the user to be logged in to be joined, which may
     // need to happen asynchronously either via connect commands or CertFP
     // without SASL EXTERNAL on networks that don't support this. Work
-    // around these old networks by leaving 3 seconds for the authentication
-    // to be processed.
+    // around these old networks by sending connect commands
+    // CONNECT_COMMAND_DELAY apart, then leaving 3 more seconds for the
+    // authentication to be processed. Meanwhile, server messages are
+    // buffered (PINGs are answered).
     let mut delay = false;
     if !commands.is_empty() {
-        debugf!(uc.logger, "sent {} connect command(s)", commands.len());
+        debugf!(
+            uc.logger,
+            "sending {} connect command(s)",
+            connect_msgs.len()
+        );
         // Connect commands usually send a message to NickServ or similar,
         // which asynchronously informs the IRC server that the user is
         // logged in.
@@ -1160,9 +1170,15 @@ enum Multiline {
     Complete(Message),
 }
 
+/// The maximum number of batches a server may have open at once.
+const MAX_OPEN_BATCHES: usize = 64;
+
 fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline> {
     if msg.command == "BATCH" {
         let tag = msg.param(0);
+        if tag.starts_with('+') && uc.batches.len() >= MAX_OPEN_BATCHES {
+            bail!("too many open batches");
+        }
         if let Some(r) = tag.strip_prefix('+')
             && msg.param(1) == xirc::MULTILINE_BATCH_TYPE
         {
@@ -1488,7 +1504,7 @@ fn handle_message_inner(
                     }
                     let uc = uc!(u, ni);
                     for c in sub_params[0].split_whitespace() {
-                        uc.caps.del(c);
+                        uc.caps.del(&c.to_lowercase());
                     }
                     if uc.registered {
                         for id in dc_ids_for(&u.downstreams, net_id) {
@@ -1564,7 +1580,8 @@ fn handle_message_inner(
                 downstream::update_host(u, id);
             }
         }
-        ERR_NICKLOCKED | RPL_SASLSUCCESS | ERR_SASLFAIL | ERR_SASLTOOLONG | ERR_SASLABORTED => {
+        ERR_NICKLOCKED | RPL_SASLSUCCESS | ERR_SASLFAIL | ERR_SASLTOOLONG | ERR_SASLABORTED
+        | ERR_SASLALREADY => {
             need_params(msg, 2)?;
             let info = &msg.params[1];
             let uc = uc!(u, ni);
@@ -1866,13 +1883,23 @@ fn handle_message_inner(
         "CHGHOST" => {
             need_params(msg, 2)?;
             let uc = uc!(u, ni);
+            // The server sends CHGHOST instead of QUIT/JOIN: keep cached WHO
+            // replies up to date
+            uc.cache_user_info(
+                &prefix_name,
+                UpstreamUser {
+                    username: msg.params[0].clone(),
+                    hostname: msg.params[1].clone(),
+                    ..Default::default()
+                },
+            );
             if is_our_nick(cm, uc, &prefix_name) {
                 logf!(
                     uc.logger,
                     "changed prefix from {:?} to {:?}",
                     msg.prefix
                         .as_ref()
-                        .map(|p| p.host.clone())
+                        .map(|p| p.to_string())
                         .unwrap_or_default(),
                     Prefix::full(
                         uc.nick.clone(),
@@ -2066,7 +2093,12 @@ fn handle_message_inner(
             if msg.params.len() > 1 {
                 ch.topic = msg.params[1].clone();
                 ch.topic_who = msg.prefix.clone();
-                ch.topic_time = Some(Utc::now()); // TODO use the message time tag
+                ch.topic_time = Some(
+                    msg.tags
+                        .get("time")
+                        .and_then(xirc::parse_server_time)
+                        .unwrap_or_else(Utc::now),
+                );
             } else {
                 ch.topic.clear();
             }
@@ -2578,15 +2610,24 @@ fn handle_message_inner(
                     uc.send_message(msg!("NICK", nick));
                     return Ok(());
                 }
-                need_params(msg, 2)?;
-                let failed_nick = &msg.params[1];
-                if cm(&uc.pending_regain_nick) == cm(failed_nick) {
-                    // This message comes from our own logic to try to regain
-                    // our desired nick, don't relay to downstream
-                    // connections
-                    uc.pending_regain_nick.clear();
-                    return Ok(());
-                }
+            }
+            // Servers refuse a nick with any of these, e.g. 437 for a nick
+            // held by services
+            let nick_error = matches!(
+                msg.command.as_str(),
+                ERR_NICKNAMEINUSE | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION | ERR_UNAVAILRESOURCE
+            );
+            let uc = uc!(u, ni);
+            if nick_error
+                && uc.registered
+                && msg.params.len() >= 2
+                && !uc.pending_regain_nick.is_empty()
+                && cm(&uc.pending_regain_nick) == cm(&msg.params[1])
+            {
+                // This message comes from our own logic to try to regain our
+                // desired nick, don't relay to downstream connections
+                uc.pending_regain_nick.clear();
+                return Ok(());
             }
             if !uc!(u, ni).registered {
                 return Err(RegistrationError(msg.clone()).into());
@@ -2711,7 +2752,7 @@ fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
                     logf!(uc.logger, "starting SASL EXTERNAL authentication");
                     uc.sasl_client = Some(SaslClient::External);
                 }
-                _ => bail!("unsupported SASL mechanism {name:?}"),
+                mech => bail!("unsupported SASL mechanism {mech:?}"),
             }
             uc.send_message(msg!("AUTHENTICATE", auth.mechanism));
         }
@@ -2894,14 +2935,14 @@ pub fn update_monitor(u: &mut User, ni: usize) {
         }
     }
 
+    // Monitor our desired nick, to regain it once it's available
     let want_nick_cm = cm(&want_nick);
-    if !add.contains(&want_nick_cm)
-        && !uc.monitored.has(&want_nick)
-        && !is_our_nick(cm, uc, &want_nick)
-        && !uc.has_desired_nick
-    {
-        add.insert(want_nick_cm.clone());
-        add_list.push(want_nick_cm);
+    if !is_our_nick(cm, uc, &want_nick) && !uc.has_desired_nick {
+        if uc.monitored.has(&want_nick) {
+            seen.insert(want_nick_cm);
+        } else if add.insert(want_nick_cm.clone()) {
+            add_list.push(want_nick_cm);
+        }
     }
 
     let mut remove_all = true;

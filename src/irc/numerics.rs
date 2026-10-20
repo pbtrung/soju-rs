@@ -17,6 +17,7 @@ pub const ERR_NOSUCHNICK: &str = "401";
 pub const ERR_NOSUCHSERVER: &str = "402";
 pub const ERR_PASSWDMISMATCH: &str = "464";
 pub const ERR_SASLABORTED: &str = "906";
+pub const ERR_SASLALREADY: &str = "907";
 pub const ERR_SASLFAIL: &str = "904";
 pub const ERR_SASLTOOLONG: &str = "905";
 pub const ERR_UNAVAILRESOURCE: &str = "437";

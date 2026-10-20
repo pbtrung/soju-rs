@@ -104,7 +104,7 @@ pub fn generate_monitor(subcmd: &str, targets: &[String]) -> Vec<Message> {
     let mut buf: Vec<&str> = Vec::new();
     let mut n = 0;
     for target in targets {
-        if n + target.len() + 1 > max_length {
+        if !buf.is_empty() && n + target.len() + 1 > max_length {
             msgs.push(msg!("MONITOR", subcmd, buf.join(",")));
             buf.clear();
             n = 0;

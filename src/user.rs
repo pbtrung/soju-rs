@@ -69,6 +69,7 @@ pub enum Event {
     },
     ChannelDetach {
         net_id: i64,
+        conn_id: u64,
         name: String,
     },
     TryRegainNick {
@@ -600,10 +601,18 @@ impl User {
                 }
                 self.attach_upstream(ni);
             }
-            Event::ChannelDetach { net_id, name } => {
+            Event::ChannelDetach {
+                net_id,
+                conn_id,
+                name,
+            } => {
                 let Some(ni) = self.net_index(net_id) else {
                     return;
                 };
+                // The timer belongs to a previous connection
+                if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
+                    return;
+                }
                 let Some(c) = self.networks[ni].channels.get(&name) else {
                     return;
                 };
@@ -1518,6 +1527,11 @@ impl User {
             return;
         }
         if let Some(buf) = &mut uc.delayed_messages {
+            // Keep the connection alive while connect commands are sent
+            if msg.command == "PING" {
+                uc.send_message(Message::new("PONG", msg.params));
+                return;
+            }
             buf.push(msg);
             return;
         }
