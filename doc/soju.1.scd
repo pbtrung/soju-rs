@@ -197,6 +197,9 @@ The following directives are supported:
 
 	By default, proxy headers received over Unix domain sockets are untrusted.
 
+	This currently only applies to _unix://_ listeners: _ws+unix://_ and
+	_http+unix://_ listeners ignore proxy headers.
+
 *max-user-networks* <limit>
 	Maximum number of enabled networks per user. By default, there is no limit.
 

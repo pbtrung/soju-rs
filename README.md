@@ -47,13 +47,21 @@ Behaviour changes:
   credentials with empty ones; only `SET PASSWORD` is saved
 - `METADATA <target> SET <key> <invalid value>` leaves the stored value alone
   (upstream resets it while replying with an error)
-- TLS listeners negotiate the `irc` ALPN protocol (upstream advertises it but
-  drops it from the per-client configuration)
+- TLS listeners negotiate the `irc` ALPN protocol (`http/1.1` for HTTPS),
+  where upstream advertises it but drops it from the per-client
+  configuration. Clients offering ALPN protocols but none of these are
+  rejected during the TLS handshake
 - `certfp generate -bits` accepts RSA key sizes of 2048, 3072 (the default),
   4096 and 8192
 - Upstream TLS error messages come from rustls rather than Go's crypto/tls
-- Lines received from a WebSocket frame only use the text up to the first
-  CR or LF; lines with invalid UTF-8 are decoded lossily
+- Received lines only use the text up to the first CR or LF, including CRs
+  in the middle of a TCP line and text after a line break in a WebSocket
+  frame; lines with invalid UTF-8 are decoded lossily
+- Text read back from a database or message logs written by upstream (which
+  doesn't validate UTF-8) is decoded lossily
+- Server times (e.g. CHATHISTORY bounds) may have any number of fractional
+  second digits; upstream requires exactly three
+- HTTP listeners only speak HTTP/1.1 (no HTTP/2)
 - With `message-expiry` and the `db` message store, the SQLite database is
   vacuumed after expired messages are deleted (upstream leaves it to the
   admin)
