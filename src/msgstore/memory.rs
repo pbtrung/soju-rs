@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use anyhow::{Result, bail};
 
@@ -17,57 +17,53 @@ pub(super) fn parse_memory_msg_id(s: &str) -> Result<u64> {
     bare::Reader(&body).uint().map_err(body_err)
 }
 
+/// The latest messages of a target, up to a capacity. Messages are numbered
+/// with increasing sequence numbers, starting at 1. Storage grows with the
+/// number of messages, rather than being allocated upfront.
 struct RingBuffer {
-    buf: Vec<Option<Message>>,
+    buf: VecDeque<Message>,
+    cap: usize,
+    /// The sequence number of the next message
     cur: u64,
 }
 
 impl RingBuffer {
     fn new(capacity: usize) -> RingBuffer {
         RingBuffer {
-            buf: vec![None; capacity],
+            buf: VecDeque::new(),
+            cap: capacity,
             cur: 1,
         }
     }
 
-    fn cap(&self) -> u64 {
-        self.buf.len() as u64
-    }
-
     fn append(&mut self, msg: Message) -> u64 {
+        if self.buf.len() == self.cap {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(msg);
         let seq = self.cur;
-        let i = (seq % self.cap()) as usize;
-        self.buf[i] = Some(msg);
         self.cur += 1;
         seq
     }
 
+    /// The sequence number of the last message, 0 if there is none.
+    fn last_seq(&self) -> u64 {
+        self.cur - 1
+    }
+
+    /// Loads up to limit of the latest messages after the message with the
+    /// sequence number seq (excluded).
     fn load_latest_seq(&self, seq: u64, limit: usize) -> Result<Vec<Message>> {
-        if seq > self.cur {
+        if seq >= self.cur {
             bail!(
-                "loading messages from sequence number ({seq}) greater than current ({})",
-                self.cur
+                "loading messages from sequence number ({seq}) greater than the last ({})",
+                self.last_seq()
             );
-        } else if seq == self.cur {
-            return Ok(Vec::new());
         }
-
-        // The query excludes the message with the sequence number seq
-        let mut diff = self.cur - seq - 1;
-        if diff > self.cap() {
-            // We dropped diff - cap entries
-            diff = self.cap();
-        }
-        if diff as usize > limit {
-            diff = limit as u64;
-        }
-
-        Ok((0..diff)
-            .filter_map(|i| {
-                let j = ((self.cur - diff + i) % self.cap()) as usize;
-                self.buf[j].clone()
-            })
-            .collect())
+        let n = ((self.cur - seq - 1) as usize)
+            .min(self.buf.len())
+            .min(limit);
+        Ok(self.buf.range(self.buf.len() - n..).cloned().collect())
     }
 }
 
@@ -88,10 +84,12 @@ impl MemoryStore {
     }
 
     pub(super) fn last_msg_id(&self, network: &Network, entity: &str) -> String {
+        // The ID of the last message: messages loaded after it are the ones
+        // appended since
         let seq = self
             .buffers
             .get(&(network.id, entity.to_owned()))
-            .map(|rb| rb.cur)
+            .map(|rb| rb.last_seq())
             .unwrap_or(0);
         format_memory_msg_id(network.id, entity, seq)
     }
@@ -160,6 +158,11 @@ mod tests {
         );
         let id = s.last_msg_id(&net, "#a");
         assert!(s.load_latest_id(&id, &opts).unwrap().is_empty());
+        // Messages appended after taking the last ID are loaded
+        s.append(&net, "#a", &msg!("PRIVMSG", "#a", "10"));
+        let l = s.load_latest_id(&id, &opts).unwrap();
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].params[1], "10");
 
         let mut rb = RingBuffer::new(4);
         for i in 0..10 {
