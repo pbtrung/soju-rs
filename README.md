@@ -54,6 +54,9 @@ Behaviour changes:
 - Upstream TLS error messages come from rustls rather than Go's crypto/tls
 - Lines received from a WebSocket frame only use the text up to the first
   CR or LF; lines with invalid UTF-8 are decoded lossily
+- With `message-expiry` and the `db` message store, the SQLite database is
+  vacuumed after expired messages are deleted (upstream leaves it to the
+  admin)
 
 ## Testing
 

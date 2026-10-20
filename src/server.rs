@@ -156,6 +156,8 @@ impl Server {
             }
         });
 
+        // The first tick completes immediately: expired messages are deleted
+        // on startup, then daily
         let srv = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(24 * 3600));

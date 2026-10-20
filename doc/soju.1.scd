@@ -227,11 +227,12 @@ The following directives are supported:
 
 	The duration is a positive decimal number followed by the unit "d"
 	(days). For instance, "30d" deletes messages with timestamps older than
-	30 days. Messages are deleted once per day.
+	30 days. Messages are deleted on startup, then once per day.
 
-	Note: When using _db sqlite_ and _message-store db_, SQLite does not
-	automatically reclaim disk space after deletion. Run _VACUUM_ manually
-	to reclaim space.
+	When using _db sqlite_ and _message-store db_, the database is
+	vacuumed after messages are deleted to reclaim disk space. This
+	rewrites the database file and blocks other database access while it
+	runs.
 
 	By default, messages are kept indefinitely.
 

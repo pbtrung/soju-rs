@@ -1153,11 +1153,23 @@ impl Database {
         Ok(l)
     }
 
+    /// Deletes messages older than before, then reclaims the freed space with
+    /// VACUUM if any were deleted.
     pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<()> {
-        self.conn().execute(
+        let conn = self.conn();
+        let n = conn.execute(
             "DELETE FROM Message WHERE time < ?",
             [xirc::format_server_time(before)],
         )?;
+        if n > 0 {
+            // VACUUM goes through the WAL, which keeps its size on disk
+            // until truncated by a checkpoint
+            conn.execute_batch(
+                "INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');
+                VACUUM;",
+            )?;
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        }
         Ok(())
     }
 }
@@ -1363,6 +1375,37 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(db.list_messages(n.id, "#a", &opts).unwrap(), vec![m3]);
+    }
+
+    #[test]
+    fn delete_messages_vacuum() {
+        let dir = std::env::temp_dir().join(format!("soju-rs-vacuum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.db");
+        let db = Database::open(path.to_str().unwrap()).unwrap();
+        let mut u = User::new("alice");
+        db.store_user(&mut u).unwrap();
+        let mut n = Network::new("irc.example.org");
+        db.store_network(u.id, &mut n).unwrap();
+        let text = "x".repeat(1000);
+        let msgs: Vec<Message> = (0..2000)
+            .map(|_| {
+                msg!("PRIVMSG", "#a", text.as_str()).with_tag("time", "2024-01-01T00:00:00.000Z")
+            })
+            .collect();
+        db.store_messages(n.id, "#a", &msgs).unwrap();
+        let size = || std::fs::metadata(&path).unwrap().len();
+        db.conn()
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+        let before = size();
+
+        db.delete_messages_before(Utc::now()).unwrap();
+        assert!(size() < before / 2, "{} >= {before} / 2", size());
+        let wal = std::fs::metadata(dir.join("main.db-wal")).map_or(0, |m| m.len());
+        assert_eq!(wal, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
