@@ -649,3 +649,61 @@ async fn read_marker() {
     assert_eq!(m.params[1], ts);
     env.srv.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upstream_clock_skew() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    let nick = register_upstream_with(&mut uc, &[]).await;
+
+    // The upstream server's clock is an hour ahead of ours
+    let ahead = Utc::now() + chrono::Duration::hours(1);
+    let ahead_str = xirc::format_server_time(ahead);
+    uc.send(
+        msg!("PRIVMSG", nick, "from the future")
+            .with_prefix(Prefix::new("foo"))
+            .with_tag("time", ahead_str.clone()),
+    );
+    uc.roundtrip().await;
+
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, Some(&env.network), "draft/read-marker").await;
+
+    // CHATHISTORY isn't bounded by our clock
+    for params in [
+        vec!["LATEST", "foo", "*", "10"],
+        vec!["AFTER", "foo", "timestamp=2020-01-01T00:00:00.000Z", "10"],
+    ] {
+        dc.send(Message::new(
+            "CHATHISTORY",
+            params.iter().map(|s| s.to_string()).collect(),
+        ));
+        let got: Vec<String> = dc
+            .roundtrip()
+            .await
+            .into_iter()
+            .map(|m| m.params[1].clone())
+            .collect();
+        assert_eq!(got, ["from the future"], "{params:?}");
+    }
+
+    // Read markers can reach the latest message, but not beyond it
+    dc.send(msg!("MARKREAD", "foo", format!("timestamp={ahead_str}")));
+    let m = dc.expect("MARKREAD").await;
+    assert_eq!(m.params[1], format!("timestamp={ahead_str}"));
+    let later = xirc::format_server_time(ahead + chrono::Duration::hours(1));
+    dc.send(msg!("MARKREAD", "foo", format!("timestamp={later}")));
+    let m = dc.expect("MARKREAD").await;
+    assert_eq!(m.params[1], format!("timestamp={ahead_str}"));
+
+    // Without messages in the future, markers stop at our clock
+    let before = Utc::now();
+    let far = xirc::format_server_time(before + chrono::Duration::days(1));
+    dc.send(msg!("MARKREAD", "#empty", format!("timestamp={far}")));
+    let m = dc.expect("MARKREAD").await;
+    let t = xirc::parse_server_time(m.params[1].strip_prefix("timestamp=").unwrap()).unwrap();
+    // Server times have millisecond precision
+    let before = before - chrono::Duration::milliseconds(1);
+    assert!(t >= before && t <= Utc::now(), "{m}");
+    env.srv.shutdown().await;
+}

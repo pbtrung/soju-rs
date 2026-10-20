@@ -67,6 +67,10 @@ Behaviour changes:
   Upstream uses the whole header, so a `client, proxy` list put spaces into
   IRC prefixes and broke clients. Forwarded addresses with whitespace are
   ignored
+- Upstream servers whose clock is ahead of the bouncer's are handled (from
+  the unmerged upstream PR #430): CHATHISTORY LATEST/AFTER/AROUND aren't
+  bounded by the bouncer's clock, and MARKREAD may set a read marker up to
+  the latest message even when it's in the future
 - With `message-expiry` and the `db` message store, the SQLite database is
   vacuumed after expired messages are deleted (upstream leaves it to the
   admin)

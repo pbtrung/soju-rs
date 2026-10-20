@@ -1404,12 +1404,13 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         events: event_playback,
     };
     let store = u.msg_store.as_mut().unwrap();
-    let now = Utc::now();
 
+    // No upper bound rather than now: if the upstream server's clock is
+    // ahead of ours, its latest messages are in our future
     let history = match subcommand.as_str() {
         "BEFORE" => store.load_before_time(bounds[0], None, &options),
-        "LATEST" => store.load_before_time(Some(now), bounds[0], &options),
-        "AFTER" => store.load_after_time(bounds[0], Some(now), &options),
+        "LATEST" => store.load_before_time(None, bounds[0], &options),
+        "AFTER" => store.load_after_time(bounds[0], None, &options),
         "AROUND" => (|| {
             let after_limit = limit / 2;
             let before_limit = limit - after_limit;
@@ -1436,7 +1437,7 @@ fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             };
             let after = store.load_after_time(
                 Some(after_bound),
-                Some(now),
+                None,
                 &LoadMessageOptions {
                     limit: after_limit,
                     ..options
@@ -1578,8 +1579,47 @@ fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             ]));
         };
         let now = Utc::now();
-        if timestamp > now {
-            timestamp = now;
+        if r.timestamp.is_none_or(|t| t < timestamp) && timestamp > now {
+            // Only allow read markers after now if the upstream server's
+            // clock is ahead of ours, i.e. if we have a message more recent
+            // than now in history
+            let mut limit = now;
+            if let Some(store) = u.msg_store.as_mut()
+                && store.supports_chathistory()
+            {
+                let options = LoadMessageOptions {
+                    network: &u.networks[ni].record,
+                    entity: &target_cm,
+                    limit: 1,
+                    events: true,
+                };
+                let latest = store.load_before_time(None, None, &options).and_then(|h| {
+                    h.first()
+                        .map(|m| {
+                            let t = m.tags.get_or_empty("time");
+                            xirc::parse_server_time(t)
+                                .ok_or_else(|| anyhow!("parsing time {t:?}: cannot parse"))
+                        })
+                        .transpose()
+                });
+                match latest {
+                    Ok(Some(latest)) if latest > limit => limit = latest,
+                    Ok(_) => {}
+                    Err(e) => {
+                        logf!(
+                            dc!(u, i).logger,
+                            "failed to get the latest message time for {target:?}: {e}"
+                        );
+                        return Err(fail(&[
+                            &msg.command,
+                            "INTERNAL_ERROR",
+                            &target,
+                            "Internal error",
+                        ]));
+                    }
+                }
+            }
+            timestamp = timestamp.min(limit);
         }
         if r.timestamp.is_none_or(|t| t < timestamp) {
             r.timestamp = Some(timestamp);
