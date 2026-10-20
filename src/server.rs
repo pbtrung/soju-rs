@@ -166,8 +166,13 @@ impl Server {
                     _ = ticker.tick() => {}
                     _ = srv.stop.cancelled() => return,
                 }
-                if let Err(e) = srv.delete_expired_messages() {
-                    logf!(srv.logger, "failed to delete expired messages: {e}");
+                // Deleting and vacuuming can take a while: keep it off the
+                // async runtime's workers
+                let s = srv.clone();
+                match tokio::task::spawn_blocking(move || s.delete_expired_messages()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => logf!(srv.logger, "failed to delete expired messages: {e}"),
+                    Err(e) => logf!(srv.logger, "failed to delete expired messages: {e}"),
                 }
             }
         });

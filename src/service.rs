@@ -33,6 +33,8 @@ pub struct ServiceContext {
     pub peer_cert: Option<Vec<u8>>,
     pub remote_ip: Option<IpAddr>,
     pub admin: bool,
+    /// When waiting on other users gives up, if ever
+    deadline: Option<tokio::time::Instant>,
     prints: Vec<String>,
 }
 
@@ -45,6 +47,7 @@ impl ServiceContext {
             peer_cert: dc.info.peer_cert.clone(),
             remote_ip: dc.info.remote_ip,
             admin,
+            deadline: Some(tokio::time::Instant::now() + HANDLE_DOWNSTREAM_MESSAGE_TIMEOUT),
             prints: Vec::new(),
         }
     }
@@ -57,6 +60,7 @@ impl ServiceContext {
             peer_cert: None,
             remote_ip: None,
             admin,
+            deadline: None,
             prints: Vec::new(),
         }
     }
@@ -68,7 +72,21 @@ impl ServiceContext {
     pub fn take_prints(&mut self) -> Vec<String> {
         std::mem::take(&mut self.prints)
     }
+
+    /// Blocks on a future, e.g. a reply from another user's event loop.
+    /// Returns None if the deadline is reached first: two users waiting on
+    /// each other would otherwise deadlock.
+    fn wait<F: std::future::Future>(&self, fut: F) -> Option<F::Output> {
+        match self.deadline {
+            Some(d) => block_on(tokio::time::timeout_at(d, fut)).ok(),
+            None => Some(block_on(fut)),
+        }
+    }
 }
+
+/// How long a downstream's command may wait on other users, like upstream's
+/// handleDownstreamMessageTimeout.
+const HANDLE_DOWNSTREAM_MESSAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 type Handler = fn(Option<&mut User>, &mut ServiceContext, &[String]) -> Result<()>;
 
@@ -988,7 +1006,8 @@ fn handle_user_update(
             bail!("unknown username {username:?}");
         }
         // TODO: send context to the other side
-        block_on(rx)
+        ctx.wait(rx)
+            .ok_or_else(|| anyhow!("context deadline exceeded"))?
             .map_err(|_| anyhow!("timeout executing command"))?
             .map_err(|e| anyhow!(e))?;
         ctx.print(format!("updated user {username:?}"));
@@ -1070,7 +1089,9 @@ fn handle_user_delete(
         return Ok(());
     }
 
-    block_on(handle.stop());
+    if ctx.wait(handle.stop()).is_none() {
+        bail!("failed to stop user: context deadline exceeded");
+    }
     ctx.srv
         .db
         .delete_user(user_id)
@@ -1105,7 +1126,7 @@ fn handle_user_run(
         bail!("unknown username {username:?}");
     }
     loop {
-        match block_on(rx.recv()) {
+        match ctx.wait(rx.recv()).flatten() {
             Some(UserRunMsg::Message(m)) => ctx.print(m),
             Some(UserRunMsg::Done(res)) => return res.map_err(|e| anyhow!(e)),
             None => bail!("timeout executing command"),

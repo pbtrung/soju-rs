@@ -137,6 +137,7 @@ pub struct NewConn {
     pub outcome_tx: oneshot::Sender<ConnOutcome>,
     pub net_id: i64,
     pub events: mpsc::UnboundedSender<Event>,
+    pub srv: Arc<Server>,
 }
 
 pub struct UpstreamChannel {
@@ -241,6 +242,7 @@ pub struct UpstreamConn {
     pub logger: Logger,
     pub net_id: i64,
     events: mpsc::UnboundedSender<Event>,
+    srv: Arc<Server>,
     rate_flag: RateLimitFlag,
     pub outcome_tx: Option<oneshot::Sender<ConnOutcome>>,
     pub reg_error: Option<OutcomeError>,
@@ -298,6 +300,7 @@ impl UpstreamConn {
             logger: net_logger.clone(),
             net_id: new.net_id,
             events: new.events,
+            srv: new.srv,
             rate_flag: new.rate_flag,
             outcome_tx: Some(new.outcome_tx),
             reg_error: None,
@@ -341,6 +344,7 @@ impl UpstreamConn {
         if !self.caps.is_enabled("message-tags") {
             msg.tags.clear();
         }
+        metrics::inc(&self.srv.metrics.upstream_out_messages_total);
         self.conn.send_message(msg);
     }
 
@@ -448,7 +452,7 @@ impl UpstreamConn {
                 i += 1;
             }
         }
-        (ms, s[i..].to_owned())
+        (ms, s.get(i..).unwrap_or(s).to_owned())
     }
 
     fn handle_supported_caps(&mut self, caps: &str) {
@@ -485,10 +489,9 @@ impl UpstreamConn {
     }
 
     fn cache_user_info(&mut self, nick: &str, mut info: UpstreamUser) {
-        assert!(
-            !nick.is_empty(),
-            "cache_user_info called with empty nickname"
-        );
+        if nick.is_empty() {
+            return;
+        }
         if let Some(uu) = self.users.get_mut(nick) {
             uu.update_from(&info);
             if !info.nickname.is_empty() && nick != info.nickname {
@@ -581,7 +584,9 @@ pub async fn run_network(p: RunnerParams) {
         crate::user::RETRY_CONNECT_JITTER,
     );
     loop {
-        if p.stop.is_cancelled() {
+        // A closed event channel means the user's event loop is gone (e.g.
+        // it panicked): stop instead of reconnecting in a loop
+        if p.stop.is_cancelled() || p.tx.is_closed() {
             return;
         }
 
@@ -598,6 +603,7 @@ pub async fn run_network(p: RunnerParams) {
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 _ = p.stop.cancelled() => return,
+                _ = p.tx.closed() => return,
             }
         }
         last_try = Some(Instant::now());
@@ -649,7 +655,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         res = tokio::time::timeout(CONNECT_TIMEOUT, connect(p, record, &logger, identd.as_deref())) => res,
         _ = p.stop.cancelled() => return Ok(()),
     };
-    let (io, remote_addr, local_addr) = match connected {
+    let (io, _identd_entry) = match connected {
         Ok(Ok(c)) => c,
         // Upstream performs the TLS handshake lazily, on the first write:
         // handshake errors surface while reading registration replies
@@ -681,6 +687,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         outcome_tx,
         net_id: record.id,
         events: p.tx.clone(),
+        srv: p.srv.clone(),
     };
     if p.tx
         .send(Event::UpstreamConnected {
@@ -698,6 +705,10 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         let res = tokio::select! {
             res = reader.read_message() => res,
             _ = p.stop.cancelled() => {
+                conn.close();
+                Ok(None)
+            }
+            _ = p.tx.closed() => {
                 conn.close();
                 Ok(None)
             }
@@ -722,10 +733,6 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         read_error,
     });
     let outcome = outcome_rx.await.unwrap_or(ConnOutcome { err: None });
-
-    if let (Some(identd), Some(r), Some(l)) = (identd, &remote_addr, &local_addr) {
-        identd.delete(r, l);
-    }
 
     if p.stop.is_cancelled() {
         return Ok(());
@@ -815,12 +822,12 @@ async fn dial_tcp(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::
 
 /// Dials the upstream server. Returns the stream and the remote/local
 /// addresses (for identd).
-async fn connect(
+async fn connect<'a>(
     p: &RunnerParams,
     record: &db::Network,
     logger: &Logger,
-    identd: Option<&crate::identd::Identd>,
-) -> Result<(BoxIo, Option<String>, Option<String>)> {
+    identd: Option<&'a crate::identd::Identd>,
+) -> Result<(BoxIo, Option<IdentdEntry<'a>>)> {
     let u = record.url()?;
     match u.scheme.as_str() {
         "ircs" => {
@@ -854,19 +861,16 @@ async fn connect(
 
             logf!(logger, "connecting to TLS server at address {addr:?}");
             let tcp = dial_tcp(&p.srv, p.user_id, &addr).await?;
-            let (remote, local) = tcp_addrs(&tcp);
             // Register the connection with identd before the TLS handshake:
             // servers may query identd as soon as the TCP connection is up
-            if let (Some(identd), Some(r), Some(l)) = (identd, &remote, &local) {
-                identd.store(r, l, &p.user_ident);
-            }
+            let entry = IdentdEntry::store(identd, &tcp, &p.user_ident);
             let server_name = rustls::pki_types::ServerName::try_from(host.clone())
                 .map_err(|e| anyhow!("invalid server name {host:?}: {e}"))?;
             let tls = tokio_rustls::TlsConnector::from(tls_config)
                 .connect(server_name, tcp)
                 .await
                 .map_err(|e| TlsHandshakeError(e.to_string()))?;
-            Ok((Box::new(tls), remote, local))
+            Ok((Box::new(tls), entry))
         }
         "irc+insecure" => {
             let addr = match split_host_port(&u.host) {
@@ -878,11 +882,8 @@ async fn connect(
                 "connecting to plain-text server at address {addr:?}"
             );
             let tcp = dial_tcp(&p.srv, p.user_id, &addr).await?;
-            let (remote, local) = tcp_addrs(&tcp);
-            if let (Some(identd), Some(r), Some(l)) = (identd, &remote, &local) {
-                identd.store(r, l, &p.user_ident);
-            }
-            Ok((Box::new(tcp), remote, local))
+            let entry = IdentdEntry::store(identd, &tcp, &p.user_ident);
+            Ok((Box::new(tcp), entry))
         }
         "irc+unix" | "unix" => {
             logf!(logger, "connecting to Unix socket at path {:?}", u.path);
@@ -898,7 +899,7 @@ async fn connect(
                             go_errno_message(&e)
                         )
                     })?;
-                Ok((Box::new(s), None, None))
+                Ok((Box::new(s), None))
             }
             #[cfg(not(unix))]
             bail!("Unix sockets are not supported on this platform")
@@ -907,13 +908,36 @@ async fn connect(
     }
 }
 
-fn tcp_addrs(tcp: &tokio::net::TcpStream) -> (Option<String>, Option<String>) {
-    let fmt =
-        |a: SocketAddr| join_host_port(&a.ip().to_canonical().to_string(), &a.port().to_string());
-    (
-        tcp.peer_addr().ok().map(fmt),
-        tcp.local_addr().ok().map(fmt),
-    )
+/// A connection registered with identd, removed when dropped.
+struct IdentdEntry<'a> {
+    identd: &'a crate::identd::Identd,
+    remote: String,
+    local: String,
+}
+
+impl<'a> IdentdEntry<'a> {
+    fn store(
+        identd: Option<&'a crate::identd::Identd>,
+        tcp: &tokio::net::TcpStream,
+        ident: &str,
+    ) -> Option<IdentdEntry<'a>> {
+        let fmt = |a: SocketAddr| {
+            join_host_port(&a.ip().to_canonical().to_string(), &a.port().to_string())
+        };
+        let entry = IdentdEntry {
+            identd: identd?,
+            remote: fmt(tcp.peer_addr().ok()?),
+            local: fmt(tcp.local_addr().ok()?),
+        };
+        entry.identd.store(&entry.remote, &entry.local, ident);
+        Some(entry)
+    }
+}
+
+impl Drop for IdentdEntry<'_> {
+    fn drop(&mut self) {
+        self.identd.delete(&self.remote, &self.local);
+    }
 }
 
 macro_rules! uc {
@@ -1111,7 +1135,7 @@ fn handle_message_inner(
     let cm = u.networks[ni].casemap;
 
     if msg.prefix.is_none() {
-        msg.prefix = Some(Prefix::default());
+        msg.prefix = Some(uc!(u, ni).server_prefix.clone());
     }
 
     if !ircutil::is_numeric(&msg.command) {
@@ -2471,7 +2495,8 @@ fn handle_memberships(uc: &mut UpstreamConn, s: &str) -> Result<()> {
         return Ok(());
     }
     let b = s.as_bytes();
-    if b[0] != b'(' {
+    // Memberships are single bytes: a multi-byte prefix can't be matched
+    if b[0] != b'(' || !s.is_ascii() {
         bail!("malformed ISUPPORT PREFIX value: {s}");
     }
     let Some(sep) = s.find(')') else {
@@ -2854,17 +2879,16 @@ pub fn abort_pending_commands(
 }
 
 fn send_next_pending_command(uc: &mut UpstreamConn, cmd: &str) {
-    let Some(first) = uc.pending_cmds.get(cmd).and_then(|l| l.first()).cloned() else {
+    let Some(first) = uc.pending_cmds.get_mut(cmd).and_then(|l| l.first_mut()) else {
         return;
     };
-    uc.send_message_labeled(
+    first.sent_at = Some(Instant::now());
+    let (id, label, msg) = (
         first.downstream_id,
-        &first.downstream_label,
+        first.downstream_label.clone(),
         first.msg.clone(),
     );
-    if let Some(p) = uc.pending_cmds.get_mut(cmd).and_then(|l| l.first_mut()) {
-        p.sent_at = Some(Instant::now());
-    }
+    uc.send_message_labeled(id, &label, msg);
 }
 
 /// Queues a command whose replies need to be routed to a downstream
@@ -2902,7 +2926,9 @@ pub fn enqueue_command(uc: &mut UpstreamConn, dc_id: u64, label: String, msg: Me
         l.drain(..timed_out);
     }
 
-    if l.len() == 1 {
+    // Send the head of the queue unless it's already waiting for replies.
+    // After dropping timed out commands, it may not have been sent yet.
+    if l.first().is_some_and(|p| p.sent_at.is_none()) {
         send_next_pending_command(uc, &cmd);
     }
 }

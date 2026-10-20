@@ -889,13 +889,13 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         }
 
         let ni = upstream_for_command(u, i, &msg.command)?;
-        let net_id = u.networks[ni].id();
         let uc = u.networks[ni].upstream().unwrap();
-        // remove STATUSMSG sigils from target
+        // Remove STATUSMSG sigils from the target used locally (logging,
+        // auto-detach). The message itself keeps them: "@#chan" only
+        // reaches channel operators.
         let name = name
             .trim_start_matches(|c| uc.available_status_msg.contains(c))
             .to_owned();
-        params[0].clone_from(&name);
         let echo_supported = uc.caps.is_enabled("echo-message");
         let our_nick = uc.nick.clone();
 
@@ -941,7 +941,6 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
             upstream::produce(u, ni, &name, &echo, dc_id, false);
         }
 
-        let _ = net_id;
         upstream::update_channel_auto_detach(u, ni, &name);
     }
     Ok(())

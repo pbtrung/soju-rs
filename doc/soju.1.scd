@@ -229,10 +229,11 @@ The following directives are supported:
 	(days). For instance, "30d" deletes messages with timestamps older than
 	30 days. Messages are deleted on startup, then once per day.
 
-	When using _db sqlite_ and _message-store db_, the database is
+	When using _db sqlite3_ and _message-store db_, the database is
 	vacuumed after messages are deleted to reclaim disk space. This
-	rewrites the database file and blocks other database access while it
-	runs.
+	rewrites the database file, temporarily needing about its size again in
+	free disk space. All database access waits while it runs, so clients
+	and upstream connections may stall for the duration.
 
 	By default, messages are kept indefinitely.
 
