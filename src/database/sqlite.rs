@@ -31,6 +31,14 @@ fn time_from_sql(s: Option<String>) -> Result<Option<DateTime<Utc>>> {
     }
 }
 
+/// Reads a text column without requiring valid UTF-8. Go soju stores
+/// whatever bytes the upstream server sent, so a database it wrote may hold
+/// e.g. Latin-1 messages.
+fn lossy_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<String> {
+    let b = r.get_ref(i)?.as_bytes()?;
+    Ok(String::from_utf8_lossy(b).into_owned())
+}
+
 fn null_string(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
@@ -1062,7 +1070,7 @@ impl Database {
         }
         binds.push((":limit", &limit));
         let rows = stmt.query_map(binds.as_slice(), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            Ok((lossy_string(r, 0)?, r.get::<_, Option<String>>(1)?))
         })?;
         let mut l = Vec::new();
         for row in rows {
@@ -1134,7 +1142,7 @@ impl Database {
 
         let conn = self.conn();
         let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(binds.as_slice(), |r| lossy_string(r, 0))?;
         let mut l = Vec::new();
         for raw in rows {
             l.push(Message::parse(&raw?)?);
@@ -1355,6 +1363,36 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(db.list_messages(n.id, "#a", &opts).unwrap(), vec![m3]);
+    }
+
+    #[test]
+    fn messages_invalid_utf8() {
+        let db = db();
+        let mut u = User::new("alice");
+        db.store_user(&mut u).unwrap();
+        let mut n = Network::new("irc.example.org");
+        db.store_network(u.id, &mut n).unwrap();
+        db.store_messages(n.id, "#a", &[msg!("PRIVMSG", "#a", "x")])
+            .unwrap();
+
+        // Go soju stores raw upstream bytes, which may be e.g. Latin-1
+        let raw: &[u8] = b"@time=2024-01-01T00:00:00.000Z :bob PRIVMSG #a :caf\xe9";
+        db.conn()
+            .execute(
+                "INSERT INTO Message(target, raw, time, sender, text)
+                SELECT id, CAST(?1 AS TEXT), '2024-01-01T00:00:00.000Z', 'bob', 'caf'
+                FROM MessageTarget WHERE target = '#a'",
+                [raw],
+            )
+            .unwrap();
+
+        let opts = MessageOptions {
+            limit: 10,
+            ..Default::default()
+        };
+        let l = db.list_messages(n.id, "#a", &opts).unwrap();
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0].params, vec!["#a", "caf\u{fffd}"]);
     }
 
     #[test]
