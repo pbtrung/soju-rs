@@ -2,7 +2,7 @@
 //! downstream.go). Command handlers for registered connections live in
 //! downstream_cmds.rs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
@@ -22,6 +22,7 @@ use crate::user::User;
 use crate::xirc::{self, CapRegistry, CaseMapping, CaseMappingMap, Isupport};
 use crate::{debugf, logf, msg};
 
+use crate::downstream_cmds::fail;
 pub use crate::downstream_cmds::handle_message_registered;
 
 pub const SERVICE_NICK: &str = "BouncerServ";
@@ -289,7 +290,9 @@ const PASSTHROUGH_ISUPPORT: &[&str] = &[
 pub struct LabelContext {
     pub label: String,
     pub batch: String,
-    pub pending_msg: Option<Message>,
+    /// The first reply, buffered until we know whether a batch is needed.
+    /// A reply may span several messages, e.g. a draft/multiline batch.
+    pub pending_msg: Option<Vec<Message>>,
 }
 
 #[derive(Clone, Debug)]
@@ -467,6 +470,8 @@ pub struct DownstreamConn {
     pub registration: Option<Registration>,
 
     last_batch_ref: u64,
+    /// draft/multiline batches being received, by reference tag
+    multiline_batches: HashMap<String, xirc::MultilineBatch>,
 
     pub casemap: CaseMapping,
     pub monitored: CaseMappingMap<()>,
@@ -541,6 +546,7 @@ impl DownstreamConn {
             sasl: None,
             registration: Some(Registration::default()),
             last_batch_ref: 0,
+            multiline_batches: HashMap::new(),
             casemap: cm,
             monitored: CaseMappingMap::new(cm),
             metadata_subs: HashSet::new(),
@@ -615,8 +621,39 @@ impl DownstreamConn {
             msg.prefix = Some(self.srv.prefix());
         }
 
+        if matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") && msg.params.len() >= 2 {
+            let prefix = match &msg.prefix {
+                Some(p) => p.to_string(),
+                None => self.srv.prefix().to_string(),
+            };
+            let max = xirc::max_text_length(&prefix, &msg.command, &msg.params[0]);
+            let multiline = self.caps.is_enabled("batch")
+                && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
+                && (xirc::is_multiline(&msg) || msg.params[1].len() > max);
+            if multiline {
+                self.last_batch_ref += 1;
+                let r = self.last_batch_ref.to_string();
+                self.send_reply(xirc::generate_multiline_batch(&msg, &r, max));
+                return;
+            } else if xirc::is_multiline(&msg) {
+                for m in xirc::generate_multiline_fallback(&msg, max) {
+                    self.send_reply(vec![m]);
+                }
+                return;
+            }
+        }
+        self.send_reply(vec![msg]);
+    }
+
+    /// Sends a reply made of one or more messages. The reply is wrapped in
+    /// a labeled-response batch if needed: a multi-message reply (e.g. a
+    /// draft/multiline batch) counts as a single reply, its first message
+    /// carries the label or batch tag.
+    fn send_reply(&mut self, mut reply: Vec<Message>) {
         let Some(label) = self.label.as_mut().filter(|l| !l.label.is_empty()) else {
-            self.raw_send(msg);
+            for m in reply {
+                self.raw_send(m);
+            }
             return;
         };
         if let Some(mut pending) = label.pending_msg.take() {
@@ -625,25 +662,29 @@ impl DownstreamConn {
             let batch = self.last_batch_ref.to_string();
             let label_str = label.label.clone();
             label.batch = batch.clone();
-            if pending.tags.get_or_empty("batch").is_empty() {
-                pending.tags.set("batch", batch.clone());
+            if pending[0].tags.get_or_empty("batch").is_empty() {
+                pending[0].tags.set("batch", batch.clone());
             }
             self.raw_send(
                 msg!("BATCH", format!("+{batch}"), "labeled-response").with_tag("label", label_str),
             );
-            // send the buffered message
-            self.raw_send(pending);
+            // send the buffered reply
+            for m in pending {
+                self.raw_send(m);
+            }
         }
         let label = self.label.as_mut().unwrap();
         if !label.batch.is_empty() {
-            // send the current message in the batch
-            if msg.tags.get_or_empty("batch").is_empty() {
-                msg.tags.set("batch", label.batch.clone());
+            // send the current reply in the batch
+            if reply[0].tags.get_or_empty("batch").is_empty() {
+                reply[0].tags.set("batch", label.batch.clone());
             }
-            self.raw_send(msg);
+            for m in reply {
+                self.raw_send(m);
+            }
         } else {
-            // first message we're sending: buffer it
-            label.pending_msg = Some(msg);
+            // first reply we're sending: buffer it
+            label.pending_msg = Some(reply);
         }
     }
 
@@ -655,8 +696,10 @@ impl DownstreamConn {
         };
         let label_str = label.label.clone();
         if let Some(mut pending) = label.pending_msg.take() {
-            pending.tags.set("label", label_str);
-            self.raw_send(pending);
+            pending[0].tags.set("label", label_str);
+            for m in pending {
+                self.raw_send(m);
+            }
         } else if !label.batch.is_empty() {
             let batch = label.batch.clone();
             self.raw_send(msg!("BATCH", format!("-{batch}")));
@@ -806,6 +849,10 @@ impl DownstreamConn {
                     for (k, v) in PASSTHROUGH_DOWNSTREAM_CAPS {
                         self.caps.available.insert(k.to_string(), v.to_string());
                     }
+                    self.caps.available.insert(
+                        xirc::MULTILINE_BATCH_TYPE.to_owned(),
+                        xirc::MultilineLimits::parse("").cap_value(),
+                    );
                 }
                 let caps: Vec<String> = self
                     .caps
@@ -1906,6 +1953,7 @@ pub fn update_supported_caps(u: &mut User, dc_id: u64) {
         .map(|(cap, v)| (*cap, *v, uc.is_none_or(|uc| uc.caps.is_enabled(cap))))
         .collect();
     let sasl_plain = uc.is_some_and(|uc| uc.supports_sasl("PLAIN"));
+    let multiline = uc.and_then(|uc| uc.multiline_limits());
     let account_registration = uc.and_then(|uc| {
         if uc.caps.is_enabled("draft/account-registration") {
             Some(
@@ -1946,6 +1994,11 @@ pub fn update_supported_caps(u: &mut User, dc_id: u64) {
             dc.set_supported_cap("draft/account-registration", &values.join(","));
         }
         None => dc.unset_supported_cap("draft/account-registration"),
+    }
+
+    match multiline {
+        Some(l) => dc.set_supported_cap(xirc::MULTILINE_BATCH_TYPE, &l.cap_value()),
+        None => dc.unset_supported_cap(xirc::MULTILINE_BATCH_TYPE),
     }
 
     if chathistory && has_network {
@@ -2285,9 +2338,130 @@ pub fn handle_metadata_sub(
     }
 }
 
+/// The maximum number of draft/multiline batches a client may have open at
+/// once.
+const MAX_MULTILINE_BATCHES: usize = 8;
+
+/// The draft/multiline limits for a downstream connection: the ones of its
+/// upstream server.
+fn multiline_limits(u: &User, i: usize) -> Option<xirc::MultilineLimits> {
+    let ni = dc_network(u, i)?;
+    u.networks[ni].upstream()?.multiline_limits()
+}
+
+/// Handles a client-initiated batch. Only draft/multiline batches are
+/// supported: once complete, they are handled as a single message.
+fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
+    let i = u.dc_index(dc_id).unwrap();
+    let tag = msg.param(0);
+    if let Some(r) = tag.strip_prefix('+') {
+        let dc = &mut u.downstreams[i];
+        let res = if msg.param(1) != xirc::MULTILINE_BATCH_TYPE
+            || !dc.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
+        {
+            Err(fail(&[
+                "BATCH",
+                "UNKNOWN_TYPE",
+                msg.param(1),
+                "Unsupported batch type",
+            ]))
+        } else if r.is_empty()
+            || dc.multiline_batches.contains_key(r)
+            || dc.multiline_batches.len() >= MAX_MULTILINE_BATCHES
+        {
+            Err(fail(&[
+                "BATCH",
+                "MULTILINE_INVALID",
+                "Invalid multiline batch",
+            ]))
+        } else {
+            dc.multiline_batches
+                .insert(r.to_owned(), xirc::MultilineBatch::new(msg.clone()));
+            return Ok(());
+        };
+        begin_message(dc, msg);
+        return finish_message(dc, res);
+    }
+
+    let batch = tag
+        .strip_prefix('-')
+        .and_then(|r| u.downstreams[i].multiline_batches.remove(r));
+    let Some(batch) = batch else {
+        let dc = &mut u.downstreams[i];
+        begin_message(dc, msg);
+        let err = fail(&[
+            "BATCH",
+            "INVALID_REFTAG",
+            tag,
+            "Unknown batch reference tag",
+        ]);
+        return finish_message(dc, Err(err));
+    };
+    let opener = batch.opener.clone();
+    let target = batch.target.clone();
+    let limits = multiline_limits(u, i);
+    let res = batch.finish().and_then(|m| {
+        // We may split lines differently from the client
+        let uc = dc_network(u, i).and_then(|ni| u.networks[ni].upstream());
+        match (uc, limits) {
+            (Some(uc), Some(limits)) if uc.multiline_line_count(&m) > limits.max_lines => {
+                Err(xirc::MultilineError::MaxLines)
+            }
+            _ => Ok(m),
+        }
+    });
+    match res {
+        Ok(m) => handle_message_labeled(u, dc_id, &m),
+        Err(e) => {
+            let limits = limits.unwrap_or(xirc::MultilineLimits::parse(""));
+            let err = match e {
+                xirc::MultilineError::MaxBytes => fail(&[
+                    "BATCH",
+                    e.code(),
+                    &limits.max_bytes.to_string(),
+                    "Multiline batch max-bytes exceeded",
+                ]),
+                xirc::MultilineError::MaxLines => fail(&[
+                    "BATCH",
+                    e.code(),
+                    &limits.max_lines.to_string(),
+                    "Multiline batch max-lines exceeded",
+                ]),
+                xirc::MultilineError::InvalidTarget => {
+                    fail(&["BATCH", e.code(), &target, "Invalid multiline target"])
+                }
+                xirc::MultilineError::Invalid => {
+                    fail(&["BATCH", e.code(), "Invalid multiline batch"])
+                }
+            };
+            let dc = &mut u.downstreams[i];
+            begin_message(dc, &opener);
+            finish_message(dc, Err(err))
+        }
+    }
+}
+
 /// Handles a message from a registered downstream connection.
 pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     metrics::inc(&u.srv.metrics.downstream_in_messages_total);
+    let i = u.dc_index(dc_id).unwrap();
+    if msg.command == "BATCH" {
+        return handle_batch(u, dc_id, msg);
+    }
+    if let Some(r) = msg.tags.get("batch")
+        && u.downstreams[i].multiline_batches.contains_key(r)
+    {
+        let limits = multiline_limits(u, i).unwrap_or(xirc::MultilineLimits::parse(""));
+        if let Some(b) = u.downstreams[i].multiline_batches.get_mut(r) {
+            b.push(msg, &limits);
+        }
+        return Ok(());
+    }
+    handle_message_labeled(u, dc_id, msg)
+}
+
+/// Handles a message, replying with a labeled-response if requested.
+fn handle_message_labeled(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     let i = u.dc_index(dc_id).unwrap();
     begin_message(&mut u.downstreams[i], msg);
     let res = match msg.command.as_str() {

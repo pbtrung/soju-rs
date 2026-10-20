@@ -2,10 +2,12 @@
 
 mod casemapping;
 mod genmsg;
+mod multiline;
 mod whox;
 
 pub use casemapping::*;
 pub use genmsg::*;
+pub use multiline::*;
 pub use whox::*;
 
 use std::collections::HashMap;

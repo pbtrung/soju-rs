@@ -21,7 +21,7 @@ macro_rules! dc {
     };
 }
 
-fn fail(params: &[&str]) -> anyhow::Error {
+pub(crate) fn fail(params: &[&str]) -> anyhow::Error {
     irc_error(Message::new(
         "FAIL",
         params.iter().map(|s| s.to_string()).collect(),
@@ -874,14 +874,17 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
                     u.record.admin,
                     dc,
                 );
-                let res = crate::service::handle_service_privmsg(u, &mut ctx, &text);
-                let prints = ctx.take_prints();
-                if let Some(i) = u.dc_index(dc_id) {
-                    for line in prints {
-                        send_service_privmsg(&mut u.downstreams[i], &line);
-                    }
-                    if let Err(e) = res {
-                        send_service_privmsg(&mut u.downstreams[i], &format!("error: {e}"));
+                // Each line of a multiline message is a separate command
+                for line in text.split('\n').filter(|l| !l.trim().is_empty()) {
+                    let res = crate::service::handle_service_privmsg(u, &mut ctx, line);
+                    let prints = ctx.take_prints();
+                    if let Some(i) = u.dc_index(dc_id) {
+                        for line in prints {
+                            send_service_privmsg(&mut u.downstreams[i], &line);
+                        }
+                        if let Err(e) = res {
+                            send_service_privmsg(&mut u.downstreams[i], &format!("error: {e}"));
+                        }
                     }
                 }
             }

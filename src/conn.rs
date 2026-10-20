@@ -57,14 +57,20 @@ enum Writer {
 
 impl Writer {
     async fn write(&mut self, msg: &Message) -> Result<()> {
+        let mut line = msg.to_string();
+        if line.contains(['\r', '\n']) {
+            // Multiline messages must be split before being sent: never let
+            // a line break inject another message
+            line = line.replace(['\r', '\n'], " ");
+        }
         match self {
             Writer::Stream(w) => {
-                let line = format!("{msg}\r\n");
+                line.push_str("\r\n");
                 w.write_all(line.as_bytes()).await?;
                 w.flush().await?;
             }
             Writer::Ws(w) => {
-                w.send(WsMessage::text(msg.to_string())).await?;
+                w.send(WsMessage::text(line)).await?;
             }
         }
         Ok(())

@@ -362,7 +362,8 @@ character.
 	*-connect-command* <command>
 		Send the specified quoted string as a raw IRC command right after
 		connecting to the server. This can be used to identify to an account
-		when the server doesn't support SASL.
+		when the server doesn't support SASL. soju waits 5 seconds after each
+		connect command, to give the server time to process it.
 
 		For instance, to identify with _NickServ_, the following command can be
 		used:
@@ -396,8 +397,14 @@ character.
 *network status*
 	Show a list of saved networks and their current status.
 
+*network info* [name]
+	Show the configuration of a network. Passwords are not displayed.
+
+	If _name_ is not specified, the current network is displayed.
+
 *channel status* [options...]
-	Show a list of saved channels and their current status.
+	Show a list of saved channels, their current status and their
+	relay-detached, reattach-on, detach-after and detach-on settings.
 
 	Options:
 

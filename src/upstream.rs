@@ -37,6 +37,9 @@ use crate::{debugf, logf, msg};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const UPSTREAM_MESSAGE_DELAY: Duration = Duration::from_secs(2);
 pub const UPSTREAM_MESSAGE_BURST: u32 = 10;
+/// The delay after each connect command, to let the server process it, e.g.
+/// for NickServ to log us in.
+pub const CONNECT_COMMAND_DELAY: Duration = Duration::from_secs(5);
 
 /// The static list of upstream capabilities always requested when
 /// supported.
@@ -59,6 +62,7 @@ const PERMANENT_UPSTREAM_CAPS: &[&str] = &[
     "draft/account-registration",
     "draft/extended-monitor",
     "draft/message-redaction",
+    "draft/multiline",
 ];
 
 /// The static list of message tags that will cause a TAGMSG to be stored.
@@ -218,6 +222,9 @@ pub struct PendingCommand {
 #[derive(Clone, Debug)]
 struct UpstreamBatch {
     label: String,
+    /// Set for draft/multiline batches, which are assembled into a single
+    /// message.
+    multiline: Option<xirc::MultilineBatch>,
 }
 
 pub enum SaslClient {
@@ -274,6 +281,7 @@ pub struct UpstreamConn {
     pub away: bool,
     pub account: String,
     next_label_id: u64,
+    next_batch_ref: std::cell::Cell<u64>,
     pub monitored: CaseMappingMap<bool>,
 
     pub sasl_client: Option<SaslClient>,
@@ -327,6 +335,7 @@ impl UpstreamConn {
             away: false,
             account: String::new(),
             next_label_id: 0,
+            next_batch_ref: std::cell::Cell::new(0),
             monitored: CaseMappingMap::new(casemap),
             sasl_client: None,
             sasl_started: false,
@@ -344,8 +353,72 @@ impl UpstreamConn {
         if !self.caps.is_enabled("message-tags") {
             msg.tags.clear();
         }
+        if matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") && msg.params.len() >= 2 {
+            let max = self.max_text_length(&msg.command, &msg.params[0]);
+            let multiline = self.caps.is_enabled("batch")
+                && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
+                && (xirc::is_multiline(&msg) || msg.params[1].len() > max);
+            if multiline {
+                let r = self.next_batch_ref.get() + 1;
+                self.next_batch_ref.set(r);
+                let r = r.to_string();
+                for m in xirc::generate_multiline_batch(&msg, &r, max) {
+                    self.raw_send(m);
+                }
+                return;
+            } else if xirc::is_multiline(&msg) {
+                for (i, mut m) in xirc::generate_multiline_fallback(&msg, max)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if i > 0 {
+                        m.tags.remove("label");
+                    }
+                    self.raw_send(m);
+                }
+                return;
+            }
+        }
+        self.raw_send(msg);
+    }
+
+    fn raw_send(&self, msg: Message) {
         metrics::inc(&self.srv.metrics.upstream_out_messages_total);
         self.conn.send_message(msg);
+    }
+
+    /// The maximum length of the text of a PRIVMSG/NOTICE line we send.
+    fn max_text_length(&self, command: &str, target: &str) -> usize {
+        // The server relays our message with our full prefix. Assume the
+        // longest hostname if we don't know ours.
+        let host_len = if self.hostname.is_empty() {
+            63
+        } else {
+            self.hostname.len()
+        };
+        let user_len = self.username.len().max(10);
+        let prefix_len = self.nick.len() + 1 + user_len + 1 + host_len;
+        xirc::max_text_length(&"x".repeat(prefix_len), command, target)
+    }
+
+    /// The draft/multiline limits of the server, if supported.
+    pub fn multiline_limits(&self) -> Option<xirc::MultilineLimits> {
+        if !self.caps.is_enabled("batch") || !self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE) {
+            return None;
+        }
+        let v = self
+            .caps
+            .available
+            .get(xirc::MULTILINE_BATCH_TYPE)
+            .map(String::as_str)
+            .unwrap_or("");
+        Some(xirc::MultilineLimits::parse(v))
+    }
+
+    /// Returns the number of lines a multiline message would be sent as.
+    pub fn multiline_line_count(&self, msg: &Message) -> usize {
+        let max = self.max_text_length(&msg.command, msg.param(0));
+        xirc::split_multiline(msg.param(1), max).len()
     }
 
     /// Sends a message, labeled so that replies get routed to a downstream
@@ -974,9 +1047,15 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     let mechanism = net.record.sasl.mechanism.clone();
     let uc = net.conn.as_mut().unwrap();
 
+    let mut connect_msgs = Vec::new();
     for command in &commands {
         match Message::parse(command) {
-            Ok(m) => uc.send_message(m),
+            Ok(mut m) => {
+                if !uc.caps.is_enabled("message-tags") {
+                    m.tags.clear();
+                }
+                connect_msgs.push(m);
+            }
             Err(e) => logf!(
                 uc.logger,
                 "failed to parse connect command {command:?}: {e}"
@@ -1008,8 +1087,19 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     if delay {
         uc.delayed_messages = Some(Vec::new());
         let tx = uc.events.clone();
+        let conn = uc.conn.clone();
+        let srv = uc.srv.clone();
         let (net_id, conn_id) = (uc.net_id, uc.id);
         tokio::spawn(async move {
+            // Servers may need time to process each connect command
+            for m in connect_msgs {
+                if conn.is_closed() {
+                    return;
+                }
+                metrics::inc(&srv.metrics.upstream_out_messages_total);
+                conn.send_message(m);
+                tokio::time::sleep(CONNECT_COMMAND_DELAY).await;
+            }
             tokio::time::sleep(Duration::from_secs(3)).await;
             let _ = tx.send(Event::UpstreamRegistrationDelayDone { net_id, conn_id });
         });
@@ -1060,10 +1150,68 @@ fn forward_message(u: &mut User, net_id: i64, msg: &Message) {
     forward_msg_by_id(u, net_id, 0, msg);
 }
 
-/// Handles a message from the upstream server.
+/// The result of feeding a message to the draft/multiline assembler.
+enum Multiline {
+    /// The message isn't part of a multiline batch.
+    Passthrough,
+    /// The message has been buffered.
+    Consumed,
+    /// A multiline batch is complete: handle this logical message instead.
+    Complete(Message),
+}
+
+fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline> {
+    if msg.command == "BATCH" {
+        let tag = msg.param(0);
+        if let Some(r) = tag.strip_prefix('+')
+            && msg.param(1) == xirc::MULTILINE_BATCH_TYPE
+        {
+            if uc.batches.contains_key(r) {
+                bail!("unexpected BATCH reference tag: batch was already defined: {r:?}");
+            }
+            let batch = UpstreamBatch {
+                label: String::new(),
+                multiline: Some(xirc::MultilineBatch::new(msg.clone())),
+            };
+            uc.batches.insert(r.to_owned(), batch);
+            return Ok(Multiline::Consumed);
+        }
+        if let Some(r) = tag.strip_prefix('-')
+            && uc.batches.get(r).is_some_and(|b| b.multiline.is_some())
+        {
+            let batch = uc.batches.remove(r).unwrap().multiline.unwrap();
+            return match batch.finish() {
+                Ok(m) => Ok(Multiline::Complete(m)),
+                Err(e) => {
+                    logf!(uc.logger, "ignoring invalid multiline batch: {}", e.code());
+                    Ok(Multiline::Consumed)
+                }
+            };
+        }
+        return Ok(Multiline::Passthrough);
+    }
+    if let Some(r) = msg.tags.get("batch")
+        && let Some(UpstreamBatch {
+            multiline: Some(batch),
+            ..
+        }) = uc.batches.get_mut(r)
+    {
+        // The server's limits only apply to what we send, use our own
+        batch.push(msg, &xirc::MultilineLimits::parse(""));
+        return Ok(Multiline::Consumed);
+    }
+    Ok(Multiline::Passthrough)
+}
+
 /// Handles a message from the upstream server. Like upstream, it may remove
 /// tags from the message (e.g. label and batch).
 pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> {
+    match assemble_multiline(uc!(u, ni), msg)? {
+        Multiline::Passthrough => {}
+        Multiline::Consumed => return Ok(()),
+        Multiline::Complete(mut m) => return handle_message(u, ni, &mut m),
+    }
+
     let net_id = u.networks[ni].id();
     let mut label = msg.tags.remove("label").unwrap_or_default();
 
@@ -1593,8 +1741,13 @@ fn handle_message_inner(
                 {
                     batch_label = b.label.clone();
                 }
-                uc.batches
-                    .insert(tag.to_owned(), UpstreamBatch { label: batch_label });
+                uc.batches.insert(
+                    tag.to_owned(),
+                    UpstreamBatch {
+                        label: batch_label,
+                        multiline: None,
+                    },
+                );
                 if downstream_id != 0 && !downstream_label.is_empty() {
                     let prefix = u.srv.prefix();
                     for dc in dcs_for(&mut u.downstreams, net_id) {

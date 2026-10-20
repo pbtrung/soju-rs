@@ -163,6 +163,7 @@ fn commands() -> &'static [Command] {
                         "show a list of saved networks and their current status",
                         handle_network_status,
                     ),
+                    Command::leaf("info", "[name]", "show the configuration of a network", handle_network_info),
                     Command::leaf(
                         "update",
                         "[name] [-addr addr] [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit ignore-limit] [-connect-command command]...",
@@ -636,6 +637,51 @@ fn handle_network_status(
     }
     if n == 0 {
         ctx.print(r#"No network configured, add one with "network create"."#);
+    }
+    Ok(())
+}
+
+fn handle_network_info(
+    u: Option<&mut User>,
+    ctx: &mut ServiceContext,
+    params: &[String],
+) -> Result<()> {
+    let u = u.unwrap();
+    if params.len() > 1 {
+        bail!("expected at most one argument");
+    }
+    let (ni, _) = get_network_from_arg(u, ctx, params)?;
+    let net = &u.networks[ni].record;
+    ctx.print(format!("name: {}", net.get_name()));
+    ctx.print(format!("addr: {}", net.addr));
+    ctx.print(format!("nick: {}", db::get_nick(&u.record, Some(net))));
+    ctx.print(format!(
+        "username: {}",
+        db::get_username(&u.record, Some(net))
+    ));
+    ctx.print(format!(
+        "realname: {}",
+        db::get_realname(&u.record, Some(net))
+    ));
+    // Secrets are never printed
+    if !net.pass.is_empty() {
+        ctx.print("pass: (set)");
+    }
+    if !net.certfp.is_empty() {
+        ctx.print(format!("certfp: {}", net.certfp));
+    }
+    match net.sasl.mechanism.as_str() {
+        "" => ctx.print("sasl: none"),
+        "PLAIN" => ctx.print(format!(
+            "sasl: PLAIN (username: {})",
+            net.sasl.plain_username
+        )),
+        mech => ctx.print(format!("sasl: {mech}")),
+    }
+    ctx.print(format!("auto-away: {}", net.auto_away));
+    ctx.print(format!("enabled: {}", net.enabled));
+    for cmd in &net.connect_commands {
+        ctx.print(format!("connect-command: {cmd}"));
     }
     Ok(())
 }
@@ -1167,7 +1213,13 @@ fn handle_channel_status(
             if ch.detached {
                 status.push_str(", detached");
             }
-            ctx.print(format!("{name} [{status}]"));
+            ctx.print(format!(
+                "{name} [{status}]: relay-detached: {}, reattach-on: {}, detach-after: {}, detach-on: {}",
+                filter_name(ch.relay_detached),
+                filter_name(ch.reattach_on),
+                format_go_duration(ch.detach_after),
+                filter_name(ch.detach_on),
+            ));
             n += 1;
         }
     };
@@ -1196,6 +1248,15 @@ fn parse_filter(filter: &str) -> Result<db::MessageFilter> {
         "message" => db::MessageFilter::Message,
         _ => bail!("unknown filter: {filter:?}"),
     })
+}
+
+fn filter_name(filter: db::MessageFilter) -> &'static str {
+    match filter {
+        db::MessageFilter::Default => "default",
+        db::MessageFilter::None => "none",
+        db::MessageFilter::Highlight => "highlight",
+        db::MessageFilter::Message => "message",
+    }
 }
 
 fn channel_flag_set() -> FlagSet {
@@ -1269,6 +1330,32 @@ pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
         total += v * mult;
     }
     Some(std::time::Duration::from_secs_f64(total))
+}
+
+/// Formats a duration like Go's time.Duration.String, e.g. "1h30m0s", so that
+/// it can be passed back to parse_go_duration.
+pub fn format_go_duration(d: std::time::Duration) -> String {
+    if d.is_zero() {
+        return "0s".to_owned();
+    }
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let mut out = String::new();
+    if h > 0 {
+        out.push_str(&format!("{h}h"));
+    }
+    if h > 0 || m > 0 {
+        out.push_str(&format!("{m}m"));
+    }
+    out.push_str(&s.to_string());
+    let nanos = d.subsec_nanos();
+    if nanos > 0 {
+        let frac = format!("{nanos:09}");
+        out.push('.');
+        out.push_str(frac.trim_end_matches('0'));
+    }
+    out.push('s');
+    out
 }
 
 /// Splits "name/network" when the caller isn't bound to a network.
@@ -1641,5 +1728,13 @@ mod tests {
         assert_eq!(parse_go_duration("-1s"), None);
         assert_eq!(parse_go_duration("10"), None);
         assert_eq!(parse_go_duration("x"), None);
+
+        assert_eq!(format_go_duration(Duration::ZERO), "0s");
+        assert_eq!(format_go_duration(Duration::from_secs(300)), "5m0s");
+        assert_eq!(format_go_duration(Duration::from_secs(81000)), "22h30m0s");
+        assert_eq!(format_go_duration(Duration::from_millis(1500)), "1.5s");
+        for s in ["0s", "5m0s", "22h30m0s", "1h0m1.25s"] {
+            assert_eq!(format_go_duration(parse_go_duration(s).unwrap()), s);
+        }
     }
 }
