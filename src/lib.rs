@@ -6,7 +6,6 @@ pub mod config;
 pub mod conn;
 pub mod database;
 pub mod downstream;
-pub mod downstream_cmds;
 pub mod flags;
 pub mod identd;
 pub mod irc;
