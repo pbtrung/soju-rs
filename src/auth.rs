@@ -227,12 +227,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
+        // Exactly two hex digits: from_str_radix would also accept a sign,
+        // e.g. "%+f"
         if b[i] == b'%'
             && i + 2 < b.len()
-            && let Ok(v) =
-                u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("x"), 16)
+            && let Ok(v) = hex::decode(&b[i + 1..i + 3])
         {
-            out.push(v);
+            out.push(v[0]);
             i += 3;
             continue;
         }
@@ -393,6 +394,8 @@ mod tests {
     fn escape() {
         assert_eq!(query_escape("a b/c+d"), "a+b%2Fc%2Bd");
         assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("%3a%3A"), "::");
+        assert_eq!(percent_decode("a%+fb%2"), "a%+fb%2");
     }
 
     #[tokio::test]
