@@ -54,24 +54,9 @@ pub(super) fn handle_message(
                 let uc = uc!(u, ni);
                 if is_our_nick(cm, uc, &prefix_name) {
                     logf!(uc.logger, "joined channel {ch:?}");
-                    if let Some(mut old) = uc.channels.del(ch) {
-                        old.stop_auto_detach();
-                    }
-                    uc.channels.set(
-                        ch,
-                        UpstreamChannel {
-                            name: ch.to_owned(),
-                            topic: String::new(),
-                            topic_who: None,
-                            topic_time: None,
-                            status: ChannelStatus::Public,
-                            modes: None,
-                            creation_time: String::new(),
-                            members: CaseMappingMap::new(cm),
-                            complete: false,
-                            detach_timer: None,
-                        },
-                    );
+                    // A JOIN of a channel we're in starts it over
+                    forget_channel(uc, cm, ch);
+                    uc.channels.set(ch, UpstreamChannel::new(ch, cm));
                     update_channel_auto_detach(u, ni, ch);
                     uc!(u, ni).send_message(msg!("MODE", ch));
                 } else {
@@ -80,10 +65,7 @@ pub(super) fn handle_message(
                     };
                     uch.members.set(&prefix_name, MembershipSet::default());
                 }
-
-                let mut ch_msg = msg.clone();
-                ch_msg.params[0] = ch.to_owned();
-                produce(u, ni, ch, &ch_msg, 0, false);
+                produce_for_channel(u, ni, ch, msg);
             }
         }
         "PART" => {
@@ -93,26 +75,11 @@ pub(super) fn handle_message(
                 let uc = uc!(u, ni);
                 if is_our_nick(cm, uc, &prefix_name) {
                     logf!(uc.logger, "parted channel {ch:?}");
-                    if let Some(mut uch) = uc.channels.del(ch) {
-                        uch.stop_auto_detach();
-                        for nick in uch.members.keys() {
-                            if !should_cache_user_info(cm, uc, nick) {
-                                uc.users.del(nick);
-                            }
-                        }
-                    }
+                    forget_channel(uc, cm, ch);
                 } else {
-                    let Some(uch) = uc.channels.get_mut(ch) else {
-                        bail!("unknown channel {ch:?}");
-                    };
-                    uch.members.del(&prefix_name);
-                    if !should_cache_user_info(cm, uc, &prefix_name) {
-                        uc.users.del(&prefix_name);
-                    }
+                    remove_member(uc, cm, ch, &prefix_name)?;
                 }
-                let mut ch_msg = msg.clone();
-                ch_msg.params[0] = ch.to_owned();
-                produce(u, ni, ch, &ch_msg, 0, false);
+                produce_for_channel(u, ni, ch, msg);
             }
         }
         "KICK" => {
@@ -125,22 +92,9 @@ pub(super) fn handle_message(
                     uc.logger,
                     "kicked from channel {channel:?} by {prefix_name}"
                 );
-                if let Some(mut uch) = uc.channels.del(&channel) {
-                    uch.stop_auto_detach();
-                    for nick in uch.members.keys() {
-                        if !should_cache_user_info(cm, uc, nick) {
-                            uc.users.del(nick);
-                        }
-                    }
-                }
+                forget_channel(uc, cm, &channel);
             } else {
-                let Some(uch) = uc.channels.get_mut(&channel) else {
-                    bail!("unknown channel {channel:?}");
-                };
-                uch.members.del(&user);
-                if !should_cache_user_info(cm, uc, &user) {
-                    uc.users.del(&user);
-                }
+                remove_member(uc, cm, &channel, &user)?;
             }
             produce(u, ni, &channel, msg, 0, false);
         }
@@ -196,27 +150,10 @@ pub(super) fn handle_message(
                 forward_message(u, net_id, msg);
             } else {
                 // channel mode change
-                let avail_memberships = uc.available_memberships.clone();
-                let avail_modes = uc.available_channel_modes.clone();
-                let Some(ch) = uc.channels.get_mut(&name) else {
-                    bail!("unknown channel {name:?}");
-                };
-                ircutil::apply_channel_modes(
-                    ch.modes.as_mut(),
-                    &mut ch.members,
-                    &avail_memberships,
-                    &avail_modes,
-                    &mode_str,
-                    &msg.params[2..],
-                )
-                .map_err(|e| anyhow!(e))?;
-                let ch_name = ch.name.clone();
+                let ch_name = apply_channel_modes(uc, &name, &mode_str, &msg.params[2..], false)?
+                    .ok_or_else(|| anyhow!("unknown channel {name:?}"))?;
                 append_log(u, ni, &ch_name, msg);
-                let detached = u.networks[ni]
-                    .channels
-                    .get(&name)
-                    .is_some_and(|c| c.detached);
-                if !detached {
+                if !u.networks[ni].is_detached(&name) {
                     forward_message(u, net_id, msg);
                 }
             }
@@ -231,33 +168,19 @@ pub(super) fn handle_message(
         }
         RPL_CHANNELMODEIS => {
             need_params(msg, 2)?;
-            let channel = msg.params[1].clone();
-            let mode_str = msg.params.get(2).cloned().unwrap_or_default();
-            let mode_args: Vec<String> =
-                msg.params.get(3..).map(|s| s.to_vec()).unwrap_or_default();
+            let channel = &msg.params[1];
+            let mode_str = msg.param(2);
+            let mode_args = msg.params.get(3..).unwrap_or_default();
             let uc = uc!(u, ni);
-            let avail_memberships = uc.available_memberships.clone();
-            let avail_modes = uc.available_channel_modes.clone();
-            let Some(ch) = uc.channels.get_mut(&channel) else {
+            let first_mode = uc
+                .channels
+                .get(channel)
+                .is_some_and(|ch| ch.modes.is_none());
+            if apply_channel_modes(uc, channel, mode_str, mode_args, true)?.is_none() {
                 forward_msg_by_id(u, net_id, downstream_id, msg);
                 return Ok(true);
-            };
-            let first_mode = ch.modes.is_none();
-            ch.modes = Some(ChannelModes::new());
-            ircutil::apply_channel_modes(
-                ch.modes.as_mut(),
-                &mut ch.members,
-                &avail_memberships,
-                &avail_modes,
-                &mode_str,
-                &mode_args,
-            )
-            .map_err(|e| anyhow!(e))?;
-            let detached = u.networks[ni]
-                .channels
-                .get(&channel)
-                .is_some_and(|c| c.detached);
-            if first_mode && !detached {
+            }
+            if first_mode && !u.networks[ni].is_detached(channel) {
                 forward_message(u, net_id, msg);
             }
         }
@@ -271,11 +194,7 @@ pub(super) fn handle_message(
             };
             let first = ch.creation_time.is_empty();
             ch.creation_time = msg.params[2].clone();
-            let detached = u.networks[ni]
-                .channels
-                .get(&channel)
-                .is_some_and(|c| c.detached);
-            if first && !detached {
+            if first && !u.networks[ni].is_detached(&channel) {
                 forward_message(u, net_id, msg);
             }
         }
@@ -293,11 +212,7 @@ pub(super) fn handle_message(
                 .parse()
                 .map_err(|e| anyhow!("failed to parse topic time: {e}"))?;
             ch.topic_time = chrono::DateTime::from_timestamp(sec, 0);
-            let detached = u.networks[ni]
-                .channels
-                .get(&channel)
-                .is_some_and(|c| c.detached);
-            if first && !detached {
+            if first && !u.networks[ni].is_detached(&channel) {
                 forward_message(u, net_id, msg);
             }
         }
@@ -329,15 +244,11 @@ pub(super) fn handle_message(
                 return Ok(true);
             }
             let status = ChannelStatus::parse(&status_str).map_err(|e| anyhow!(e))?;
-            let parsed: Vec<(MembershipSet, String)> = members
-                .split(' ')
-                .filter(|s| !s.is_empty())
-                .map(|s| uc.parse_membership_prefix(s))
-                .collect();
             let ch = uc.channels.get_mut(&name).unwrap();
             ch.status = status;
-            for (ms, nick) in parsed {
-                ch.members.set(&nick, ms);
+            for s in members.split(' ').filter(|s| !s.is_empty()) {
+                let (ms, nick) = parse_membership_prefix(&uc.available_memberships, s);
+                ch.members.set(nick, ms);
             }
         }
         RPL_ENDOFNAMES => {
@@ -353,11 +264,7 @@ pub(super) fn handle_message(
                 bail!("received unexpected RPL_ENDOFNAMES");
             }
             ch.complete = true;
-            let detached = u.networks[ni]
-                .channels
-                .get(&name)
-                .is_some_and(|c| c.detached);
-            if !detached {
+            if !u.networks[ni].is_detached(&name) {
                 let net = &u.networks[ni];
                 let uch = net.conn.as_ref().unwrap().channels.get(&name).unwrap();
                 for dc in u
@@ -419,6 +326,105 @@ pub(super) fn handle_message(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+impl UpstreamChannel {
+    fn new(name: &str, cm: CaseMapping) -> UpstreamChannel {
+        UpstreamChannel {
+            name: name.to_owned(),
+            topic: String::new(),
+            topic_who: None,
+            topic_time: None,
+            status: ChannelStatus::Public,
+            modes: None,
+            creation_time: String::new(),
+            members: CaseMappingMap::new(cm),
+            complete: false,
+            detach_timer: None,
+        }
+    }
+}
+
+/// Forgets a channel we left, and the cached info of the users we don't
+/// share a channel with anymore.
+fn forget_channel(uc: &mut UpstreamConn, cm: CaseMapping, name: &str) {
+    let Some(mut uch) = uc.channels.del(name) else {
+        return;
+    };
+    uch.stop_auto_detach();
+    for nick in uch.members.keys() {
+        if !should_cache_user_info(cm, uc, nick) {
+            uc.users.del(nick);
+        }
+    }
+}
+
+/// Removes a member who left a channel.
+fn remove_member(uc: &mut UpstreamConn, cm: CaseMapping, channel: &str, nick: &str) -> Result<()> {
+    let Some(uch) = uc.channels.get_mut(channel) else {
+        bail!("unknown channel {channel:?}");
+    };
+    uch.members.del(nick);
+    if !should_cache_user_info(cm, uc, nick) {
+        uc.users.del(nick);
+    }
+    Ok(())
+}
+
+/// Applies a mode change to a channel we're in. reset clears its modes
+/// first, for a full mode list (RPL_CHANNELMODEIS). Returns the channel's
+/// name, or None if we're not in it.
+fn apply_channel_modes(
+    uc: &mut UpstreamConn,
+    name: &str,
+    mode_str: &str,
+    args: &[String],
+    reset: bool,
+) -> Result<Option<String>> {
+    let Some(ch) = uc.channels.get_mut(name) else {
+        return Ok(None);
+    };
+    if reset {
+        ch.modes = Some(ChannelModes::new());
+    }
+    ircutil::apply_channel_modes(
+        ch.modes.as_mut(),
+        &mut ch.members,
+        &uc.available_memberships,
+        &uc.available_channel_modes,
+        mode_str,
+        args,
+    )
+    .map_err(|e| anyhow!(e))?;
+    Ok(Some(ch.name.clone()))
+}
+
+/// Parses a NAMES entry: membership prefixes, then the nick.
+fn parse_membership_prefix<'a>(memberships: &[Membership], s: &'a str) -> (MembershipSet, &'a str) {
+    let b = s.as_bytes();
+    let mut ms = MembershipSet::default();
+    let mut i = 0;
+    for m in memberships {
+        if i >= b.len() {
+            break;
+        }
+        if b[i] == m.prefix {
+            ms.0.push(*m);
+            i += 1;
+        }
+    }
+    (ms, s.get(i..).unwrap_or(s))
+}
+
+/// Produces a JOIN or PART for one of the channels it lists.
+fn produce_for_channel(u: &mut User, ni: usize, ch: &str, msg: &Message) {
+    if msg.params[0] == ch {
+        produce(u, ni, ch, msg, 0, false);
+    } else {
+        let mut ch_msg = msg.clone();
+        ch_msg.params[0] = ch.to_owned();
+        produce(u, ni, ch, &ch_msg, 0, false);
+    }
 }
 
 pub fn update_channel_auto_detach(u: &mut User, ni: usize, name: &str) {

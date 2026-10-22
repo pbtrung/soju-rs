@@ -40,14 +40,24 @@ impl DeliveredStore {
             .unwrap_or_default()
     }
 
+    /// Stores the ID of the last message a client received from a target.
+    /// This runs for each message delivered to clients without
+    /// chathistory: existing entries are updated in place.
     pub fn store_id(&mut self, target: &str, client: &str, msg_id: &str) {
-        if !self.m.has(target) {
-            self.m.set(target, HashMap::new());
+        let Some(clients) = self.m.get_mut(target) else {
+            let clients = HashMap::from([(client.to_owned(), msg_id.to_owned())]);
+            self.m.set(target, clients);
+            return;
+        };
+        match clients.get_mut(client) {
+            Some(id) => {
+                id.clear();
+                id.push_str(msg_id);
+            }
+            None => {
+                clients.insert(client.to_owned(), msg_id.to_owned());
+            }
         }
-        self.m
-            .get_mut(target)
-            .unwrap()
-            .insert(client.to_owned(), msg_id.to_owned());
     }
 
     pub fn targets(&self) -> Vec<String> {
@@ -75,16 +85,13 @@ impl User {
         let net = &self.networks[ni];
         let mut receipts: Vec<db::DeliveryReceipt> = net
             .delivered
-            .targets()
-            .into_iter()
-            .filter_map(|target| {
-                let msg_id = net.delivered.load_id(&target, client);
-                if msg_id.is_empty() {
-                    return None;
-                }
+            .m
+            .iter()
+            .filter_map(|(target, clients)| {
+                let msg_id = clients.get(client).filter(|id| !id.is_empty())?;
                 Some(db::DeliveryReceipt {
-                    target,
-                    internal_msg_id: msg_id,
+                    target: target.to_owned(),
+                    internal_msg_id: msg_id.clone(),
                     ..Default::default()
                 })
             })
@@ -99,5 +106,26 @@ impl User {
                 "failed to store delivery receipts for client {client:?}: {e}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xirc::CASEMAPPING_RFC1459;
+
+    #[test]
+    fn store() {
+        let mut d = DeliveredStore::new(CASEMAPPING_RFC1459);
+        d.store_id("#Chan", "phone", "1");
+        d.store_id("#chan", "phone", "22");
+        d.store_id("#chan", "laptop", "3");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.load_id("#CHAN", "phone"), "22");
+        assert_eq!(d.load_id("#chan", "laptop"), "3");
+        assert_eq!(d.load_id("#chan", "tablet"), "");
+        let mut clients = d.clients();
+        clients.sort();
+        assert_eq!(clients, ["laptop", "phone"]);
     }
 }

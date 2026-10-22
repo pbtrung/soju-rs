@@ -94,6 +94,11 @@ impl Network {
         (self.casemap)(a) == (self.casemap)(b)
     }
 
+    /// Whether a saved channel is detached.
+    pub fn is_detached(&self, channel: &str) -> bool {
+        self.channels.get(channel).is_some_and(|c| c.detached)
+    }
+
     pub fn sync_snapshot(&self) {
         *self.record_snapshot.lock().unwrap() = self.record.clone();
     }

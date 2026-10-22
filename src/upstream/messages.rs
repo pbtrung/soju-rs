@@ -424,18 +424,13 @@ pub fn produce(
 
     // Don't forward messages if it's a detached channel
     let net = &u.networks[ni];
-    let detached = net.channels.get(target).is_some_and(|c| c.detached);
+    let detached = net.is_detached(target);
     let net_id = net.id();
-    let cm = net.casemap;
-    let our_nick = net
-        .conn
-        .as_ref()
-        .map(|uc| uc.nick.clone())
-        .unwrap_or_default();
+    let our_nick = net.conn.as_ref().map_or("", |uc| uc.nick.as_str());
     let from_us = msg
         .prefix
         .as_ref()
-        .is_some_and(|p| cm(&p.name) == cm(&our_nick));
+        .is_some_and(|p| net.equal_casemap(&p.name, our_nick));
     for dc in dcs_for(&mut u.downstreams, net_id) {
         if blocked && !dc.metadata_subs.contains("soju.im/blocked") {
             continue;

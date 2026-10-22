@@ -565,22 +565,6 @@ impl UpstreamConn {
         }
     }
 
-    fn parse_membership_prefix(&self, s: &str) -> (MembershipSet, String) {
-        let b = s.as_bytes();
-        let mut ms = MembershipSet::default();
-        let mut i = 0;
-        for m in &self.available_memberships {
-            if i >= b.len() {
-                break;
-            }
-            if b[i] == m.prefix {
-                ms.0.push(*m);
-                i += 1;
-            }
-        }
-        (ms, s.get(i..).unwrap_or(s).to_owned())
-    }
-
     fn handle_supported_caps(&mut self, caps: &str) {
         for s in caps.split_whitespace() {
             let (k, v) = match s.split_once('=') {
