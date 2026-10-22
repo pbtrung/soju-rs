@@ -324,6 +324,10 @@ impl Server {
             .await?
             .is_some()
         {
+            // Another connection may have just created it
+            if let Some(u) = self.get_user(username) {
+                return Ok(u);
+            }
             bail!(
                 "user {username:?} exists in the DB but hasn't been loaded by the bouncer -- a restart may help"
             );
@@ -334,12 +338,17 @@ impl Server {
         // Can't find the user in the DB -- try to create it
         let record = db::User::new(username);
         let srv = self.clone();
-        tokio::task::spawn_blocking(move || srv.create_user(record))
+        let res = tokio::task::spawn_blocking(move || srv.create_user(record))
             .await
-            .map_err(|e| anyhow!("database task failed: {e}"))?
-            .map_err(|e| {
-                anyhow!("failed to automatically create user {username:?} after successful authentication: {e}")
-            })
+            .map_err(|e| anyhow!("database task failed: {e}"))?;
+        match res {
+            Ok(u) => Ok(u),
+            // Another connection created it meanwhile
+            Err(_) if let Some(u) = self.get_user(username) => Ok(u),
+            Err(e) => Err(anyhow!(
+                "failed to automatically create user {username:?} after successful authentication: {e}"
+            )),
+        }
     }
 
     pub fn stats(&self) -> ServerStats {
@@ -600,4 +609,26 @@ pub async fn load_server_config(raw: &config::Server) -> Result<ServerConfig> {
         motd,
         auth,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_user_on_auth_concurrently() {
+        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+        let mut cfg = ServerConfig::default();
+        cfg.basic.enable_users_on_auth = true;
+        srv.set_config(cfg);
+        srv.start().unwrap();
+        // e.g. a client connecting to several networks on first login
+        let results =
+            futures_util::future::join_all((0..8).map(|_| srv.get_or_create_user("alice"))).await;
+        for res in results {
+            res.unwrap();
+        }
+        assert_eq!(srv.db.list_users().unwrap().len(), 1);
+        srv.shutdown().await;
+    }
 }
