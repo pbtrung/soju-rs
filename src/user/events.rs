@@ -330,6 +330,7 @@ impl User {
                     self.networks[ni].stop.cancel();
                     if let Some(uc) = &self.networks[ni].conn {
                         uc.conn.close();
+                        uc.stop_timers();
                     }
                     for client in self.networks[ni].delivered.clients() {
                         self.store_client_delivery_receipts(ni, &client);
