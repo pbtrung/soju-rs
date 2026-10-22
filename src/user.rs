@@ -90,6 +90,25 @@ pub enum Event {
         params: Vec<String>,
         tx: mpsc::UnboundedSender<UserRunMsg>,
     },
+    /// A line of output of a deferred BouncerServ command run by a
+    /// downstream.
+    ServiceReply {
+        dc_id: u64,
+        text: String,
+    },
+    /// Asks whether the user has a network, by address or name.
+    HasNetwork {
+        name: String,
+        reply: oneshot::Sender<bool>,
+    },
+    /// The test notification of a new Web Push subscription was sent.
+    WebPushTested {
+        dc_id: u64,
+        label: String,
+        network_id: i64,
+        sub: db::WebPushSubscription,
+        res: Result<(), String>,
+    },
 }
 
 pub enum UserRunMsg {
@@ -490,9 +509,8 @@ impl User {
 
         while let Some(ev) = rx.recv().await {
             // Event handlers are synchronous and make blocking SQLite calls
-            // whose results they need: let the runtime move its other tasks
-            // to another worker meanwhile.
-            tokio::task::block_in_place(|| self.handle_event(ev));
+            // whose results they need
+            crate::server::blocking(|| self.handle_event(ev));
             if self.stopped {
                 break;
             }
@@ -725,8 +743,37 @@ impl User {
                 for line in ctx.take_prints() {
                     let _ = tx.send(UserRunMsg::Message(line));
                 }
-                let _ = tx.send(UserRunMsg::Done(res.map_err(|e| e.to_string())));
+                match (res, ctx.take_deferred()) {
+                    (Ok(()), Some(deferred)) => {
+                        tokio::spawn(async move {
+                            let print_tx = tx.clone();
+                            let print = Box::new(move |line| {
+                                let _ = print_tx.send(UserRunMsg::Message(line));
+                            });
+                            let res = deferred(print).await;
+                            let _ = tx.send(UserRunMsg::Done(res.map_err(|e| e.to_string())));
+                        });
+                    }
+                    (res, _) => {
+                        let _ = tx.send(UserRunMsg::Done(res.map_err(|e| e.to_string())));
+                    }
+                }
             }
+            Event::ServiceReply { dc_id, text } => {
+                if let Some(i) = self.dc_index(dc_id) {
+                    downstream::send_service_privmsg(&mut self.downstreams[i], &text);
+                }
+            }
+            Event::HasNetwork { name, reply } => {
+                let _ = reply.send(self.get_network(&name).is_some());
+            }
+            Event::WebPushTested {
+                dc_id,
+                label,
+                network_id,
+                sub,
+                res,
+            } => crate::downstream_cmds::web_push_tested(self, dc_id, label, network_id, sub, res),
             Event::Stop => {
                 for dc in &self.downstreams {
                     dc.conn.close();
@@ -1376,6 +1423,25 @@ pub fn dcs_for(
     net_id: i64,
 ) -> impl Iterator<Item = &mut DownstreamConn> {
     dcs.iter_mut().filter(move |d| d.network_id == Some(net_id))
+}
+
+/// Runs the rest of a BouncerServ command run by a downstream, replying to
+/// it through the user's event loop.
+pub fn spawn_deferred_service_command(
+    tx: mpsc::UnboundedSender<Event>,
+    dc_id: u64,
+    deferred: crate::service::Deferred,
+) {
+    tokio::spawn(async move {
+        let print_tx = tx.clone();
+        let print = Box::new(move |text| {
+            let _ = print_tx.send(Event::ServiceReply { dc_id, text });
+        });
+        if let Err(e) = deferred(print).await {
+            let text = format!("error: {e}");
+            let _ = tx.send(Event::ServiceReply { dc_id, text });
+        }
+    });
 }
 
 pub fn dc_ids_for(dcs: &[DownstreamConn], net_id: i64) -> Vec<u64> {

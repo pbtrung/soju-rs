@@ -881,13 +881,17 @@ fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
                 for line in text.split('\n').filter(|l| !l.trim().is_empty()) {
                     let res = crate::service::handle_service_privmsg(u, &mut ctx, line);
                     let prints = ctx.take_prints();
+                    let deferred = ctx.take_deferred();
                     if let Some(i) = u.dc_index(dc_id) {
                         for line in prints {
                             send_service_privmsg(&mut u.downstreams[i], &line);
                         }
-                        if let Err(e) = res {
+                        if let Err(e) = &res {
                             send_service_privmsg(&mut u.downstreams[i], &format!("error: {e}"));
                         }
+                    }
+                    if let (Ok(()), Some(deferred)) = (res, deferred) {
+                        crate::user::spawn_deferred_service_command(u.tx.clone(), dc_id, deferred);
                     }
                 }
             }
@@ -2018,6 +2022,63 @@ fn handle_bouncer(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     Ok(())
 }
 
+/// Finishes WEBPUSH REGISTER, once the test notification was sent.
+pub fn web_push_tested(
+    u: &mut User,
+    dc_id: u64,
+    label: String,
+    network_id: i64,
+    mut sub: db::WebPushSubscription,
+    res: Result<(), String>,
+) {
+    let Some(i) = u.dc_index(dc_id) else {
+        return;
+    };
+    if !label.is_empty() {
+        dc!(u, i).label = Some(LabelContext {
+            label,
+            ..Default::default()
+        });
+    }
+    let user_id = u.record.id;
+    let res = (|| {
+        if let Err(e) = res {
+            logf!(
+                dc!(u, i).logger,
+                "failed to send Web push notification to endpoint {:?}: {e}",
+                sub.endpoint
+            );
+            return Err(fail(&[
+                "WEBPUSH",
+                "INVALID_PARAMS",
+                "REGISTER",
+                "Invalid endpoint",
+            ]));
+        }
+        if let Err(e) = u
+            .srv
+            .db
+            .store_web_push_subscription(user_id, network_id, &mut sub)
+        {
+            logf!(
+                dc!(u, i).logger,
+                "failed to store Web push subscription: {e}"
+            );
+            return Err(fail(&[
+                "WEBPUSH",
+                "INTERNAL_ERROR",
+                "REGISTER",
+                "Internal error",
+            ]));
+        }
+        dc!(u, i).send_message(msg!("WEBPUSH", "REGISTER", sub.endpoint.clone()));
+        Ok(())
+    })();
+    if let Err(e) = finish_message(&mut u.downstreams[i], res) {
+        logf!(dc!(u, i).logger, "failed to handle WEBPUSH REGISTER: {e}");
+    }
+}
+
 fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     if !dc!(u, i).caps.is_enabled("soju.im/webpush") {
         return Err(unknown_command(&msg.command));
@@ -2109,43 +2170,30 @@ fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                         "Invalid endpoint",
                     ]));
                 }
-                let test = msg!(
-                    "NOTE",
-                    "WEBPUSH",
-                    "REGISTERED",
-                    "Push notifications enabled"
-                );
-                if let Err(e) =
-                    crate::server::block_on(crate::user::send_web_push(&sender, &new_sub, &test))
-                {
-                    logf!(
-                        dc!(u, i).logger,
-                        "failed to send Web push notification to endpoint {:?}: {e}",
-                        new_sub.endpoint
-                    );
-                    return Err(fail(&[
+                // The test notification is sent in the background: the reply
+                // comes with Event::WebPushTested
+                let dc_id = dc!(u, i).id;
+                let label = dc!(u, i).take_label();
+                let tx = u.tx.clone();
+                tokio::spawn(async move {
+                    let test = msg!(
+                        "NOTE",
                         "WEBPUSH",
-                        "INVALID_PARAMS",
-                        &subcommand,
-                        "Invalid endpoint",
-                    ]));
-                }
-                if let Err(e) =
-                    u.srv
-                        .db
-                        .store_web_push_subscription(user_id, network_id, &mut new_sub)
-                {
-                    logf!(
-                        dc!(u, i).logger,
-                        "failed to store Web push subscription: {e}"
+                        "REGISTERED",
+                        "Push notifications enabled"
                     );
-                    return Err(fail(&[
-                        "WEBPUSH",
-                        "INTERNAL_ERROR",
-                        &subcommand,
-                        "Internal error",
-                    ]));
-                }
+                    let res = crate::user::send_web_push(&sender, &new_sub, &test)
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(Event::WebPushTested {
+                        dc_id,
+                        label,
+                        network_id,
+                        sub: new_sub,
+                        res,
+                    });
+                });
+                return Ok(());
             }
             dc!(u, i).send_message(msg!("WEBPUSH", "REGISTER", endpoint));
         }

@@ -15,6 +15,41 @@ use soju::server::{Server, ServerConfig};
 use soju::xirc;
 use tokio::net::TcpListener;
 
+/// Runs each test on both runtimes soju may run on (see bin/soju.rs): the
+/// current-thread one has no other worker to run tasks while one blocks.
+macro_rules! test_on_both_runtimes {
+    ($($name:ident),* $(,)?) => {
+        $(
+            mod $name {
+                #[tokio::test(flavor = "multi_thread")]
+                async fn multi_thread() {
+                    super::$name().await
+                }
+
+                #[tokio::test(flavor = "current_thread")]
+                async fn current_thread() {
+                    super::$name().await
+                }
+            }
+        )*
+    };
+}
+
+test_on_both_runtimes!(
+    broadcast,
+    chat_history_db,
+    statusmsg_keeps_sigil,
+    upstream_malformed_messages,
+    cap_req_removal,
+    labeled_response_ack,
+    sasl_errors,
+    chat_history_params,
+    read_marker,
+    upstream_clock_skew,
+    multiline,
+    service_other_user,
+);
+
 const TEST_USERNAME: &str = "soju-test-user";
 const TEST_PASSWORD: &str = TEST_USERNAME;
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,9 +108,15 @@ struct Env {
 }
 
 async fn setup(msg_store: MsgStore) -> Env {
+    setup_with(msg_store, |_, _| {}).await
+}
+
+/// Like setup, with f customizing the test user and database first.
+async fn setup_with(msg_store: MsgStore, f: impl FnOnce(&Database, &mut database::User)) -> Env {
     let db = Database::open_in_memory().unwrap();
     let mut user = database::User::new(TEST_USERNAME);
     user.set_password(TEST_PASSWORD).unwrap();
+    f(&db, &mut user);
     db.store_user(&mut user).unwrap();
 
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -170,7 +211,6 @@ async fn register_upstream(c: &mut TestConn) {
     c.send(msg!("422", nick, "No MOTD").with_prefix(p));
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn broadcast() {
     let env = setup(MsgStore {
         driver: MsgStoreDriver::Db,
@@ -339,7 +379,6 @@ async fn chat_history(msg_store: MsgStore) {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn chat_history_db() {
     chat_history(MsgStore {
         driver: MsgStoreDriver::Db,
@@ -425,7 +464,6 @@ fn db_store() -> MsgStore {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn statusmsg_keeps_sigil() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -444,7 +482,6 @@ async fn statusmsg_keeps_sigil() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn upstream_malformed_messages() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -472,7 +509,6 @@ async fn upstream_malformed_messages() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn cap_req_removal() {
     let env = setup(db_store()).await;
     let mut dc = connect_downstream(&env.srv);
@@ -501,7 +537,6 @@ async fn cap_req_removal() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn labeled_response_ack() {
     let env = setup(db_store()).await;
     // labeled-response is passed through from the upstream: use a bouncer
@@ -522,7 +557,6 @@ async fn labeled_response_ack() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn sasl_errors() {
     let env = setup(db_store()).await;
 
@@ -561,7 +595,6 @@ async fn sasl_errors() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn chat_history_params() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -628,7 +661,6 @@ async fn chat_history_params() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn read_marker() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -655,7 +687,6 @@ async fn read_marker() {
     env.srv.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn upstream_clock_skew() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -748,7 +779,6 @@ async fn read_multiline(c: &mut TestConn) -> (Message, Vec<Message>) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
 async fn multiline() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -856,5 +886,63 @@ async fn multiline() {
     let m = ml.expect("FAIL").await;
     assert_eq!(m.tags.get("label"), Some("l2"));
     assert_eq!(m.params[..3], ["BATCH", "MULTILINE_MAX_LINES", "4"]);
+    env.srv.shutdown().await;
+}
+
+/// Reads the next BouncerServ reply.
+async fn read_service_reply(c: &mut TestConn) -> String {
+    loop {
+        let m = read_until(c, "PRIVMSG").await;
+        if m.prefix.as_ref().is_some_and(|p| p.name == "BouncerServ") {
+            return m.params[1].clone();
+        }
+    }
+}
+
+/// BouncerServ commands waiting on another user's event loop.
+async fn service_other_user() {
+    let env = setup_with(db_store(), |db, user| {
+        user.admin = true;
+        db.store_user(&mut database::User::new("other")).unwrap();
+    })
+    .await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream(&mut uc).await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream(&mut dc, &env.network).await;
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "user update other -max-networks 5"
+    ));
+    assert_eq!(read_service_reply(&mut dc).await, r#"updated user "other""#);
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "user run other user update -max-networks 3"
+    ));
+    assert_eq!(read_service_reply(&mut dc).await, r#"updated user "other""#);
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "user run other network status"
+    ));
+    let reply = read_service_reply(&mut dc).await;
+    assert!(!reply.starts_with("error:"), "unexpected reply: {reply}");
+
+    let hash = {
+        use sha1::{Digest, Sha1};
+        hex::encode(&Sha1::digest(b"other")[..3])
+    };
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        format!("user delete other {hash}")
+    ));
+    assert_eq!(read_service_reply(&mut dc).await, r#"deleted user "other""#);
+    assert!(env.srv.get_user("other").is_none());
     env.srv.shutdown().await;
 }

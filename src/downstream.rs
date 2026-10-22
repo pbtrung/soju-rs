@@ -436,6 +436,9 @@ pub struct Registration {
     pub network_id: i64,
     pub negotiating_caps: bool,
     pub auth_username: String,
+    /// Whether the server of the requested new network was found reachable,
+    /// see check_new_network.
+    pub server_checked: bool,
 }
 
 pub struct DownstreamConn {
@@ -1151,7 +1154,7 @@ fn begin_message(dc: &mut DownstreamConn, msg: &Message) {
 }
 
 /// Sends an IRC error to the client, or propagates other errors.
-fn finish_message(dc: &mut DownstreamConn, res: Result<()>) -> Result<()> {
+pub fn finish_message(dc: &mut DownstreamConn, res: Result<()>) -> Result<()> {
     if let Err(e) = res {
         match e.downcast::<IrcError>() {
             Ok(irc_err) => {
@@ -1635,6 +1638,40 @@ async fn sanity_check_server(addr: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks that the server of a new network requested by a connection is
+/// reachable, before load_network auto-creates the network. This runs
+/// before the connection is handed to its user, as it may take a while:
+/// the user's event loop must not wait on it.
+async fn check_new_network(user: &crate::user::UserHandle, dc: &mut DownstreamConn) -> Result<()> {
+    let r = dc.registration.as_mut().unwrap();
+    if r.network_id != 0 || r.network_name.is_empty() || r.network_name == "*" {
+        return Ok(());
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let name = r.network_name.clone();
+    if !user.send(crate::user::Event::HasNetwork { name, reply: tx }) {
+        return Ok(());
+    }
+    if rx.await.unwrap_or(true) {
+        return Ok(());
+    }
+    let mut addr = r.network_name.clone();
+    if !addr.contains(':') {
+        addr.push_str(":6697");
+    }
+    logf!(dc.logger, "trying to connect to new network {addr:?}");
+    if let Err(e) = sanity_check_server(&addr).await {
+        logf!(dc.logger, "failed to connect to {addr:?}: {e}");
+        return Err(irc_error(msg!(
+            ERR_PASSWDMISMATCH,
+            dc.nick.clone(),
+            format!("Failed to connect to {:?}", r.network_name)
+        )));
+    }
+    r.server_checked = true;
+    Ok(())
+}
+
 fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
     let i = u.dc_index(dc_id).unwrap();
     let dc = &u.downstreams[i];
@@ -1668,16 +1705,8 @@ fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
     let ni = match u.get_network(&r.network_name) {
         Some(ni) => ni,
         None => {
-            let mut addr = r.network_name.clone();
-            if !addr.contains(':') {
-                addr.push_str(":6697");
-            }
-            logf!(dc.logger, "trying to connect to new network {addr:?}");
-            if let Err(e) = crate::server::block_on(sanity_check_server(&addr)) {
-                logf!(
-                    u.downstreams[i].logger,
-                    "failed to connect to {addr:?}: {e}"
-                );
+            // The network was deleted since check_new_network
+            if !r.server_checked {
                 return Err(irc_error(msg!(
                     ERR_PASSWDMISMATCH,
                     nick,
@@ -2654,6 +2683,17 @@ pub async fn serve(
             return;
         }
     };
+
+    if let Err(e) = check_new_network(&user, &mut dc).await {
+        let mut m = match e.downcast::<IrcError>() {
+            Ok(irc_err) => irc_err.0,
+            Err(_) => msg!("ERROR", "Internal server error"),
+        };
+        m.prefix = Some(srv.prefix());
+        dc.send_message(m);
+        conn.shutdown();
+        return;
+    }
 
     let logger = dc.logger.clone();
     if !user.send(crate::user::Event::DownstreamConnected(Box::new(dc))) {

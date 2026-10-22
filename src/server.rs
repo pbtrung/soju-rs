@@ -2,7 +2,6 @@
 //! background tasks (port of upstream's server.go).
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
@@ -34,11 +33,17 @@ pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 /// message-expiry.
 const VACUUM_FREE_RATIO: f64 = 0.25;
 
-/// Runs a future to completion from synchronous code running on the tokio
-/// runtime (e.g. a user's event handlers), blocking the current worker
-/// thread like upstream blocks its per-user goroutine.
-pub fn block_on<F: Future>(fut: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+/// Runs synchronous code that may block on SQLite calls (e.g. a user's
+/// event handlers). On a multi-threaded runtime, the runtime moves its
+/// other tasks to another worker meanwhile. A current-thread runtime has no
+/// other worker: the code just runs.
+pub fn blocking<R>(f: impl FnOnce() -> R) -> R {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    if Handle::current().runtime_flavor() == RuntimeFlavor::MultiThread {
+        tokio::task::block_in_place(f)
+    } else {
+        f()
+    }
 }
 
 /// The run-time configuration, reloadable on SIGHUP.
@@ -498,18 +503,30 @@ impl Server {
                     }
                     let text = msg.params[0].clone();
                     let srv = self.clone();
-                    let (res, prints) = tokio::task::spawn_blocking(move || {
+                    let (res, prints, deferred) = tokio::task::spawn_blocking(move || {
                         let rt = tokio::runtime::Handle::current();
                         let _guard = rt.enter();
                         let mut ctx = crate::service::ServiceContext::for_user(srv, true, false);
                         let res = crate::service::handle_global_service_command(&mut ctx, &text);
-                        (res, ctx.take_prints())
+                        (res, ctx.take_prints(), ctx.take_deferred())
                     })
                     .await
-                    .unwrap_or_else(|e| (Err(anyhow!("internal error: {e}")), Vec::new()));
+                    .unwrap_or_else(|e| (Err(anyhow!("internal error: {e}")), Vec::new(), None));
                     for line in prints {
                         conn.send_message(msg!("PRIVMSG", "*", line).with_prefix(prefix.clone()));
                     }
+                    let res = match (res, deferred) {
+                        (Ok(()), Some(deferred)) => {
+                            let (conn, prefix) = (conn.clone(), prefix.clone());
+                            let print = Box::new(move |line| {
+                                conn.send_message(
+                                    msg!("PRIVMSG", "*", line).with_prefix(prefix.clone()),
+                                );
+                            });
+                            deferred(print).await
+                        }
+                        (res, _) => res,
+                    };
                     match res {
                         Err(e) => conn.send_message(
                             msg!("FAIL", msg.command.clone(), e.to_string())

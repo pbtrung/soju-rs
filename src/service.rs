@@ -1,7 +1,9 @@
 //! BouncerServ, the IRC service used to manage the bouncer (port of
 //! upstream's service.go).
 
+use std::future::Future;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
@@ -14,7 +16,7 @@ use crate::downstream::{DownstreamConn, ILLEGAL_CHAN_CHARS};
 use crate::flags::{FlagError, FlagSet, Parsed};
 use crate::irc::Message;
 use crate::ircutil::split_words;
-use crate::server::{Server, block_on};
+use crate::server::Server;
 use crate::user::{Event, User, UserRunMsg};
 use crate::{logf, msg};
 
@@ -36,7 +38,18 @@ pub struct ServiceContext {
     /// When waiting on other users gives up, if ever
     deadline: Option<tokio::time::Instant>,
     prints: Vec<String>,
+    deferred: Option<Deferred>,
 }
+
+/// Prints a line of a deferred command's output.
+pub type Print = Box<dyn FnMut(String) + Send>;
+
+/// The rest of a command that waits on other users' event loops. The event
+/// loop running the command can't block on them: with a single-threaded
+/// runtime, they would never run. The caller spawns it instead, once the
+/// command returned.
+pub type Deferred =
+    Box<dyn FnOnce(Print) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send>;
 
 impl ServiceContext {
     pub fn for_downstream(srv: Arc<Server>, admin: bool, dc: &DownstreamConn) -> ServiceContext {
@@ -49,6 +62,7 @@ impl ServiceContext {
             admin,
             deadline: Some(tokio::time::Instant::now() + HANDLE_DOWNSTREAM_MESSAGE_TIMEOUT),
             prints: Vec::new(),
+            deferred: None,
         }
     }
 
@@ -66,6 +80,7 @@ impl ServiceContext {
             deadline: in_event_loop
                 .then(|| tokio::time::Instant::now() + HANDLE_DOWNSTREAM_MESSAGE_TIMEOUT),
             prints: Vec::new(),
+            deferred: None,
         }
     }
 
@@ -77,14 +92,27 @@ impl ServiceContext {
         std::mem::take(&mut self.prints)
     }
 
-    /// Blocks on a future, e.g. a reply from another user's event loop.
-    /// Returns None if the deadline is reached first: two users waiting on
-    /// each other would otherwise deadlock.
-    fn wait<F: std::future::Future>(&self, fut: F) -> Option<F::Output> {
-        match self.deadline {
-            Some(d) => block_on(tokio::time::timeout_at(d, fut)).ok(),
-            None => Some(block_on(fut)),
-        }
+    /// Takes the rest of the command, if it waits on other users.
+    pub fn take_deferred(&mut self) -> Option<Deferred> {
+        self.deferred.take()
+    }
+
+    /// Continues the command with f, once the caller's event loop is free.
+    fn defer<F, Fut>(&mut self, f: F)
+    where
+        F: FnOnce(Print) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.deferred = Some(Box::new(move |print| Box::pin(f(print))));
+    }
+}
+
+/// Waits on a future, e.g. a reply from another user's event loop. Returns
+/// None if the deadline is reached first.
+async fn wait<F: Future>(deadline: Option<tokio::time::Instant>, fut: F) -> Option<F::Output> {
+    match deadline {
+        Some(d) => tokio::time::timeout_at(d, fut).await.ok(),
+        None => Some(fut.await),
     }
 }
 
@@ -1068,11 +1096,16 @@ fn handle_user_update(
             bail!("unknown username {username:?}");
         }
         // TODO: send context to the other side
-        ctx.wait(rx)
-            .ok_or_else(|| anyhow!("context deadline exceeded"))?
-            .map_err(|_| anyhow!("timeout executing command"))?
-            .map_err(|e| anyhow!(e))?;
-        ctx.print(format!("updated user {username:?}"));
+        let deadline = ctx.deadline;
+        ctx.defer(move |mut print| async move {
+            wait(deadline, rx)
+                .await
+                .ok_or_else(|| anyhow!("context deadline exceeded"))?
+                .map_err(|_| anyhow!("timeout executing command"))?
+                .map_err(|e| anyhow!(e))?;
+            print(format!("updated user {username:?}"));
+            Ok(())
+        });
     } else {
         let u = u.unwrap();
         if admin.is_some() {
@@ -1151,14 +1184,18 @@ fn handle_user_delete(
         return Ok(());
     }
 
-    if ctx.wait(handle.stop()).is_none() {
-        bail!("failed to stop user: context deadline exceeded");
-    }
-    ctx.srv
-        .db
-        .delete_user(user_id)
-        .map_err(|e| anyhow!("failed to delete user: {e}"))?;
-    ctx.print(format!("deleted user {username:?}"));
+    let deadline = ctx.deadline;
+    let srv = ctx.srv.clone();
+    ctx.defer(move |mut print| async move {
+        if wait(deadline, handle.stop()).await.is_none() {
+            bail!("failed to stop user: context deadline exceeded");
+        }
+        db::run(&srv.db, move |db| db.delete_user(user_id))
+            .await
+            .map_err(|e| anyhow!("failed to delete user: {e}"))?;
+        print(format!("deleted user {username:?}"));
+        Ok(())
+    });
     Ok(())
 }
 
@@ -1187,13 +1224,17 @@ fn handle_user_run(
     }) {
         bail!("unknown username {username:?}");
     }
-    loop {
-        match ctx.wait(rx.recv()).flatten() {
-            Some(UserRunMsg::Message(m)) => ctx.print(m),
-            Some(UserRunMsg::Done(res)) => return res.map_err(|e| anyhow!(e)),
-            None => bail!("timeout executing command"),
+    let deadline = ctx.deadline;
+    ctx.defer(move |mut print| async move {
+        loop {
+            match wait(deadline, rx.recv()).await.flatten() {
+                Some(UserRunMsg::Message(m)) => print(m),
+                Some(UserRunMsg::Done(res)) => return res.map_err(|e| anyhow!(e)),
+                None => bail!("timeout executing command"),
+            }
         }
-    }
+    });
+    Ok(())
 }
 
 fn handle_channel_status(

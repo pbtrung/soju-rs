@@ -11,6 +11,12 @@ use soju::logger::Logger;
 use soju::server::{self, Server};
 use soju::{logf, tls};
 
+// glibc's malloc fragments with the many small, short-lived allocations of
+// IRC traffic and rarely returns freed memory to the OS: resident memory
+// slowly grows with uptime. mimalloc reuses freed memory and returns it.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const USAGE: &str = "Usage of soju:
   -config string
     \tpath to configuration file
@@ -109,7 +115,16 @@ fn main() -> ExitCode {
         println!("soju-rs v{}", soju::VERSION);
         return ExitCode::SUCCESS;
     }
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    // With a single CPU, a multi-threaded runtime has nothing to run in
+    // parallel: it only adds thread hand-offs on every event, and spreads
+    // allocations over more threads.
+    let single_cpu = std::thread::available_parallelism().map_or(true, |n| n.get() == 1);
+    let mut builder = if single_cpu {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    let rt = builder
         .enable_all()
         .build()
         .expect("failed to start the async runtime");
