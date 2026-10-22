@@ -63,11 +63,11 @@ struct Env {
 
 /// Starts a bouncer with a registered upstream and downstream connection.
 async fn setup() -> Env {
-    setup_with(Vec::new()).await
+    setup_with(Vec::new(), "").await
 }
 
-/// Like setup, with saved channels.
-async fn setup_with(channels: Vec<db::Channel>) -> Env {
+/// Like setup, with saved channels, and caps enabled on both connections.
+async fn setup_with(channels: Vec<db::Channel>, caps: &str) -> Env {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
     user.set_password(USERNAME).unwrap();
@@ -95,6 +95,13 @@ async fn setup_with(channels: Vec<db::Channel>) -> Env {
     upstream.expect("CAP").await;
     upstream.expect("NICK").await;
     upstream.expect("USER").await;
+    if !caps.is_empty() {
+        upstream.send(msg!("CAP", "*", "LS", caps));
+        let m = upstream.expect("CAP").await;
+        assert_eq!(m.params[0], "REQ", "invalid CAP: {m}");
+        upstream.send(msg!("CAP", "*", "ACK", m.params[1].clone()));
+        upstream.expect("CAP").await;
+    }
     for m in [
         msg!("001", USERNAME, "Welcome!"),
         msg!("002", USERNAME, "Your host is test"),
@@ -127,6 +134,7 @@ async fn setup_with(channels: Vec<db::Channel>) -> Env {
         logger,
     ));
     let mut downstream = TestConn::new(Box::new(b));
+    downstream.send(msg!("CAP", "LS", "302"));
     downstream.send(msg!("PASS", USERNAME));
     downstream.send(msg!("NICK", USERNAME));
     downstream.send(msg!(
@@ -136,7 +144,24 @@ async fn setup_with(channels: Vec<db::Channel>) -> Env {
         "*",
         USERNAME
     ));
-    downstream.expect("001").await;
+    downstream.send(msg!("CAP", "END"));
+    downstream.read_until("001").await;
+    // Caps passed through from the upstream are available once bound to
+    // the network
+    if !caps.is_empty() {
+        let req = msg!("CAP", "REQ", caps);
+        downstream.send(req.clone());
+        loop {
+            let m = downstream.read_until("CAP").await;
+            match m.params[1].as_str() {
+                "ACK" => break,
+                // The upstream connection wasn't ready yet: wait for it
+                "NAK" => {}
+                "NEW" => downstream.send(req.clone()),
+                _ => panic!("invalid CAP: {m}"),
+            }
+        }
+    }
     // Wait for the end of the welcome burst
     downstream.send(msg!("PING", "welcome"));
     downstream.read_until("PONG").await;
@@ -230,7 +255,7 @@ async fn auto_detach() {
         detach_after,
         ..Default::default()
     };
-    let mut env = setup_with(vec![ch]).await;
+    let mut env = setup_with(vec![ch], "").await;
     let m = env.upstream.read_until("JOIN").await;
     assert_eq!(m.params[0], "#chan");
     let us = crate::irc::Prefix::full(USERNAME, "u", "host");
@@ -257,5 +282,44 @@ async fn auto_detach() {
     assert_eq!(m.params, ["#chan", "Detach"]);
     assert!(last.elapsed() >= detach_after - Duration::from_millis(50));
     assert!(start.elapsed() > detach_after * 2);
+    env.srv.shutdown().await;
+}
+
+/// A labeled response is relayed in a single labeled batch, batches nested
+/// in it included.
+#[tokio::test]
+async fn labeled_nested_batch() {
+    let mut env = setup_with(Vec::new(), "batch labeled-response message-tags").await;
+    env.downstream
+        .send(msg!("WHOIS", "bob").with_tag("label", "l1"));
+    let m = env.upstream.read_until("WHOIS").await;
+    let label = m.tags.get("label").expect("missing label").to_owned();
+
+    let p = crate::irc::Prefix::new("test");
+    let upstream_msgs = [
+        msg!("BATCH", "+o", "labeled-response").with_tag("label", &label),
+        msg!("BATCH", "+i", "example/nested").with_tag("batch", "o"),
+        msg!("311", USERNAME, "bob", "b", "host", "*", "Bob").with_tag("batch", "i"),
+        msg!("318", USERNAME, "bob", "End of /WHOIS list").with_tag("batch", "i"),
+        msg!("BATCH", "-i"),
+        msg!("BATCH", "-o"),
+    ];
+    for m in upstream_msgs {
+        env.upstream.send(m.with_prefix(p.clone()));
+    }
+
+    let m = env.downstream.expect("BATCH").await;
+    assert_eq!(m.params, ["+o", "labeled-response"]);
+    assert_eq!(m.tags.get("label"), Some("l1"));
+    let m = env.downstream.expect("BATCH").await;
+    assert_eq!(m.params, ["+i", "example/nested"]);
+    assert_eq!(m.tags.get("label"), None, "nested batch labeled: {m}");
+    assert_eq!(m.tags.get("batch"), Some("o"));
+    for cmd in ["311", "318"] {
+        let m = env.downstream.expect(cmd).await;
+        assert_eq!(m.tags.get("batch"), Some("i"));
+    }
+    assert_eq!(env.downstream.expect("BATCH").await.params, ["-i"]);
+    assert_eq!(env.downstream.expect("BATCH").await.params, ["-o"]);
     env.srv.shutdown().await;
 }

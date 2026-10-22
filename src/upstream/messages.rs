@@ -179,14 +179,19 @@ pub(super) fn handle_message(
                         if dc.id != downstream_id {
                             continue;
                         }
-                        if let Some(l) = &mut dc.label {
-                            l.label.clear();
+                        let batch =
+                            Message::new("BATCH", msg.params.clone()).with_prefix(prefix.clone());
+                        match &mut dc.label {
+                            // A batch nested in the labeled response: it
+                            // goes in the outer batch, which has the label
+                            Some(l) if !l.batch.is_empty() => dc.send_message(batch),
+                            l => {
+                                if let Some(l) = l {
+                                    l.label.clear();
+                                }
+                                dc.send_message(batch.with_tag("label", downstream_label));
+                            }
                         }
-                        dc.send_message(
-                            Message::new("BATCH", msg.params.clone())
-                                .with_prefix(prefix.clone())
-                                .with_tag("label", downstream_label),
-                        );
                     }
                 }
             } else if let Some(tag) = tag.strip_prefix('-') {
