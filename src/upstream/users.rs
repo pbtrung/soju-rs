@@ -127,7 +127,8 @@ pub(super) fn handle_message(
         }
         "QUIT" => {
             let uc = uc!(u, ni);
-            if is_our_nick(cm, uc, &prefix_name) {
+            let me = is_our_nick(cm, uc, &prefix_name);
+            if me {
                 logf!(uc.logger, "quit");
             }
             let mut log_channels = Vec::new();
@@ -137,11 +138,10 @@ pub(super) fn handle_message(
                 }
             }
             uc.users.del(&prefix_name);
-            let our_nick = uc.nick.clone();
             for ch in log_channels {
                 append_log(u, ni, &ch, msg);
             }
-            if prefix_name != our_nick {
+            if !me {
                 forward_message(u, net_id, msg);
             }
         }

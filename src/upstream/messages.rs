@@ -79,10 +79,10 @@ pub(super) fn handle_message(
                 && is_text
                 && !self_msg
             {
-                if was_detached {
-                    handle_detached_message(u, ni, &buffer_name, msg);
-                }
                 highlight = u.networks[ni].is_highlight(&u.record, msg);
+                if was_detached {
+                    handle_detached_message(u, ni, &buffer_name, msg, highlight);
+                }
                 if detach_on == db::MessageFilter::Message
                     || detach_on == db::MessageFilter::Default
                     || (detach_on == db::MessageFilter::Highlight && highlight)
@@ -329,17 +329,15 @@ pub(super) fn handle_message(
     Ok(true)
 }
 
-fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message) {
+fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message, highlight: bool) {
     let net = &u.networks[ni];
     let Some(ch) = net.channels.get(name) else {
         return;
     };
     let net_id = net.id();
-    let relay = net.detached_message_needs_relay(&u.record, ch, msg);
-    let reattach = ch.reattach_on == db::MessageFilter::Message
-        || (ch.reattach_on == db::MessageFilter::Highlight && net.is_highlight(&u.record, msg));
+    let relay = crate::user::relays_detached_message(ch, highlight);
+    let reattach = crate::user::reattaches_detached_channel(ch, highlight);
     if relay {
-        let highlight = net.is_highlight(&u.record, msg);
         for dc in dcs_for(&mut u.downstreams, net_id) {
             downstream::relay_detached_message(dc, highlight, msg);
         }

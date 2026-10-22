@@ -32,7 +32,7 @@ mod upstream_conn;
 mod webpush;
 
 pub use delivered::DeliveredStore;
-pub use network::Network;
+pub use network::{Network, reattaches_detached_channel, relays_detached_message};
 pub use webpush::{send_web_push, send_web_push_to, web_push_subscriptions};
 
 pub const RETRY_CONNECT_MIN_DELAY: Duration = Duration::from_secs(60);

@@ -104,10 +104,10 @@ impl Network {
     }
 
     /// Our current nickname on this network.
-    pub fn nick(&self, user: &db::User) -> String {
+    pub fn nick<'a>(&'a self, user: &'a db::User) -> &'a str {
         match self.upstream() {
-            Some(uc) => uc.nick.clone(),
-            None => get_nick(user, Some(&self.record)).to_owned(),
+            Some(uc) => &uc.nick,
+            None => get_nick(user, Some(&self.record)),
         }
     }
 
@@ -120,7 +120,7 @@ impl Network {
         if nick.is_empty() {
             return false;
         }
-        !self.equal_casemap(msg.prefix_name(), &nick) && ircutil::is_highlight(text, &nick)
+        !self.equal_casemap(msg.prefix_name(), nick) && ircutil::is_highlight(text, nick)
     }
 
     pub fn detached_message_needs_relay(
@@ -129,13 +129,31 @@ impl Network {
         ch: &db::Channel,
         msg: &Message,
     ) -> bool {
-        let highlight = self.is_highlight(user, msg);
-        ch.relay_detached == db::MessageFilter::Message
-            || ((ch.relay_detached == db::MessageFilter::Highlight
-                || ch.relay_detached == db::MessageFilter::Default)
-                && highlight)
+        relays_detached_message(ch, self.is_highlight(user, msg))
     }
+}
 
+/// Whether a message of a detached channel is relayed to downstreams,
+/// given whether it's a highlight.
+pub fn relays_detached_message(ch: &db::Channel, highlight: bool) -> bool {
+    match ch.relay_detached {
+        db::MessageFilter::Message => true,
+        db::MessageFilter::Highlight | db::MessageFilter::Default => highlight,
+        db::MessageFilter::None => false,
+    }
+}
+
+/// Whether a message reattaches a detached channel, given whether it's a
+/// highlight.
+pub fn reattaches_detached_channel(ch: &db::Channel, highlight: bool) -> bool {
+    match ch.reattach_on {
+        db::MessageFilter::Message => true,
+        db::MessageFilter::Highlight => highlight,
+        db::MessageFilter::Default | db::MessageFilter::None => false,
+    }
+}
+
+impl Network {
     /// Whether a nick is ours. If not connected, best-effort: use the
     /// configured nickname.
     pub fn is_our_nick(&self, user: &db::User, nick: &str) -> bool {
