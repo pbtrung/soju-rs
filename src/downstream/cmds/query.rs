@@ -276,6 +276,12 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
         "+" | "-" => {
             need_params(msg, 2)?;
             for target in msg.params[1].split(',') {
+                // An empty or spaced name (e.g. "a,,b", or a trailing
+                // parameter "a b") isn't a nickname: it would be relayed to
+                // the upstream server, and listed back in replies
+                if target.is_empty() || target.contains(' ') {
+                    continue;
+                }
                 if subcommand == "+" {
                     // Hard limit, just to avoid having downstreams fill our
                     // map
