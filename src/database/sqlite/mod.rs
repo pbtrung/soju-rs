@@ -168,6 +168,14 @@ impl Database {
         Ok(())
     }
 
+    /// Frees the page cache. After deleting expired messages, optimizing or
+    /// vacuuming, it holds pages from scanning or rewriting the whole
+    /// database, which day-to-day queries won't reuse.
+    pub fn shrink_memory(&self) -> Result<()> {
+        self.conn().execute_batch("PRAGMA shrink_memory;")?;
+        Ok(())
+    }
+
     /// Reclaims the free pages, by rewriting the whole database file.
     pub fn vacuum(&self) -> Result<()> {
         let conn = self.conn();

@@ -269,6 +269,7 @@ fn delete_messages_vacuum() {
     assert!(db.free_page_ratio().unwrap() > 0.5);
     db.optimize().unwrap();
     db.vacuum().unwrap();
+    db.shrink_memory().unwrap();
     assert_eq!(db.free_page_ratio().unwrap(), 0.0);
     assert!(size() < before / 2, "{} >= {before} / 2", size());
     let wal = std::fs::metadata(dir.join("main.db-wal")).map_or(0, |m| m.len());

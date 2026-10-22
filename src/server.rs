@@ -464,6 +464,9 @@ impl Server {
                         free * 100.0
                     );
                 }
+                self.db
+                    .shrink_memory()
+                    .map_err(|e| anyhow!("failed to shrink db memory: {e}"))?;
             }
             MsgStoreDriver::Memory => {}
         }
