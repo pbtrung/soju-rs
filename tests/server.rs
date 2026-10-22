@@ -50,6 +50,7 @@ test_on_both_runtimes!(
     service_other_user,
     chat_history_limit,
     service_blocking_work,
+    monitor_invalid_targets,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -1043,5 +1044,30 @@ async fn service_blocking_work() {
         r#"created user "created""#
     );
     assert!(env.srv.get_user("created").is_some());
+    env.srv.shutdown().await;
+}
+
+/// MONITOR ignores empty targets and targets containing spaces.
+async fn monitor_invalid_targets() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream_with(&mut uc, &["MONITOR=100"]).await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream(&mut dc, &env.network).await;
+
+    dc.send(msg!("MONITOR", "+", "a,,b"));
+    dc.send(msg!("MONITOR", "+", "c d"));
+    dc.send(msg!("MONITOR", "L"));
+    let mut names = Vec::new();
+    loop {
+        let m = dc.read().await;
+        match m.command.as_str() {
+            "732" => names.push(m.params[1].clone()),
+            "733" => break,
+            _ => {}
+        }
+    }
+    names.sort();
+    assert_eq!(names, ["a", "b"]);
     env.srv.shutdown().await;
 }

@@ -122,8 +122,17 @@ impl<V> CaseMappingMap<V> {
         }
     }
 
+    /// Removes a key. The order of the other keys may change, like
+    /// upstream's unordered maps. Memory is released once most of the map is
+    /// empty, e.g. after a netsplit emptied big channels.
     pub fn del(&mut self, name: &str) -> Option<V> {
-        self.m.shift_remove(&*(self.casemap)(name)).map(|e| e.value)
+        // swap_remove is O(1): shift_remove is O(n), making each QUIT from
+        // big channels quadratic in a netsplit
+        let v = self.m.swap_remove(&*(self.casemap)(name)).map(|e| e.value);
+        if self.m.capacity() > 64 && self.m.len() * 4 < self.m.capacity() {
+            self.m.shrink_to_fit();
+        }
+        v
     }
 
     /// Iterates over (original key, value) pairs.
@@ -174,6 +183,20 @@ mod tests {
         assert_eq!(casemap_ascii("ABC{}~é"), "abc{}~é");
         assert_eq!(casemap_rfc1459("A{}\\~"), "a[]|^");
         assert_eq!(casemap_rfc1459_strict("A{}\\~"), "a[]|~");
+    }
+
+    #[test]
+    fn map_shrinks() {
+        let mut m = CaseMappingMap::new(CASEMAPPING_ASCII);
+        for i in 0..1000 {
+            m.set(&format!("Nick{i}"), i);
+        }
+        for i in 0..990 {
+            assert_eq!(m.del(&format!("NICK{i}")), Some(i));
+        }
+        assert_eq!(m.len(), 10);
+        assert!(m.m.capacity() < 100, "capacity {}", m.m.capacity());
+        assert_eq!(m.get("nick995"), Some(&995));
     }
 
     #[test]

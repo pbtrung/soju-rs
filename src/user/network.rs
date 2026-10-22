@@ -393,6 +393,7 @@ impl User {
             .net_index(id)
             .expect("tried deleting a non-existing network");
         self.srv.db.delete_network(id)?;
+        self.msg_store.delete_network(id);
         let net = self.remove_network(i);
         if let Some(uc) = &net.conn {
             uc.stop_timers();

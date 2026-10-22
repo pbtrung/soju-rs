@@ -79,6 +79,11 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
+    /// Drops the messages of a deleted network.
+    pub fn delete_network(&mut self, net_id: i64) {
+        self.buffers.retain(|(id, _), _| *id != net_id);
+    }
+
     pub fn new() -> MemoryStore {
         MemoryStore::default()
     }
@@ -180,5 +185,19 @@ mod tests {
         assert!(rb.load_latest_seq(100, 1).is_err());
         assert!(rb.load_latest_seq(11, 1).unwrap().is_empty());
         assert!(rb.load_latest_seq(12, 1).is_err());
+    }
+
+    #[test]
+    fn delete_network() {
+        let mut s = MemoryStore::new();
+        for id in [1, 2] {
+            let net = Network {
+                id,
+                ..Network::new("x")
+            };
+            s.append(&net, "#a", &msg!("PRIVMSG", "#a", "hi"));
+        }
+        s.delete_network(1);
+        assert_eq!(s.buffers.keys().map(|k| k.0).collect::<Vec<_>>(), [2]);
     }
 }

@@ -59,6 +59,14 @@ impl Store {
         !self.is_memory()
     }
 
+    /// Drops the in-memory messages of a deleted network. Persistent stores
+    /// delete them with the network.
+    pub fn delete_network(&mut self, net_id: i64) {
+        if let Store::Memory(s) = self {
+            s.delete_network(net_id);
+        }
+    }
+
     pub fn close(&mut self) -> Result<()> {
         match self {
             Store::Memory(s) => {
