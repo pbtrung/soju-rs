@@ -54,11 +54,15 @@ impl RingBuffer {
     /// Loads up to limit of the latest messages after the message with the
     /// sequence number seq (excluded).
     fn load_latest_seq(&self, seq: u64, limit: usize) -> Result<Vec<Message>> {
-        if seq >= self.cur {
+        // Like upstream, the next sequence number is accepted: IDs remain
+        // from before a restart, which resets the sequence
+        if seq > self.cur {
             bail!(
                 "loading messages from sequence number ({seq}) greater than the last ({})",
                 self.last_seq()
             );
+        } else if seq == self.cur {
+            return Ok(Vec::new());
         }
         let n = ((self.cur - seq - 1) as usize)
             .min(self.buf.len())
@@ -174,5 +178,7 @@ mod tests {
             ["6", "7", "8", "9"]
         );
         assert!(rb.load_latest_seq(100, 1).is_err());
+        assert!(rb.load_latest_seq(11, 1).unwrap().is_empty());
+        assert!(rb.load_latest_seq(12, 1).is_err());
     }
 }
