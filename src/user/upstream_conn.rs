@@ -15,7 +15,7 @@ impl User {
         uc.attached = false;
         uc.stop_regain_nick_timer();
         for uch in uc.channels.values_mut() {
-            uch.update_auto_detach(None);
+            uch.stop_auto_detach();
         }
         let pending = std::mem::take(&mut uc.pending_cmds);
         let net_id = net.id();

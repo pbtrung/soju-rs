@@ -169,6 +169,9 @@ impl User {
                 if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
                     return;
                 }
+                if !crate::upstream::auto_detach_timer_fired(self, ni, &name) {
+                    return;
+                }
                 let Some(c) = self.networks[ni].channels.get(&name) else {
                     return;
                 };

@@ -63,6 +63,11 @@ struct Env {
 
 /// Starts a bouncer with a registered upstream and downstream connection.
 async fn setup() -> Env {
+    setup_with(Vec::new()).await
+}
+
+/// Like setup, with saved channels.
+async fn setup_with(channels: Vec<db::Channel>) -> Env {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
     user.set_password(USERNAME).unwrap();
@@ -74,6 +79,9 @@ async fn setup() -> Env {
     ));
     network.name = "testnet".to_owned();
     database.store_network(user.id, &mut network).unwrap();
+    for mut ch in channels {
+        database.store_channel(network.id, &mut ch).unwrap();
+    }
 
     let srv = Server::new(database, Logger::new(false));
     srv.set_config(ServerConfig::default());
@@ -209,5 +217,45 @@ async fn who_try_again() {
         let m = env.downstream.expect(cmd).await;
         assert_eq!(m.params[1], param, "invalid reply: {m}");
     }
+    env.srv.shutdown().await;
+}
+
+/// Messages in a channel postpone its auto-detach, which happens once the
+/// channel has been quiet for detach-after.
+#[tokio::test]
+async fn auto_detach() {
+    let detach_after = Duration::from_millis(600);
+    let ch = db::Channel {
+        name: "#chan".to_owned(),
+        detach_after,
+        ..Default::default()
+    };
+    let mut env = setup_with(vec![ch]).await;
+    let m = env.upstream.read_until("JOIN").await;
+    assert_eq!(m.params[0], "#chan");
+    let us = crate::irc::Prefix::full(USERNAME, "u", "host");
+    env.upstream.send(msg!("JOIN", "#chan").with_prefix(us));
+    env.downstream.read_until("JOIN").await;
+
+    let bob = crate::irc::Prefix::full("bob", "b", "host");
+    let start = tokio::time::Instant::now();
+    for i in 0..4 {
+        tokio::time::sleep(detach_after / 2).await;
+        let text = format!("message {i}");
+        env.upstream
+            .send(msg!("PRIVMSG", "#chan", text).with_prefix(bob.clone()));
+        loop {
+            let m = env.downstream.read().await;
+            assert_ne!(m.command, "PART", "channel detached too early: {m}");
+            if m.command == "PRIVMSG" {
+                break;
+            }
+        }
+    }
+    let last = tokio::time::Instant::now();
+    let m = env.downstream.read_until("PART").await;
+    assert_eq!(m.params, ["#chan", "Detach"]);
+    assert!(last.elapsed() >= detach_after - Duration::from_millis(50));
+    assert!(start.elapsed() > detach_after * 2);
     env.srv.shutdown().await;
 }

@@ -55,7 +55,7 @@ pub(super) fn handle_message(
                 if is_our_nick(cm, uc, &prefix_name) {
                     logf!(uc.logger, "joined channel {ch:?}");
                     if let Some(mut old) = uc.channels.del(ch) {
-                        old.update_auto_detach(None);
+                        old.stop_auto_detach();
                     }
                     uc.channels.set(
                         ch,
@@ -94,7 +94,7 @@ pub(super) fn handle_message(
                 if is_our_nick(cm, uc, &prefix_name) {
                     logf!(uc.logger, "parted channel {ch:?}");
                     if let Some(mut uch) = uc.channels.del(ch) {
-                        uch.update_auto_detach(None);
+                        uch.stop_auto_detach();
                         for nick in uch.members.keys() {
                             if !should_cache_user_info(cm, uc, nick) {
                                 uc.users.del(nick);
@@ -126,7 +126,7 @@ pub(super) fn handle_message(
                     "kicked from channel {channel:?} by {prefix_name}"
                 );
                 if let Some(mut uch) = uc.channels.del(&channel) {
-                    uch.update_auto_detach(None);
+                    uch.stop_auto_detach();
                     for nick in uch.members.keys() {
                         if !should_cache_user_info(cm, uc, nick) {
                             uc.users.del(nick);
@@ -435,18 +435,40 @@ pub fn update_channel_auto_detach(u: &mut User, ni: usize, name: &str) {
         // connections, which have no channels yet
         return;
     };
-    let timer = if dur.is_zero() {
-        None
-    } else {
-        let uch_name = match uc.channels.get(name) {
-            Some(uch) => uch.name.clone(),
-            None => return,
-        };
-        Some(uc.start_detach_timer(&uch_name, dur))
+    let Some(uch) = uc.channels.get_mut(name) else {
+        return;
     };
-    if let Some(uch) = uc.channels.get_mut(name) {
-        uch.update_auto_detach(timer);
-    } else if let Some(t) = timer {
-        t.abort();
+    if dur.is_zero() {
+        uch.stop_auto_detach();
+        return;
     }
+    let deadline = tokio::time::Instant::now() + dur;
+    match &mut uch.detach_timer {
+        // The timer re-arms itself when it fires before the deadline
+        Some(t) if t.fires_at <= deadline => t.deadline = deadline,
+        _ => uc.start_detach_timer(name, deadline),
+    }
+}
+
+/// Handles the auto-detach timer of a channel firing. Returns whether the
+/// channel is due to be detached: if there was activity since the timer
+/// started, it's re-armed instead. A timer that has been stopped meanwhile
+/// (e.g. the channel was parted) is ignored.
+pub fn auto_detach_timer_fired(u: &mut User, ni: usize, name: &str) -> bool {
+    let Some(uc) = u.networks[ni].upstream_mut() else {
+        return false;
+    };
+    let Some(uch) = uc.channels.get_mut(name) else {
+        return false;
+    };
+    let Some(t) = &uch.detach_timer else {
+        return false;
+    };
+    let deadline = t.deadline;
+    if deadline <= tokio::time::Instant::now() {
+        uch.detach_timer = None;
+        return true;
+    }
+    uc.start_detach_timer(name, deadline);
+    false
 }

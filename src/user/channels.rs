@@ -52,7 +52,7 @@ impl User {
         if let Some(uc) = net.upstream_mut()
             && let Some(uch) = uc.channels.get_mut(&ch_name)
         {
-            uch.update_auto_detach(None);
+            uch.stop_auto_detach();
         }
 
         let net_id = net.id();
@@ -119,7 +119,7 @@ impl User {
         if let Some(uc) = net.upstream_mut()
             && let Some(uch) = uc.channels.get_mut(&ch_name)
         {
-            uch.update_auto_detach(None);
+            uch.stop_auto_detach();
         }
         self.srv.db.delete_channel(ch_id)?;
         self.networks[ni].channels.del(name);

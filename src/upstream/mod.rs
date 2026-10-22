@@ -47,7 +47,7 @@ mod registration;
 mod server_tests;
 mod users;
 
-pub use channels::update_channel_auto_detach;
+pub use channels::{auto_detach_timer_fired, update_channel_auto_detach};
 pub use commands::{abort_pending_commands, enqueue_command};
 pub use connect::{RunnerParams, go_errno_message, run_network};
 pub use messages::{append_log, produce};
@@ -180,16 +180,24 @@ pub struct UpstreamChannel {
     pub creation_time: String,
     pub members: CaseMappingMap<MembershipSet>,
     pub complete: bool,
-    detach_timer: Option<AbortHandle>,
+    detach_timer: Option<DetachTimer>,
+}
+
+/// A running auto-detach timer. Activity in the channel only moves the
+/// deadline: when the timer fires before it, it's re-armed for the rest,
+/// instead of restarting a timer task on every message.
+struct DetachTimer {
+    handle: AbortHandle,
+    fires_at: tokio::time::Instant,
+    deadline: tokio::time::Instant,
 }
 
 impl UpstreamChannel {
-    /// Replaces the auto-detach timer. None just stops the current one.
-    pub fn update_auto_detach(&mut self, timer: Option<AbortHandle>) {
+    /// Stops the auto-detach timer, if any.
+    pub fn stop_auto_detach(&mut self) {
         if let Some(t) = self.detach_timer.take() {
-            t.abort();
+            t.handle.abort();
         }
-        self.detach_timer = timer;
     }
 }
 
@@ -490,7 +498,7 @@ impl UpstreamConn {
         }
         for uch in self.channels.values() {
             if let Some(t) = &uch.detach_timer {
-                t.abort();
+                t.handle.abort();
             }
         }
     }
@@ -519,20 +527,29 @@ impl UpstreamConn {
         self.regain_nick_timer = Some(task.abort_handle());
     }
 
-    /// Starts an auto-detach timer for a channel.
-    pub fn start_detach_timer(&self, name: &str, dur: Duration) -> AbortHandle {
+    /// Starts the auto-detach timer of a channel, replacing the current one.
+    fn start_detach_timer(&mut self, name: &str, deadline: tokio::time::Instant) {
         let tx = self.events.clone();
         let (net_id, conn_id) = (self.net_id, self.id);
-        let name = name.to_owned();
-        tokio::spawn(async move {
-            tokio::time::sleep(dur).await;
+        let Some(uch) = self.channels.get_mut(name) else {
+            return;
+        };
+        let name = uch.name.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep_until(deadline).await;
             let _ = tx.send(Event::ChannelDetach {
                 net_id,
                 conn_id,
                 name,
             });
         })
-        .abort_handle()
+        .abort_handle();
+        uch.stop_auto_detach();
+        uch.detach_timer = Some(DetachTimer {
+            handle,
+            fires_at: deadline,
+            deadline,
+        });
     }
 
     pub fn cancel_pending_commands_by_downstream_id(&mut self, downstream_id: u64) {
