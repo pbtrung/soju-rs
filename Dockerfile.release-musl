@@ -7,9 +7,9 @@ FROM docker.io/library/alpine:edge
 ENV RUSTUP_HOME=/opt/rustup \
 	PATH=/opt/cargo/bin:$PATH
 
-RUN apk update \
+RUN apk update --no-cache \
 	&& apk upgrade \
-	&& apk add bash rustup zig cargo-zigbuild gcc musl-dev linux-headers make perl cmake \
+	&& apk add --no-cache bash rustup zig cargo-zigbuild gcc musl-dev linux-headers make perl cmake \
 	&& rm -rf /var/cache/apk/* \
 	&& CARGO_HOME=/opt/cargo rustup-init -y --no-modify-path --profile minimal \
 		--target x86_64-unknown-linux-musl,aarch64-unknown-linux-musl \
