@@ -1,0 +1,16 @@
+# Release build image for the glibc targets: cross-compiles soju-rs for
+# x86_64 and aarch64 with the native (x86_64) Rust toolchain and Zig as the
+# C cross-compiler/linker. No emulation involved.
+FROM docker.io/library/archlinux:latest
+
+# Toolchains are installed system-wide: builds run as the invoking user
+ENV RUSTUP_HOME=/opt/rustup
+
+RUN pacman -Syu --noconfirm --needed rustup zig cargo-zigbuild gcc make perl cmake \
+	&& pacman -Scc --noconfirm \
+	&& rustup default stable \
+	&& rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+	&& chmod -R a+rX "$RUSTUP_HOME" \
+	&& rustc --version && zig version && command -v cargo-zigbuild
+
+WORKDIR /src

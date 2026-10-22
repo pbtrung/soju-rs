@@ -1,43 +1,47 @@
 #!/bin/bash
-# Builds release archives for all supported targets into dist/, using the
-# Docker image from Dockerfile.release.
+# Builds release archives for all supported targets into dist/: glibc
+# targets in an Arch Linux image (Dockerfile.release-gnu), musl targets in
+# an Alpine edge image (Dockerfile.release-musl). Both images are rebuilt
+# from freshly pulled bases, upgrading all packages before building.
 #
 # Usage: scripts/build-release.sh [version]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 version="${1:-v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
-image="soju-rs-release"
 
-# glibc builds target glibc 2.28 for compatibility with older distributions
+# image:target
 targets=(
-	"x86_64-unknown-linux-gnu.2.28:x86_64-unknown-linux-gnu"
-	"aarch64-unknown-linux-gnu.2.28:aarch64-unknown-linux-gnu"
-	"x86_64-unknown-linux-musl:x86_64-unknown-linux-musl"
-	"aarch64-unknown-linux-musl:aarch64-unknown-linux-musl"
+	"gnu:x86_64-unknown-linux-gnu"
+	"gnu:aarch64-unknown-linux-gnu"
+	"musl:x86_64-unknown-linux-musl"
+	"musl:aarch64-unknown-linux-musl"
 )
 
-docker build -f Dockerfile.release -t "$image" .
+for flavor in gnu musl; do
+	docker build --pull --no-cache -f "Dockerfile.release-$flavor" -t "soju-rs-release-$flavor" .
+done
 
 mkdir -p dist
 rm -f dist/*.tar.gz dist/SHA256SUMS
 
-docker run --rm \
-	-u "$(id -u):$(id -g)" \
-	-e CARGO_HOME=/src/target/cargo-home \
-	-e HOME=/tmp \
-	-v "$PWD:/src" \
-	"$image" \
-	bash -euo pipefail -c '
-		mkdir -p "$CARGO_HOME"
-		for spec in '"${targets[*]}"'; do
-			zig_target="${spec%%:*}"
-			cargo zigbuild --locked --release --target "$zig_target"
-		done
-	'
+for spec in "${targets[@]}"; do
+	flavor="${spec%%:*}"
+	target="${spec#*:}"
+	docker run --rm \
+		-u "$(id -u):$(id -g)" \
+		-e CARGO_HOME=/src/target/cargo-home \
+		-e HOME=/tmp \
+		-v "$PWD:/src" \
+		"soju-rs-release-$flavor" \
+		bash -euo pipefail -c '
+			mkdir -p "$CARGO_HOME"
+			cargo zigbuild --locked --release --target "$1"
+		' bash "$target"
+done
 
 for spec in "${targets[@]}"; do
-	target="${spec##*:}"
+	target="${spec#*:}"
 	name="soju-rs-${version}-${target}"
 	staging="dist/$name"
 	rm -rf "$staging"

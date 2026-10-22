@@ -1,0 +1,17 @@
+# Release build image for the static musl targets: cross-compiles soju-rs
+# for x86_64 and aarch64 with the native (x86_64) Rust toolchain and Zig as
+# the C cross-compiler/linker. No emulation involved.
+FROM docker.io/library/alpine:edge
+
+# Toolchains are installed system-wide: builds run as the invoking user
+ENV RUSTUP_HOME=/opt/rustup \
+	PATH=/opt/cargo/bin:$PATH
+
+RUN apk upgrade --no-cache \
+	&& apk add --no-cache bash rustup zig cargo-zigbuild gcc musl-dev linux-headers make perl cmake \
+	&& CARGO_HOME=/opt/cargo rustup-init -y --no-modify-path --profile minimal \
+		--target x86_64-unknown-linux-musl,aarch64-unknown-linux-musl \
+	&& chmod -R a+rX "$RUSTUP_HOME" /opt/cargo \
+	&& rustc --version && zig version && command -v cargo-zigbuild
+
+WORKDIR /src
