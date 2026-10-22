@@ -118,12 +118,9 @@ pub(super) fn handle_message(
                         return Err(downstream::need_more_params(&msg.command).into());
                     }
                     let caps = sub_params.last().unwrap().clone();
-                    // Like upstream, the "*" continuation marker is looked
-                    // up in the full parameter list
-                    let more = sub_params.len() >= 2 && msg.params[sub_params.len() - 2] == "*";
                     let uc = uc!(u, ni);
                     uc.handle_supported_caps(&caps);
-                    if more {
+                    if cap_ls_continued(&sub_params) {
                         return Ok(true); // wait to receive all capabilities
                     }
                     uc.update_caps();
@@ -407,6 +404,12 @@ pub(super) fn handle_message(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// Whether a CAP LS reply is continued on another line, given its
+/// parameters after the subcommand: "CAP <nick> LS * :<caps>".
+pub(super) fn cap_ls_continued(sub_params: &[String]) -> bool {
+    sub_params.len() >= 2 && sub_params[sub_params.len() - 2] == "*"
 }
 
 fn handle_chan_modes(uc: &mut UpstreamConn, s: &str) -> Result<()> {

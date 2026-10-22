@@ -68,14 +68,14 @@ pub const UPSTREAM_MESSAGE_BURST: u32 = 10;
 pub const CONNECT_COMMAND_DELAY: Duration = Duration::from_secs(5);
 
 /// The static list of upstream capabilities always requested when
-/// supported.
+/// supported. echo-message depends on labeled-response, see
+/// caps_to_request.
 const PERMANENT_UPSTREAM_CAPS: &[&str] = &[
     "account-notify",
     "account-tag",
     "away-notify",
     "batch",
     "chghost",
-    "echo-message",
     "extended-join",
     "extended-monitor",
     "invite-notify",
@@ -575,22 +575,7 @@ impl UpstreamConn {
     }
 
     fn update_caps(&mut self) {
-        let mut request: Vec<String> = PERMANENT_UPSTREAM_CAPS
-            .iter()
-            .filter(|c| self.caps.is_available(c) && !self.caps.is_enabled(c))
-            .map(|c| c.to_string())
-            .collect();
-
-        let echo_message = self.caps.is_available("labeled-response");
-        if !self.caps.is_enabled("echo-message") && echo_message {
-            // Upstream requests it a second time here; once is enough
-            if !request.iter().any(|c| c == "echo-message") {
-                request.push("echo-message".to_owned());
-            }
-        } else if self.caps.is_enabled("echo-message") && !echo_message {
-            request.push("-echo-message".to_owned());
-        }
-
+        let request = caps_to_request(&self.caps);
         if request.is_empty() {
             return;
         }
@@ -654,6 +639,27 @@ impl UpstreamConn {
         }
         None
     }
+}
+
+/// The capabilities to request (or disable, prefixed with "-").
+fn caps_to_request(caps: &CapRegistry) -> Vec<String> {
+    let mut request: Vec<String> = PERMANENT_UPSTREAM_CAPS
+        .iter()
+        .filter(|c| caps.is_available(c) && !caps.is_enabled(c))
+        .map(|c| c.to_string())
+        .collect();
+
+    // Without labels, echoes can't be told apart from other messages:
+    // downstreams without echo-message would get their own messages back.
+    // A request with a cap the server doesn't support is rejected as a
+    // whole.
+    let echo_message = caps.is_available("echo-message") && caps.is_available("labeled-response");
+    if !caps.is_enabled("echo-message") && echo_message {
+        request.push("echo-message".to_owned());
+    } else if caps.is_enabled("echo-message") && !echo_message {
+        request.push("-echo-message".to_owned());
+    }
+    request
 }
 
 fn is_our_nick(net_cm: CaseMapping, uc: &UpstreamConn, nick: &str) -> bool {
@@ -902,6 +908,39 @@ mod tests {
         let e = RegistrationError(msg!("FAIL", "*", "ACCOUNT_REQUIRED", "Login first"));
         assert!(!e.temporary());
         assert!(RegistrationError(msg!(ERR_NICKNAMEINUSE, "*", "x", "in use")).temporary());
+    }
+
+    #[test]
+    fn caps_requested() {
+        let mut caps = CapRegistry::new();
+        for c in ["batch", "echo-message", "labeled-response", "foo"] {
+            caps.available.insert(c.to_owned(), String::new());
+        }
+        assert_eq!(
+            caps_to_request(&caps),
+            ["batch", "labeled-response", "echo-message"]
+        );
+
+        // echo-message requires labeled-response
+        caps.del("labeled-response");
+        assert_eq!(caps_to_request(&caps), ["batch"]);
+        caps.set_enabled("echo-message", true);
+        assert_eq!(caps_to_request(&caps), ["batch", "-echo-message"]);
+
+        // Unsupported caps are never requested
+        let mut caps = CapRegistry::new();
+        caps.available
+            .insert("labeled-response".to_owned(), String::new());
+        assert_eq!(caps_to_request(&caps), ["labeled-response"]);
+    }
+
+    #[test]
+    fn cap_ls_continuation() {
+        let params = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(registration::cap_ls_continued(&params(&["*", "a b"])));
+        assert!(!registration::cap_ls_continued(&params(&["a b"])));
+        // The marker is looked up after the subcommand, not in the nick
+        assert!(!registration::cap_ls_continued(&params(&["x", "a b"])));
     }
 
     #[test]
