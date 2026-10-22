@@ -92,9 +92,18 @@ impl Database {
     }
 
     pub fn store_user(&self, user: &mut User) -> Result<()> {
-        let conn = self.conn();
-        let now = xirc::format_server_time(Utc::now());
         let interacted = time_to_sql(user.downstream_interacted_at);
+        let fields = named_params! {
+            ":username": user.username,
+            ":password": null_string(&user.password),
+            ":admin": user.admin,
+            ":nick": null_string(&user.nick),
+            ":realname": null_string(&user.realname),
+            ":enabled": user.enabled,
+            ":downstream_interacted_at": interacted,
+            ":max_networks": user.max_networks,
+        };
+        let conn = self.conn();
         if user.id != 0 {
             conn.execute(
                 "UPDATE User
@@ -103,35 +112,17 @@ impl Database {
                     downstream_interacted_at = :downstream_interacted_at,
                     max_networks = :max_networks
                 WHERE username = :username",
-                named_params! {
-                    ":username": user.username,
-                    ":password": null_string(&user.password),
-                    ":admin": user.admin,
-                    ":nick": null_string(&user.nick),
-                    ":realname": null_string(&user.realname),
-                    ":enabled": user.enabled,
-                    ":downstream_interacted_at": interacted,
-                    ":max_networks": user.max_networks,
-                },
+                fields,
             )?;
         } else {
+            let now = xirc::format_server_time(Utc::now());
             conn.execute(
                 "INSERT INTO
                 User(username, password, admin, nick, realname, created_at,
                     enabled, downstream_interacted_at, max_networks)
                 VALUES (:username, :password, :admin, :nick, :realname, :now,
                     :enabled, :downstream_interacted_at, :max_networks)",
-                named_params! {
-                    ":username": user.username,
-                    ":password": null_string(&user.password),
-                    ":admin": user.admin,
-                    ":nick": null_string(&user.nick),
-                    ":realname": null_string(&user.realname),
-                    ":now": now,
-                    ":enabled": user.enabled,
-                    ":downstream_interacted_at": interacted,
-                    ":max_networks": user.max_networks,
-                },
+                [fields, named_params! {":now": now}].concat().as_slice(),
             )?;
             user.id = conn.last_insert_rowid();
         }

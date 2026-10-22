@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use chrono::Utc;
 use rusqlite::{named_params, params};
 
-use super::{Database, time_from_sql};
+use super::{Database, null_id, time_from_sql};
 use crate::database::{WebPushConfig, WebPushKeys, WebPushSubscription};
 use crate::xirc;
 
@@ -49,17 +49,12 @@ impl Database {
         network_id: i64,
     ) -> Result<Vec<WebPushSubscription>> {
         let conn = self.conn();
-        let network = if network_id != 0 {
-            Some(network_id)
-        } else {
-            None
-        };
         let mut stmt = conn.prepare(
             "SELECT id, endpoint, created_at, updated_at, key_auth, key_p256dh, key_vapid
             FROM WebPushSubscription
             WHERE user = ? AND network IS ?",
         )?;
-        let rows = stmt.query_map(params![user_id, network], |r| {
+        let rows = stmt.query_map(params![user_id, null_id(network_id)], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
@@ -111,11 +106,6 @@ impl Database {
                 },
             )?;
         } else {
-            let network = if network_id != 0 {
-                Some(network_id)
-            } else {
-                None
-            };
             conn.execute(
                 "INSERT INTO
                 WebPushSubscription(created_at, updated_at, user, network, endpoint,
@@ -125,7 +115,7 @@ impl Database {
                 named_params! {
                     ":now": now,
                     ":user": user_id,
-                    ":network": network,
+                    ":network": null_id(network_id),
                     ":endpoint": sub.endpoint,
                     ":key_auth": sub.keys.auth,
                     ":key_p256dh": sub.keys.p256dh,

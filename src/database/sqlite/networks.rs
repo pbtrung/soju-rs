@@ -68,6 +68,23 @@ impl Database {
         }
 
         let connect_commands = network.connect_commands.join("\r\n");
+        let fields = named_params! {
+            ":name": null_string(&network.name),
+            ":addr": network.addr,
+            ":nick": null_string(&network.nick),
+            ":username": null_string(&network.username),
+            ":realname": null_string(&network.realname),
+            ":certfp": null_string(&network.certfp),
+            ":pass": null_string(&network.pass),
+            ":connect_commands": null_string(&connect_commands),
+            ":sasl_mechanism": mech,
+            ":sasl_plain_username": plain_user,
+            ":sasl_plain_password": plain_pass,
+            ":sasl_external_cert": network.sasl.external_cert,
+            ":sasl_external_key": network.sasl.external_key,
+            ":auto_away": network.auto_away,
+            ":enabled": network.enabled,
+        };
         let conn = self.conn();
         if network.id != 0 {
             conn.execute(
@@ -78,24 +95,7 @@ impl Database {
                     sasl_external_cert = :sasl_external_cert, sasl_external_key = :sasl_external_key,
                     auto_away = :auto_away, enabled = :enabled
                 WHERE id = :id",
-                named_params! {
-                    ":name": null_string(&network.name),
-                    ":addr": network.addr,
-                    ":nick": null_string(&network.nick),
-                    ":username": null_string(&network.username),
-                    ":realname": null_string(&network.realname),
-                    ":certfp": null_string(&network.certfp),
-                    ":pass": null_string(&network.pass),
-                    ":connect_commands": null_string(&connect_commands),
-                    ":sasl_mechanism": mech,
-                    ":sasl_plain_username": plain_user,
-                    ":sasl_plain_password": plain_pass,
-                    ":sasl_external_cert": network.sasl.external_cert,
-                    ":sasl_external_key": network.sasl.external_key,
-                    ":auto_away": network.auto_away,
-                    ":enabled": network.enabled,
-                    ":id": network.id,
-                },
+                [fields, named_params! {":id": network.id}].concat().as_slice(),
             )?;
         } else {
             conn.execute(
@@ -105,24 +105,7 @@ impl Database {
                 VALUES (:user, :name, :addr, :nick, :username, :realname, :certfp, :pass,
                     :connect_commands, :sasl_mechanism, :sasl_plain_username,
                     :sasl_plain_password, :sasl_external_cert, :sasl_external_key, :auto_away, :enabled)",
-                named_params! {
-                    ":user": user_id,
-                    ":name": null_string(&network.name),
-                    ":addr": network.addr,
-                    ":nick": null_string(&network.nick),
-                    ":username": null_string(&network.username),
-                    ":realname": null_string(&network.realname),
-                    ":certfp": null_string(&network.certfp),
-                    ":pass": null_string(&network.pass),
-                    ":connect_commands": null_string(&connect_commands),
-                    ":sasl_mechanism": mech,
-                    ":sasl_plain_username": plain_user,
-                    ":sasl_plain_password": plain_pass,
-                    ":sasl_external_cert": network.sasl.external_cert,
-                    ":sasl_external_key": network.sasl.external_key,
-                    ":auto_away": network.auto_away,
-                    ":enabled": network.enabled,
-                },
+                [fields, named_params! {":user": user_id}].concat().as_slice(),
             )?;
             network.id = conn.last_insert_rowid();
         }
@@ -174,6 +157,17 @@ impl Database {
 
     pub fn store_channel(&self, network_id: i64, ch: &mut Channel) -> Result<()> {
         let detach_after = ch.detach_after.as_secs_f64().ceil() as i64;
+        let fields = named_params! {
+            ":network": network_id,
+            ":name": ch.name,
+            ":key": null_string(&ch.key),
+            ":detached": ch.detached,
+            ":detached_internal_msgid": null_string(&ch.detached_internal_msg_id),
+            ":relay_detached": ch.relay_detached as i64,
+            ":reattach_on": ch.reattach_on as i64,
+            ":detach_after": detach_after,
+            ":detach_on": ch.detach_on as i64,
+        };
         let conn = self.conn();
         if ch.id != 0 {
             conn.execute(
@@ -182,34 +176,13 @@ impl Database {
                     detached_internal_msgid = :detached_internal_msgid, relay_detached = :relay_detached,
                     reattach_on = :reattach_on, detach_after = :detach_after, detach_on = :detach_on
                 WHERE id = :id",
-                named_params! {
-                    ":network": network_id,
-                    ":name": ch.name,
-                    ":key": null_string(&ch.key),
-                    ":detached": ch.detached,
-                    ":detached_internal_msgid": null_string(&ch.detached_internal_msg_id),
-                    ":relay_detached": ch.relay_detached as i64,
-                    ":reattach_on": ch.reattach_on as i64,
-                    ":detach_after": detach_after,
-                    ":detach_on": ch.detach_on as i64,
-                    ":id": ch.id,
-                },
+                [fields, named_params! {":id": ch.id}].concat().as_slice(),
             )?;
         } else {
             conn.execute(
                 "INSERT INTO Channel(network, name, key, detached, detached_internal_msgid, relay_detached, reattach_on, detach_after, detach_on)
                 VALUES (:network, :name, :key, :detached, :detached_internal_msgid, :relay_detached, :reattach_on, :detach_after, :detach_on)",
-                named_params! {
-                    ":network": network_id,
-                    ":name": ch.name,
-                    ":key": null_string(&ch.key),
-                    ":detached": ch.detached,
-                    ":detached_internal_msgid": null_string(&ch.detached_internal_msg_id),
-                    ":relay_detached": ch.relay_detached as i64,
-                    ":reattach_on": ch.reattach_on as i64,
-                    ":detach_after": detach_after,
-                    ":detach_on": ch.detach_on as i64,
-                },
+                fields,
             )?;
             ch.id = conn.last_insert_rowid();
         }

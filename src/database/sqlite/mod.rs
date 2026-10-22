@@ -54,6 +54,11 @@ fn null_string(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Maps the zero ID, meaning none, to NULL.
+fn null_id(id: i64) -> Option<i64> {
+    if id == 0 { None } else { Some(id) }
+}
+
 /// The SQLite database. All operations are serialized on a single
 /// connection.
 pub struct Database {
