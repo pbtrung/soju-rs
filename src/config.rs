@@ -238,6 +238,9 @@ fn parse_driver_source(name: &str, params: &[String]) -> Result<(String, String)
 
 /// The default and maximum chathistory-limit, the same limit as upstream.
 pub const MAX_CHAT_HISTORY_LIMIT: usize = 1000;
+/// The minimum chathistory-limit: clients would need too many requests to
+/// fetch history with a lower one.
+pub const MIN_CHAT_HISTORY_LIMIT: usize = 100;
 
 const KNOWN_DIRECTIVES: &[&str] = &[
     "listen",
@@ -443,9 +446,9 @@ pub fn parse(s: &str) -> Result<Server> {
     }
     if let Some(s) = single_string(&get("chathistory-limit"))? {
         srv.basic.chat_history_limit = match s.parse() {
-            Ok(n) if (1..=MAX_CHAT_HISTORY_LIMIT).contains(&n) => n,
+            Ok(n) if (MIN_CHAT_HISTORY_LIMIT..=MAX_CHAT_HISTORY_LIMIT).contains(&n) => n,
             _ => bail!(
-                "directive chathistory-limit: must be an integer between 1 and {MAX_CHAT_HISTORY_LIMIT}"
+                "directive chathistory-limit: must be an integer between {MIN_CHAT_HISTORY_LIMIT} and {MAX_CHAT_HISTORY_LIMIT}"
             ),
         };
     }
@@ -561,7 +564,7 @@ client-cert-auth true
         assert!(parse("disable-inactive-user 30").is_err());
         assert!(parse("upstream-user-ip 1.2.3.0/24 4.5.6.0/24").is_err());
         assert!(parse("max-user-networks x").is_err());
-        for bad in ["0", "1001", "-1", "x"] {
+        for bad in ["0", "99", "1001", "-1", "x"] {
             assert!(parse(&format!("chathistory-limit {bad}")).is_err(), "{bad}");
         }
         assert!(parse("enable-user-on-auth maybe").is_err());

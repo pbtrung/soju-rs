@@ -228,7 +228,7 @@ The following directives are supported:
 
 *chathistory-limit* <limit>
 	Maximum number of messages sent in reply to a single CHATHISTORY command,
-	between 1 and 1000. Clients requesting more get at most this many, and
+	between 100 and 1000. Clients requesting more get at most this many, and
 	fetch the rest with more commands: a lower limit reduces the memory used
 	while sending history to clients, at the cost of more round-trips.
 	Default: 1000.
