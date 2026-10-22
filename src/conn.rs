@@ -58,20 +58,49 @@ enum Writer {
     Ws(futures_util::stream::SplitSink<WebSocketStream<BoxIo>, WsMessage>),
 }
 
-impl Writer {
-    /// Writes a message. With flush unset, it may stay buffered until the
-    /// next flushed write.
-    async fn write(&mut self, msg: &Message, flush: bool) -> Result<()> {
-        let mut line = msg.to_string();
+/// Formats a message as a line, without the CRLF terminator. Queuing the
+/// line rather than the message keeps a single allocation per queued
+/// message, e.g. when a client fetches a lot of history at once.
+fn format_line(msg: &Message) -> String {
+    let mut line = msg.to_string();
+    if line.contains(['\r', '\n']) {
+        // Multiline messages must be split before being sent: never let a
+        // line break inject another message. Replace line breaks in the
+        // message rather than in the line, so that a last parameter which
+        // gains spaces is still formatted as a trailing one.
+        let clean = |s: &mut String| {
+            if s.contains(['\r', '\n']) {
+                *s = s.replace(['\r', '\n'], " ");
+            }
+        };
+        let mut msg = msg.clone();
+        clean(&mut msg.command);
+        msg.params.iter_mut().for_each(clean);
+        if let Some(p) = &mut msg.prefix {
+            clean(&mut p.name);
+            clean(&mut p.user);
+            clean(&mut p.host);
+        }
+        line = msg.to_string();
+        // Tag values are escaped, but not tag keys
         if line.contains(['\r', '\n']) {
-            // Multiline messages must be split before being sent: never let
-            // a line break inject another message
             line = line.replace(['\r', '\n'], " ");
         }
+    }
+    // Formatting grows the buffer as it goes: don't keep the spare capacity
+    // while the line is queued
+    line.shrink_to_fit();
+    line
+}
+
+impl Writer {
+    /// Writes a line formatted by format_line. With flush unset, it may
+    /// stay buffered until the next flushed write.
+    async fn write(&mut self, line: String, flush: bool) -> Result<()> {
         match self {
             Writer::Stream(w) => {
-                line.push_str("\r\n");
                 w.write_all(line.as_bytes()).await?;
+                w.write_all(b"\r\n").await?;
                 if flush {
                     w.flush().await?;
                 }
@@ -185,7 +214,8 @@ async fn read_line_limited(r: &mut BufReader<ReadHalf<BoxIo>>, buf: &mut Vec<u8>
 }
 
 enum Outgoing {
-    Msg(Message),
+    /// A line formatted by format_line
+    Line(String),
     Shutdown,
 }
 
@@ -265,8 +295,8 @@ impl Conn {
                     out = rx.recv() => out,
                     _ = cancel.cancelled() => None,
                 };
-                let msg = match out {
-                    Some(Outgoing::Msg(m)) => m,
+                let line = match out {
+                    Some(Outgoing::Line(l)) => l,
                     Some(Outgoing::Shutdown) | None => break,
                 };
                 c.shared.queued.fetch_sub(1, Ordering::Relaxed);
@@ -281,11 +311,11 @@ impl Conn {
                         _ = cancel.cancelled() => break,
                     }
                 }
-                debugf!(c.shared.logger, "sent: {msg}");
+                debugf!(c.shared.logger, "sent: {line}");
                 // Batch lines in a write when more are ready, e.g. backlog.
                 // Rate limited lines are sent as soon as allowed.
                 let flush = limited || rx.is_empty();
-                match tokio::time::timeout(WRITE_TIMEOUT, writer.write(&msg, flush)).await {
+                match tokio::time::timeout(WRITE_TIMEOUT, writer.write(line, flush)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
                         logf!(c.shared.logger, "failed to write message: {e}");
@@ -329,7 +359,7 @@ impl Conn {
             return;
         }
         self.shared.queued.fetch_add(1, Ordering::Relaxed);
-        let _ = self.shared.tx.send(Outgoing::Msg(msg));
+        let _ = self.shared.tx.send(Outgoing::Line(format_line(&msg)));
     }
 
     /// The number of messages queued and not written yet, e.g. because the
@@ -419,6 +449,65 @@ mod tests {
             rb.read_message().await.unwrap().unwrap();
         }
         assert!(start.elapsed() >= Duration::from_secs(2));
+    }
+
+    fn tagged_message() -> Message {
+        crate::msg!("PRIVMSG", "#a", "hello world")
+            .with_prefix(crate::irc::Prefix::full("nick", "user", "host"))
+            .with_tag("time", "2020-01-01T00:00:00.000Z")
+            .with_tag("msgid", "a b;c")
+    }
+
+    #[test]
+    fn queued_line() {
+        let msg = tagged_message();
+        let line = format_line(&msg);
+        assert_eq!(line, msg.to_string());
+        assert_eq!(line.capacity(), line.len());
+        // Line breaks can't inject another message
+        let line = format_line(&crate::msg!("PRIVMSG", "#a", "x\r\nQUIT"));
+        assert_eq!(line, "PRIVMSG #a :x  QUIT");
+        let msg = Message::parse(&line).unwrap();
+        assert_eq!(msg.params, ["#a", "x  QUIT"]);
+        let line = format_line(&crate::msg!("PRIVMSG", "#a\n", "x").with_tag("a\nb", "c\n"));
+        assert_eq!(line, "@a b=c\\n PRIVMSG #a  x");
+    }
+
+    #[tokio::test]
+    async fn stream_wire_format() {
+        use tokio::io::AsyncReadExt;
+        let (a, mut b) = tokio::io::duplex(4096);
+        let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let msg = tagged_message();
+        c.send_message(msg.clone());
+        c.send_message(crate::msg!("PING", "x"));
+        c.shutdown();
+        let mut wire = Vec::new();
+        b.read_to_end(&mut wire).await.unwrap();
+        assert_eq!(
+            String::from_utf8(wire).unwrap(),
+            format!("{msg}\r\nPING x\r\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_wire_format() {
+        let (a, b) = tokio::io::duplex(4096);
+        let ws = |io: tokio::io::DuplexStream, role| {
+            WebSocketStream::from_raw_socket(Box::new(io) as BoxIo, role, None)
+        };
+        let (server, mut client) = tokio::join!(
+            ws(a, tokio_tungstenite::tungstenite::protocol::Role::Server),
+            ws(b, tokio_tungstenite::tungstenite::protocol::Role::Client)
+        );
+        let (c, _r) = Conn::new_websocket(server, Logger::new(false));
+        let msg = tagged_message();
+        c.send_message(msg.clone());
+        // One text frame per message, without CRLF
+        match client.next().await.unwrap().unwrap() {
+            WsMessage::Text(t) => assert_eq!(t.as_str(), msg.to_string()),
+            m => panic!("unexpected frame: {m:?}"),
+        }
     }
 
     #[test]
