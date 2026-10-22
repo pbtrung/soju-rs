@@ -43,6 +43,8 @@ mod commands;
 mod connect;
 mod messages;
 mod registration;
+#[cfg(test)]
+mod server_tests;
 mod users;
 
 pub use channels::update_channel_auto_detach;
@@ -52,7 +54,10 @@ pub use messages::{append_log, produce};
 pub use registration::{finish_registration, register};
 pub use users::{try_regain_nick, update_monitor};
 
-use commands::{current_pending_command, dequeue_command};
+use commands::{
+    clear_ended_early, current_pending_command, current_pending_downstream, dequeue_command,
+    end_command_early, take_ended_early,
+};
 use users::start_regain_nick_timer;
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -240,6 +245,16 @@ pub struct PendingCommand {
     pub sent_at: Option<Instant>,
 }
 
+/// A pending command ended by an early error reply, see
+/// commands::end_command_early.
+#[derive(Debug)]
+struct EndedEarly {
+    command: String,
+    downstream_id: u64,
+    /// The command's target (WHO mask or WHOIS nick), case-mapped
+    target: String,
+}
+
 #[derive(Clone, Debug)]
 struct UpstreamBatch {
     label: String,
@@ -310,6 +325,7 @@ pub struct UpstreamConn {
     /// been sent to the server and is awaiting reply. The following entries
     /// have not been sent yet.
     pub pending_cmds: HashMap<String, Vec<PendingCommand>>,
+    ended_early: Option<EndedEarly>,
 
     pending_regain_nick: String,
     regain_nick_timer: Option<AbortHandle>,
@@ -357,6 +373,7 @@ impl UpstreamConn {
             sasl_client: None,
             sasl_started: false,
             pending_cmds: HashMap::new(),
+            ended_early: None,
             pending_regain_nick: String::new(),
             regain_nick_timer: None,
             regain_nick_backoff: None,

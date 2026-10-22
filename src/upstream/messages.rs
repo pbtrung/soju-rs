@@ -211,21 +211,24 @@ pub(super) fn handle_message(
             // one argument WHOIS variant errors with NOSUCHNICK
             // two argument WHOIS variant errors with NOSUCHSERVER
             need_params(msg, 3)?;
-            let nick = msg.params[1].clone();
-            match current_pending_command(u, ni, "WHOIS") {
-                Some((dc_id, cmd)) if cmd.params.last().is_some_and(|p| cm(p) == cm(&nick)) => {
-                    dequeue_command(u, ni, "WHOIS");
-                    if let Some(i) = u.dc_index(dc_id) {
-                        u.downstreams[i].send_message(msg.clone());
-                    }
+            let nick = &msg.params[1];
+            let is_whois_target = current_pending_command(u, ni, "WHOIS")
+                .and_then(|cmd| cmd.msg.params.last())
+                .is_some_and(|p| cm(p) == cm(nick));
+            if is_whois_target {
+                if let Some((dc_id, _)) = end_command_early(u, ni, "WHOIS")
+                    && let Some(i) = u.dc_index(dc_id)
+                {
+                    u.downstreams[i].send_message(msg.clone());
                 }
-                _ => forward_msg_by_id(u, net_id, downstream_id, msg),
+            } else {
+                forward_msg_by_id(u, net_id, downstream_id, msg);
             }
         }
         ERR_UNKNOWNERROR | ERR_UNKNOWNCOMMAND | ERR_NEEDMOREPARAMS | RPL_TRYAGAIN => {
             need_params(msg, 3)?;
             let command = msg.params[1].clone();
-            if let Some((dc_id, _)) = dequeue_command(u, ni, &command)
+            if let Some((dc_id, _)) = end_command_early(u, ni, &command)
                 && downstream_id == 0
                 && u.dc_index(dc_id).is_some()
             {

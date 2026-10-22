@@ -155,9 +155,10 @@ pub(super) fn handle_message(
                 msg.params[6].clone(),
                 msg.params[7].clone(),
             );
-            let Some((dc_id, _)) = current_pending_command(u, ni, "WHO") else {
+            let Some(dc_id) = current_pending_downstream(u, ni, "WHO") else {
                 bail!("unexpected RPL_WHOREPLY: no matching pending WHO");
             };
+            clear_ended_early(uc!(u, ni), "WHO");
             let Some((_, realname)) = trailing.split_once(' ') else {
                 bail!("malformed RPL_WHOREPLY: failed to parse real name");
             };
@@ -184,15 +185,18 @@ pub(super) fn handle_message(
             }
         }
         RPL_WHOSPCRPL => {
-            let Some((dc_id, cmd)) = current_pending_command(u, ni, "WHO") else {
+            let Some(cmd) = current_pending_command(u, ni, "WHO") else {
                 bail!("unexpected RPL_WHOSPCRPL: no matching pending WHO");
             };
+            let dc_id = cmd.downstream_id;
+            let options = cmd.msg.params.get(1).cloned();
+            clear_ended_early(uc!(u, ni), "WHO");
             match u.dc_index(dc_id) {
                 Some(i) => u.downstreams[i].send_message(msg.clone()),
                 None => return Ok(true),
             }
-            if cmd.params.len() > 1 {
-                let (fields, _) = xirc::parse_whox_options(&cmd.params[1]);
+            if let Some(options) = options {
+                let (fields, _) = xirc::parse_whox_options(&options);
                 if !fields.contains('n') {
                     return Ok(true);
                 }
@@ -217,10 +221,13 @@ pub(super) fn handle_message(
             }
         }
         RPL_ENDOFWHO => {
-            // Some servers send RPL_TRYAGAIN followed by RPL_ENDOFWHO
-            if let Some((dc_id, _)) = dequeue_command(u, ni, "WHO")
-                && let Some(i) = u.dc_index(dc_id)
-            {
+            // Some servers send RPL_TRYAGAIN followed by RPL_ENDOFWHO: the
+            // WHO already ended
+            let dc_id = match take_ended_early(u, ni, "WHO", msg.param(1)) {
+                Some(id) => Some(id),
+                None => dequeue_command(u, ni, "WHO").map(|(id, _)| id),
+            };
+            if let Some(i) = dc_id.and_then(|id| u.dc_index(id)) {
                 u.downstreams[i].send_message(msg.clone());
             }
         }
@@ -228,19 +235,26 @@ pub(super) fn handle_message(
         | RPL_WHOISCHANNELS | RPL_WHOISOPERATOR | RPL_WHOISIDLE | RPL_WHOISSPECIAL
         | RPL_WHOISACCOUNT | RPL_WHOISACTUALLY | RPL_WHOISHOST | RPL_WHOISMODES
         | RPL_WHOISSECURE => {
-            let Some((dc_id, _)) = current_pending_command(u, ni, "WHOIS") else {
+            let Some(dc_id) = current_pending_downstream(u, ni, "WHOIS") else {
                 bail!(
                     "unexpected WHOIS reply {:?}: no matching pending WHOIS",
                     msg.command
                 );
             };
+            clear_ended_early(uc!(u, ni), "WHOIS");
             if let Some(i) = u.dc_index(dc_id) {
                 u.downstreams[i].send_message(msg.clone());
             }
         }
         RPL_ENDOFWHOIS => {
-            let Some((dc_id, _)) = dequeue_command(u, ni, "WHOIS") else {
-                bail!("unexpected RPL_ENDOFWHOIS: no matching pending WHOIS");
+            // Servers send RPL_ENDOFWHOIS after ERR_NOSUCHNICK: the WHOIS
+            // already ended
+            let dc_id = match take_ended_early(u, ni, "WHOIS", msg.param(1)) {
+                Some(id) => id,
+                None => match dequeue_command(u, ni, "WHOIS") {
+                    Some((id, _)) => id,
+                    None => bail!("unexpected RPL_ENDOFWHOIS: no matching pending WHOIS"),
+                },
             };
             if let Some(i) = u.dc_index(dc_id) {
                 u.downstreams[i].send_message(msg.clone());

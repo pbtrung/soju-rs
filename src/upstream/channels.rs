@@ -302,7 +302,7 @@ pub(super) fn handle_message(
             }
         }
         RPL_LISTSTART | RPL_LIST => {
-            let Some((dc_id, _)) = current_pending_command(u, ni, "LIST") else {
+            let Some(dc_id) = current_pending_downstream(u, ni, "LIST") else {
                 bail!("unexpected RPL_LIST: no matching pending LIST");
             };
             if let Some(i) = u.dc_index(dc_id) {
