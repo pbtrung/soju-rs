@@ -22,14 +22,15 @@ sojuctl -config /etc/soju/config user create -username alice -password secret -a
 
 ## Building
 
-Requires the latest stable Rust toolchain and a C compiler (SQLite and the
-TLS library are built from source):
+Requires the latest stable Rust toolchain and a C compiler (SQLite, the TLS
+library and the mimalloc allocator are built from source):
 
     cargo build --release
 
 The `soju` and `sojuctl` binaries are written to `target/release/`. Release
-archives for Linux (x86_64 and aarch64, glibc and static musl) are built in
-Docker with `scripts/build-release.sh`.
+archives for Linux (x86_64 and aarch64) are built in Docker with
+`scripts/build-release.sh`: glibc builds on Arch Linux, static musl builds on
+Alpine edge, both from freshly pulled and upgraded images.
 
 ## Differences from upstream soju
 
@@ -59,6 +60,8 @@ Behaviour changes:
 - Received lines only use the text up to the first CR or LF, including CRs
   in the middle of a TCP line and text after a line break in a WebSocket
   frame; lines with invalid UTF-8 are decoded lossily
+- Line breaks in sent messages are replaced with spaces; upstream writes
+  them as is, which splits the message into several lines
 - Text read back from a database or message logs written by upstream (which
   doesn't validate UTF-8) is decoded lossily
 - Server times (e.g. CHATHISTORY bounds) may have any number of fractional
@@ -81,8 +84,10 @@ Behaviour changes:
 
 ## Testing
 
-`cargo test` runs unit tests and the integration tests ported from upstream.
-The port was also checked with:
+`cargo test` runs unit tests and the integration tests ported from upstream,
+the latter on both the multi-threaded and the current-thread runtime (soju-rs
+uses the current-thread one on machines with a single CPU). The port was also
+checked with:
 
 - differential tests running the same client sessions against upstream Go
   soju and soju-rs (both connected to [ergo]) and comparing normalized
