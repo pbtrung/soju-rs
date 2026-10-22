@@ -295,12 +295,7 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                 dc!(u, i).logger,
                 "failed to get the read receipt for {target:?}: {e}"
             );
-            return Err(fail(&[
-                &msg.command,
-                "INTERNAL_ERROR",
-                &target,
-                "Internal error",
-            ]));
+            return Err(internal_error(&msg.command, &target));
         }
     };
 
@@ -354,12 +349,7 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                             dc!(u, i).logger,
                             "failed to get the latest message time for {target:?}: {e}"
                         );
-                        return Err(fail(&[
-                            &msg.command,
-                            "INTERNAL_ERROR",
-                            &target,
-                            "Internal error",
-                        ]));
+                        return Err(internal_error(&msg.command, &target));
                     }
                 }
             }
@@ -372,12 +362,7 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                     dc!(u, i).logger,
                     "failed to store receipt for {target:?}: {e}"
                 );
-                return Err(fail(&[
-                    &msg.command,
-                    "INTERNAL_ERROR",
-                    &target,
-                    "Internal error",
-                ]));
+                return Err(internal_error(&msg.command, &target));
             }
             broadcast = true;
         }

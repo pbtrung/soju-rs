@@ -31,12 +31,7 @@ pub(super) fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<(
                     dc!(u, i).logger,
                     "failed to get the message target for {target:?}: {e}"
                 );
-                return Err(fail(&[
-                    "METADATA",
-                    "INTERNAL_ERROR",
-                    &target,
-                    "Internal error",
-                ]));
+                return Err(internal_error("METADATA", &target));
             }
         }
     }
@@ -94,12 +89,7 @@ pub(super) fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<(
                     dc!(u, i).logger,
                     "failed to store the message target for {target:?}: {e}"
                 );
-                return Err(fail(&[
-                    "METADATA",
-                    "INTERNAL_ERROR",
-                    &target,
-                    "Internal error",
-                ]));
+                return Err(internal_error("METADATA", &target));
             }
         }
         _ => {

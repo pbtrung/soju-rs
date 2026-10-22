@@ -68,12 +68,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
     let user_id = u.record.id;
     let network_id = dc!(u, i).network_id.unwrap_or(0);
     let Some(sender) = u.srv.web_push() else {
-        return Err(fail(&[
-            "WEBPUSH",
-            "INTERNAL_ERROR",
-            &subcommand,
-            "Internal error",
-        ]));
+        return Err(internal_error("WEBPUSH", &subcommand));
     };
 
     match subcommand.as_str() {
@@ -106,12 +101,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         dc!(u, i).logger,
                         "failed to fetch Web push subscription: {e}"
                     );
-                    return Err(fail(&[
-                        "WEBPUSH",
-                        "INTERNAL_ERROR",
-                        &subcommand,
-                        "Internal error",
-                    ]));
+                    return Err(internal_error("WEBPUSH", &subcommand));
                 }
             };
             if subs.len() > 25 {
@@ -187,12 +177,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         dc!(u, i).logger,
                         "failed to fetch Web push subscription: {e}"
                     );
-                    return Err(fail(&[
-                        "WEBPUSH",
-                        "INTERNAL_ERROR",
-                        &subcommand,
-                        "Internal error",
-                    ]));
+                    return Err(internal_error("WEBPUSH", &subcommand));
                 }
             };
             if let Some(old) = subs.iter().find(|s| s.endpoint == endpoint)
@@ -202,12 +187,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                     dc!(u, i).logger,
                     "failed to delete Web push subscription: {e}"
                 );
-                return Err(fail(&[
-                    "WEBPUSH",
-                    "INTERNAL_ERROR",
-                    &subcommand,
-                    "Internal error",
-                ]));
+                return Err(internal_error("WEBPUSH", &subcommand));
             }
             dc!(u, i).send_message(msg!("WEBPUSH", "UNREGISTER", endpoint));
         }

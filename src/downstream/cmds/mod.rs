@@ -45,6 +45,11 @@ pub(crate) fn fail(params: &[&str]) -> anyhow::Error {
     ))
 }
 
+/// A FAIL reply for an unexpected server-side error, e.g. a database one.
+fn internal_error(cmd: &str, context: &str) -> anyhow::Error {
+    fail(&[cmd, "INTERNAL_ERROR", context, "Internal error"])
+}
+
 pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     let i = u.dc_index(dc_id).unwrap();
     match msg.command.as_str() {
