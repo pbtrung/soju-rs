@@ -33,7 +33,7 @@ mod webpush;
 
 pub use delivered::DeliveredStore;
 pub use network::Network;
-pub use webpush::{broadcast_web_push, send_web_push, spawn_web_push_broadcast};
+pub use webpush::{send_web_push, send_web_push_to, web_push_subscriptions};
 
 pub const RETRY_CONNECT_MIN_DELAY: Duration = Duration::from_secs(60);
 pub const RETRY_CONNECT_MAX_DELAY: Duration = Duration::from_secs(10 * 60);

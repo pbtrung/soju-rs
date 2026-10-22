@@ -16,50 +16,58 @@ impl User {
     /// Broadcasts a Web Push notification for a message, in the background.
     pub fn broadcast_web_push(&self, ni: usize, msg: Message) {
         let net = &self.networks[ni];
-        spawn_web_push_broadcast(
-            self.srv.clone(),
-            self.record.id,
-            net.id(),
-            net.logger.clone(),
-            msg,
-        );
+        let (srv, user_id, net_id) = (self.srv.clone(), self.record.id, net.id());
+        let logger = net.logger.clone();
+        tokio::spawn(async move {
+            broadcast_web_push(srv, user_id, net_id, logger, msg).await;
+        });
     }
 }
 
-pub fn spawn_web_push_broadcast(
+/// Sends a Web Push notification to all of a network's subscriptions.
+async fn broadcast_web_push(
     srv: Arc<Server>,
     user_id: i64,
     net_id: i64,
     logger: Logger,
     msg: Message,
 ) {
-    tokio::spawn(async move {
-        broadcast_web_push(srv, user_id, net_id, logger, msg).await;
-    });
+    let subs = web_push_subscriptions(&srv, user_id, net_id, &logger).await;
+    send_web_push_to(&srv, subs, &logger, &msg).await;
 }
 
-/// Sends a Web Push notification to all of a network's subscriptions.
-pub async fn broadcast_web_push(
-    srv: Arc<Server>,
+/// Lists a network's Web Push subscriptions. Errors are logged, and give no
+/// subscriptions.
+pub async fn web_push_subscriptions(
+    srv: &Arc<Server>,
     user_id: i64,
     net_id: i64,
-    logger: Logger,
-    msg: Message,
-) {
-    let Some(sender) = srv.web_push() else { return };
+    logger: &Logger,
+) -> Vec<db::WebPushSubscription> {
+    if srv.web_push().is_none() {
+        return Vec::new();
+    }
     let subs = db::run(&srv.db, move |db| {
         db.list_web_push_subscriptions(user_id, net_id)
     })
     .await;
-    let subs = match subs {
-        Ok(s) => s,
-        Err(e) => {
-            logf!(logger, "failed to list Web push subscriptions: {e}");
-            return;
-        }
-    };
+    subs.unwrap_or_else(|e| {
+        logf!(logger, "failed to list Web push subscriptions: {e}");
+        Vec::new()
+    })
+}
+
+/// Sends a Web Push notification to subscriptions, deleting the expired
+/// ones.
+pub async fn send_web_push_to(
+    srv: &Arc<Server>,
+    subs: Vec<db::WebPushSubscription>,
+    logger: &Logger,
+    msg: &Message,
+) {
+    let Some(sender) = srv.web_push() else { return };
     for sub in subs {
-        let res = send_web_push(&sender, &sub, &msg).await;
+        let res = send_web_push(&sender, &sub, msg).await;
         match res {
             Ok(()) => {}
             Err(e) if e.is::<crate::webpush::SubscriptionExpired>() => {

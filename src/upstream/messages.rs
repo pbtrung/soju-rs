@@ -142,8 +142,15 @@ pub(super) fn handle_message(
                         Ok(Some(r)) if r.timestamp.is_some_and(|t| t >= timestamp) => return,
                         Ok(_) => {}
                     }
+                    let subs =
+                        crate::user::web_push_subscriptions(&srv, user_id, net_id, &logger).await;
+                    // Without subscriptions, there is no notification to
+                    // dismiss when the buffer gets read
+                    if subs.is_empty() {
+                        return;
+                    }
                     push_targets.lock().unwrap().set(&buffer, timestamp);
-                    crate::user::broadcast_web_push(srv, user_id, net_id, logger, m).await;
+                    crate::user::send_web_push_to(&srv, subs, &logger, &m).await;
                 });
             }
 
