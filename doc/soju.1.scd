@@ -227,10 +227,11 @@ The following directives are supported:
 	the bouncer.
 
 *chathistory-limit* <limit>
-	Maximum number of messages a client can fetch with a single CHATHISTORY
-	command, between 1 and 1000. Clients fetching more history send more
-	commands: a lower limit reduces the memory used while sending history to
-	clients, at the cost of more round-trips. Default: 1000.
+	Maximum number of messages sent in reply to a single CHATHISTORY command,
+	between 1 and 1000. Clients requesting more get at most this many, and
+	fetch the rest with more commands: a lower limit reduces the memory used
+	while sending history to clients, at the cost of more round-trips.
+	Default: 1000.
 
 *message-expiry* <duration>
 	Automatically delete messages older than the specified duration.

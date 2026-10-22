@@ -951,7 +951,7 @@ async fn service_other_user() {
     env.srv.shutdown().await;
 }
 
-/// A lower chathistory-limit is advertised and enforced.
+/// A lower chathistory-limit is advertised and caps replies.
 async fn chat_history_limit() {
     let env = setup(db_store()).await;
     let mut cfg = (*env.srv.config()).clone();
@@ -980,11 +980,22 @@ async fn chat_history_limit() {
         "missing CHATHISTORY=2 in {isupport:?}"
     );
 
-    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "3"));
+    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "1001"));
     let m = dc.expect("FAIL").await;
     assert_eq!(m.params[..2], ["CHATHISTORY", "INVALID_PARAMS"]);
 
-    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "2"));
+    // Bigger limits are capped, e.g. TARGETS still works with 1000
+    dc.send(msg!(
+        "CHATHISTORY",
+        "TARGETS",
+        "timestamp=2000-01-01T00:00:00.000Z",
+        "timestamp=2100-01-01T00:00:00.000Z",
+        "1000"
+    ));
+    let m = read_until(&mut dc, "CHATHISTORY").await;
+    assert_eq!(m.params[..2], ["TARGETS", "foo"]);
+    read_until(&mut dc, "BATCH").await;
+    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "1000"));
     let outer = dc.expect("BATCH").await;
     assert_eq!(outer.params[1], "chathistory");
     for want in ["msg 1", "msg 2"] {
