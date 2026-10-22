@@ -17,7 +17,7 @@ impl Database {
             .query_row(
                 "SELECT m.id FROM Message AS m, MessageTarget AS t
                 WHERE t.network = :network AND t.target = :target AND m.target = t.id
-                ORDER BY m.time DESC LIMIT 1",
+                ORDER BY m.time DESC, m.id DESC LIMIT 1",
                 named_params! {":network": network_id, ":target": name},
                 |r| r.get(0),
             )
@@ -268,10 +268,13 @@ impl Database {
         if !options.events {
             query.push_str("AND m.text IS NOT NULL ");
         }
+        // Messages often share a time, e.g. the lines of a multiline
+        // message: order them as they were stored. The (target, time) index
+        // entries end with the row ID, so this doesn't need an extra sort.
         if options.take_last {
-            query.push_str("ORDER BY m.time DESC ");
+            query.push_str("ORDER BY m.time DESC, m.id DESC ");
         } else {
-            query.push_str("ORDER BY m.time ASC ");
+            query.push_str("ORDER BY m.time ASC, m.id ASC ");
         }
         query.push_str("LIMIT :limit");
         binds.push((":limit", &limit));

@@ -193,6 +193,47 @@ fn messages() {
 }
 
 #[test]
+fn messages_same_time() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+
+    // e.g. the lines of a multiline message
+    let msgs: Vec<Message> = (0..5)
+        .map(|i| msg!("PRIVMSG", "#a", i.to_string()).with_tag("time", "2024-01-01T00:00:00.000Z"))
+        .collect();
+    let ids = db.store_messages(n.id, "#a", &msgs).unwrap();
+    assert_eq!(db.get_message_last_id(n.id, "#a").unwrap(), ids[4]);
+    let texts = |opts: &MessageOptions| -> Vec<String> {
+        db.list_messages(n.id, "#a", opts)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.params[1].clone())
+            .collect()
+    };
+    let opts = MessageOptions {
+        limit: 10,
+        ..Default::default()
+    };
+    assert_eq!(texts(&opts), ["0", "1", "2", "3", "4"]);
+    let opts = MessageOptions {
+        limit: 2,
+        take_last: true,
+        ..Default::default()
+    };
+    assert_eq!(texts(&opts), ["3", "4"]);
+    let opts = MessageOptions {
+        after_id: ids[2],
+        limit: 10,
+        take_last: true,
+        ..Default::default()
+    };
+    assert_eq!(texts(&opts), ["3", "4"]);
+}
+
+#[test]
 fn delete_messages_vacuum() {
     let dir = std::env::temp_dir().join(format!("soju-rs-vacuum-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
