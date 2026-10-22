@@ -226,6 +226,12 @@ The following directives are supported:
 	For instance, "30d" disables users 30 days after they last disconnect from
 	the bouncer.
 
+*chathistory-limit* <limit>
+	Maximum number of messages a client can fetch with a single CHATHISTORY
+	command, between 1 and 1000. Clients fetching more history send more
+	commands: a lower limit reduces the memory used while sending history to
+	clients, at the cost of more round-trips. Default: 1000.
+
 *message-expiry* <duration>
 	Automatically delete messages older than the specified duration.
 

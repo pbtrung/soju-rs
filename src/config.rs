@@ -102,6 +102,8 @@ pub struct BasicServer {
     pub upstream_user_ips: Vec<IpNet>,
     pub disable_inactive_users_delay: Duration,
     pub message_expiry: Duration,
+    /// The maximum number of messages per CHATHISTORY reply
+    pub chat_history_limit: usize,
     pub enable_users_on_auth: bool,
     pub client_cert_auth: bool,
 }
@@ -145,6 +147,7 @@ impl Server {
                 upstream_user_ips: Vec::new(),
                 disable_inactive_users_delay: Duration::ZERO,
                 message_expiry: Duration::ZERO,
+                chat_history_limit: MAX_CHAT_HISTORY_LIMIT,
                 enable_users_on_auth: false,
                 client_cert_auth: false,
             },
@@ -233,6 +236,9 @@ fn parse_driver_source(name: &str, params: &[String]) -> Result<(String, String)
     }
 }
 
+/// The default and maximum chathistory-limit, the same limit as upstream.
+pub const MAX_CHAT_HISTORY_LIMIT: usize = 1000;
+
 const KNOWN_DIRECTIVES: &[&str] = &[
     "listen",
     "hostname",
@@ -253,6 +259,7 @@ const KNOWN_DIRECTIVES: &[&str] = &[
     "upstream-user-ip",
     "disable-inactive-user",
     "message-expiry",
+    "chathistory-limit",
     "enable-user-on-auth",
     "client-cert-auth",
 ];
@@ -434,6 +441,14 @@ pub fn parse(s: &str) -> Result<Server> {
         srv.basic.message_expiry =
             parse_duration(&s).map_err(|e| anyhow!("directive message-expiry: {e}"))?;
     }
+    if let Some(s) = single_string(&get("chathistory-limit"))? {
+        srv.basic.chat_history_limit = match s.parse() {
+            Ok(n) if (1..=MAX_CHAT_HISTORY_LIMIT).contains(&n) => n,
+            _ => bail!(
+                "directive chathistory-limit: must be an integer between 1 and {MAX_CHAT_HISTORY_LIMIT}"
+            ),
+        };
+    }
     if let Some(s) = single_string(&get("enable-user-on-auth"))?
         && !s.is_empty()
     {
@@ -482,6 +497,7 @@ max-user-networks 5
 upstream-user-ip 192.168.0.0/24 fd00::/64
 disable-inactive-user 30d
 message-expiry 0.5d
+chathistory-limit 100
 enable-user-on-auth true
 client-cert-auth true
 "#,
@@ -512,6 +528,7 @@ client-cert-auth true
         );
         assert!(cfg.basic.accept_proxy_unix);
         assert_eq!(cfg.basic.max_user_networks, 5);
+        assert_eq!(cfg.basic.chat_history_limit, 100);
         assert_eq!(cfg.basic.upstream_user_ips.len(), 2);
         assert_eq!(
             cfg.basic.disable_inactive_users_delay,
@@ -529,6 +546,7 @@ client-cert-auth true
         assert_eq!(cfg.db.source, "soju.db");
         assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
         assert_eq!(cfg.basic.max_user_networks, -1);
+        assert_eq!(cfg.basic.chat_history_limit, 1000);
         assert_eq!(cfg.auth[0].driver, AuthDriver::Internal);
     }
 
@@ -543,6 +561,9 @@ client-cert-auth true
         assert!(parse("disable-inactive-user 30").is_err());
         assert!(parse("upstream-user-ip 1.2.3.0/24 4.5.6.0/24").is_err());
         assert!(parse("max-user-networks x").is_err());
+        for bad in ["0", "1001", "-1", "x"] {
+            assert!(parse(&format!("chathistory-limit {bad}")).is_err(), "{bad}");
+        }
         assert!(parse("enable-user-on-auth maybe").is_err());
     }
 

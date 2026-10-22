@@ -325,7 +325,7 @@ pub fn build_isupport(dc: &DownstreamConn, ctx: &IsupportCtx) -> Isupport {
         if ctx.chathistory && ctx.network_id.is_some() {
             isupport.insert(
                 "CHATHISTORY".to_owned(),
-                Some(CHAT_HISTORY_LIMIT.to_string()),
+                Some(cfg.basic.chat_history_limit.to_string()),
             );
             isupport.insert("MSGREFTYPES".to_owned(), Some("timestamp".to_owned()));
         }

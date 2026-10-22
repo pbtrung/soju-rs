@@ -45,7 +45,6 @@ pub fn service_prefix() -> Prefix {
     Prefix::full(SERVICE_NICK, SERVICE_NICK, SERVICE_NICK)
 }
 
-pub const CHAT_HISTORY_LIMIT: usize = 1000;
 pub const BACKLOG_LIMIT: usize = 4000;
 
 /// An error replied to the client as an IRC message.

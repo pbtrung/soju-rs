@@ -6,7 +6,7 @@ use super::*;
 /// History replies are refused while a client has this many messages it
 /// hasn't read yet, so that a client which stops reading can't make us queue
 /// replies without bounds.
-const MAX_QUEUED_FOR_HISTORY: usize = 10 * CHAT_HISTORY_LIMIT;
+const MAX_QUEUED_FOR_HISTORY: usize = 10 * crate::config::MAX_CHAT_HISTORY_LIMIT;
 
 fn check_queue(u: &User, i: usize, cmd: &str) -> Result<()> {
     if u.downstreams[i].conn.queued() > MAX_QUEUED_FOR_HISTORY {
@@ -117,8 +117,9 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
         }
     }
 
+    let max_limit = u.srv.config().basic.chat_history_limit;
     let limit = match limit_str.parse::<i64>() {
-        Ok(l) if l >= 0 && l <= CHAT_HISTORY_LIMIT as i64 => l as usize,
+        Ok(l) if l >= 0 && l <= max_limit as i64 => l as usize,
         _ => {
             return Err(fail(&[
                 "CHATHISTORY",

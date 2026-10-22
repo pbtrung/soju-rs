@@ -48,6 +48,7 @@ test_on_both_runtimes!(
     upstream_clock_skew,
     multiline,
     service_other_user,
+    chat_history_limit,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -404,12 +405,13 @@ async fn register_upstream_with(c: &mut TestConn, isupport: &[&str]) -> String {
 }
 
 /// Registers a downstream connection after negotiating capabilities, bound
-/// to a network or else to the bouncer itself.
+/// to a network or else to the bouncer itself. Returns the messages received
+/// after RPL_WELCOME.
 async fn register_downstream_caps(
     c: &mut TestConn,
     network: Option<&database::Network>,
     caps: &str,
-) {
+) -> Vec<Message> {
     c.send(msg!("CAP", "LS", "302"));
     c.send(msg!("CAP", "REQ", caps));
     let ack = loop {
@@ -429,7 +431,7 @@ async fn register_downstream_caps(
     c.send(msg!("CAP", "END"));
     // cap-notify may remove caps the upstream doesn't support first
     read_until(c, "001").await;
-    c.roundtrip().await;
+    c.roundtrip().await
 }
 
 /// Reads a CAP LS 302 reply, possibly split over several lines, each of
@@ -944,5 +946,49 @@ async fn service_other_user() {
     ));
     assert_eq!(read_service_reply(&mut dc).await, r#"deleted user "other""#);
     assert!(env.srv.get_user("other").is_none());
+    env.srv.shutdown().await;
+}
+
+/// A lower chathistory-limit is advertised and enforced.
+async fn chat_history_limit() {
+    let env = setup(db_store()).await;
+    let mut cfg = (*env.srv.config()).clone();
+    cfg.basic.chat_history_limit = 2;
+    env.srv.set_config(cfg);
+    let mut uc = accept_upstream(&env).await;
+    let nick = register_upstream_with(&mut uc, &[]).await;
+    for i in 0..3 {
+        uc.send(msg!("PRIVMSG", nick.clone(), format!("msg {i}")).with_prefix(Prefix::new("foo")));
+    }
+    uc.roundtrip().await;
+
+    let mut dc = connect_downstream(&env.srv);
+    let isupport: Vec<String> = register_downstream_caps(
+        &mut dc,
+        Some(&env.network),
+        "batch server-time draft/chathistory",
+    )
+    .await
+    .into_iter()
+    .filter(|m| m.command == "005")
+    .flat_map(|m| m.params)
+    .collect();
+    assert!(
+        isupport.iter().any(|p| p == "CHATHISTORY=2"),
+        "missing CHATHISTORY=2 in {isupport:?}"
+    );
+
+    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "3"));
+    let m = dc.expect("FAIL").await;
+    assert_eq!(m.params[..2], ["CHATHISTORY", "INVALID_PARAMS"]);
+
+    dc.send(msg!("CHATHISTORY", "LATEST", "foo", "*", "2"));
+    let outer = dc.expect("BATCH").await;
+    assert_eq!(outer.params[1], "chathistory");
+    for want in ["msg 1", "msg 2"] {
+        let m = dc.expect("PRIVMSG").await;
+        assert_eq!(m.params[1], want);
+    }
+    dc.expect("BATCH").await;
     env.srv.shutdown().await;
 }
