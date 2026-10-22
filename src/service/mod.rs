@@ -334,7 +334,8 @@ fn commands() -> &'static [Command] {
                     .global(),
                 ],
             )
-            .admin(),
+            .admin()
+            .global(),
         ]
     })
 }
@@ -531,6 +532,7 @@ mod tests {
         let mut l = Vec::new();
         append_help(commands(), &[], true, true, &mut l);
         assert!(l.contains(&"user create".to_owned()));
+        assert!(l.contains(&"server status".to_owned()));
         assert!(!l.contains(&"network create".to_owned()));
     }
 
