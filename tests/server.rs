@@ -49,6 +49,7 @@ test_on_both_runtimes!(
     multiline,
     service_other_user,
     chat_history_limit,
+    service_blocking_work,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -990,5 +991,57 @@ async fn chat_history_limit() {
         assert_eq!(m.params[1], want);
     }
     dc.expect("BATCH").await;
+    env.srv.shutdown().await;
+}
+
+/// BouncerServ commands doing CPU-heavy work (key generation, password
+/// hashing) off the event loop, then applying it.
+async fn service_blocking_work() {
+    let env = setup_with(db_store(), |_, user| user.admin = true).await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream(&mut uc).await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream(&mut dc, &env.network).await;
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "certfp generate -key-type ed25519"
+    ));
+    assert_eq!(read_service_reply(&mut dc).await, "certificate generated");
+    assert!(
+        read_service_reply(&mut dc)
+            .await
+            .starts_with("SHA-1 fingerprint: ")
+    );
+    read_service_reply(&mut dc).await;
+    read_service_reply(&mut dc).await;
+    let user_id = env.srv.db.get_user(TEST_USERNAME).unwrap().unwrap().id;
+    let sasl = &env.srv.db.list_networks(user_id).unwrap()[0].sasl;
+    assert_eq!(sasl.mechanism, "EXTERNAL");
+    assert!(sasl.external_key.is_some());
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "user update -password newpass"
+    ));
+    assert_eq!(
+        read_service_reply(&mut dc).await,
+        format!("updated user {TEST_USERNAME:?}")
+    );
+    let mut record = env.srv.db.get_user(TEST_USERNAME).unwrap().unwrap();
+    record.check_password("newpass").unwrap();
+
+    dc.send(msg!(
+        "PRIVMSG",
+        "BouncerServ",
+        "user create -username created -password pw"
+    ));
+    assert_eq!(
+        read_service_reply(&mut dc).await,
+        r#"created user "created""#
+    );
+    assert!(env.srv.get_user("created").is_some());
     env.srv.shutdown().await;
 }

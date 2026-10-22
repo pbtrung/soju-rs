@@ -117,6 +117,9 @@ pub enum Event {
         sub: db::WebPushSubscription,
         res: Result<(), String>,
     },
+    /// Runs a function on the user's event loop, e.g. to apply the result of
+    /// a deferred BouncerServ command.
+    Run(Box<dyn FnOnce(&mut User) + Send>),
 }
 
 pub enum UserRunMsg {

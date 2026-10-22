@@ -5,7 +5,10 @@ use sha1::Sha1;
 use sha2::Digest;
 use tokio::sync::mpsc;
 
-use super::{ServiceContext, handle_service_command, no_args, parse_flags, pop_arg, wait};
+use super::{
+    ServiceContext, handle_service_command, hash_password, no_args, parse_flags, pop_arg,
+    run_on_user, wait,
+};
 use crate::database as db;
 use crate::flags::FlagSet;
 use crate::logf;
@@ -108,13 +111,17 @@ pub(super) fn handle_user_create(
     user.admin = p.get_bool("admin").unwrap_or(false);
     user.enabled = p.get_bool("enabled").unwrap_or(true);
     user.max_networks = p.get_int("max-networks").unwrap_or(-1);
-    if !disable_password {
-        user.set_password(&password)?;
-    }
-    ctx.srv
-        .create_user(user)
-        .map_err(|e| anyhow!("could not create user: {e}"))?;
-    ctx.print(format!("created user {username:?}"));
+    let srv = ctx.srv.clone();
+    // Hashing the password takes a while
+    ctx.defer(move |mut print| async move {
+        if !disable_password {
+            user.password = hash_password(password).await?;
+        }
+        srv.create_user(user)
+            .map_err(|e| anyhow!("could not create user: {e}"))?;
+        print(format!("created user {username:?}"));
+        Ok(())
+    });
     Ok(())
 }
 
@@ -159,31 +166,27 @@ pub(super) fn handle_user_update(
         if realname.is_some() {
             bail!("cannot update -realname of other user");
         }
-        let mut hashed = None;
-        if let Some(pw) = &password {
-            let mut record = db::User::new("");
-            record.set_password(pw)?;
-            hashed = Some(record.password);
-        }
-        if disable_password {
-            hashed = Some(String::new());
-        }
         let Some(handle) = ctx.srv.get_user(&username) else {
             bail!("unknown username {username:?}");
         };
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if !handle.send(Event::UserUpdate {
-            password: hashed,
-            admin,
-            enabled,
-            max_networks,
-            done: tx,
-        }) {
-            bail!("unknown username {username:?}");
-        }
-        // TODO: send context to the other side
         let deadline = ctx.deadline;
         ctx.defer(move |mut print| async move {
+            let hashed = match password {
+                Some(pw) => Some(hash_password(pw).await?),
+                None if disable_password => Some(String::new()),
+                None => None,
+            };
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if !handle.send(Event::UserUpdate {
+                password: hashed,
+                admin,
+                enabled,
+                max_networks,
+                done: tx,
+            }) {
+                bail!("unknown username {username:?}");
+            }
+            // TODO: send context to the other side
             wait(deadline, rx)
                 .await
                 .ok_or_else(|| anyhow!("context deadline exceeded"))?
@@ -203,25 +206,43 @@ pub(super) fn handle_user_update(
         if max_networks.is_some() && !ctx.admin {
             bail!("cannot update -max-networks of own user");
         }
-        u.update_user(|record| {
-            if let Some(pw) = &password {
-                record.set_password(pw)?;
+        let apply = move |u: &mut User, hashed: Option<String>| {
+            u.update_user(|record| {
+                if let Some(h) = hashed {
+                    record.password = h;
+                }
+                if disable_password {
+                    record.password.clear();
+                }
+                if let Some(n) = nick {
+                    record.nick = n;
+                }
+                if let Some(r) = realname {
+                    record.realname = r;
+                }
+                if let Some(m) = max_networks {
+                    record.max_networks = m;
+                }
+                Ok(())
+            })
+        };
+        let name = u.record.username.clone();
+        match password {
+            None => {
+                apply(u, None)?;
+                ctx.print(format!("updated user {name:?}"));
             }
-            if disable_password {
-                record.password.clear();
+            // Hashing the password takes a while
+            Some(pw) => {
+                let tx = u.tx.clone();
+                ctx.defer(move |mut print| async move {
+                    let hashed = hash_password(pw).await?;
+                    run_on_user(&tx, move |u| apply(u, Some(hashed))).await?;
+                    print(format!("updated user {name:?}"));
+                    Ok(())
+                });
             }
-            if let Some(n) = &nick {
-                record.nick = n.clone();
-            }
-            if let Some(r) = &realname {
-                record.realname = r.clone();
-            }
-            if let Some(m) = max_networks {
-                record.max_networks = m;
-            }
-            Ok(())
-        })?;
-        ctx.print(format!("updated user {:?}", u.record.username));
+        }
     }
     Ok(())
 }

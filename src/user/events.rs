@@ -322,6 +322,7 @@ impl User {
                 sub,
                 res,
             } => crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res),
+            Event::Run(f) => f(self),
             Event::Stop => {
                 for dc in &self.downstreams {
                     dc.conn.close();

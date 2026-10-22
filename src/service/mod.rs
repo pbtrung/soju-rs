@@ -48,10 +48,10 @@ pub struct ServiceContext {
 /// Prints a line of a deferred command's output.
 pub type Print = Box<dyn FnMut(String) + Send>;
 
-/// The rest of a command that waits on other users' event loops. The event
-/// loop running the command can't block on them: with a single-threaded
-/// runtime, they would never run. The caller spawns it instead, once the
-/// command returned.
+/// The rest of a command that waits on other users' event loops, or runs
+/// CPU-heavy work. The event loop running the command can't block on them:
+/// with a single-threaded runtime, nothing else would run meanwhile. The
+/// caller spawns it instead, once the command returned.
 pub type Deferred =
     Box<dyn FnOnce(Print) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send>;
 
@@ -118,6 +118,40 @@ async fn wait<F: Future>(deadline: Option<tokio::time::Instant>, fut: F) -> Opti
         Some(d) => tokio::time::timeout_at(d, fut).await.ok(),
         None => Some(fut.await),
     }
+}
+
+/// Runs CPU-heavy work (key generation, password hashing) on a blocking
+/// thread, from a deferred command.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| anyhow!("internal error: {e}"))?
+}
+
+/// Hashes a password on a blocking thread, from a deferred command.
+async fn hash_password(password: String) -> Result<String> {
+    blocking(move || {
+        let mut record = crate::database::User::new("");
+        record.set_password(&password)?;
+        Ok(record.password)
+    })
+    .await
+}
+
+/// Runs f on a user's event loop and returns its result, from a deferred
+/// command.
+async fn run_on_user<T: Send + 'static>(
+    tx: &tokio::sync::mpsc::UnboundedSender<crate::user::Event>,
+    f: impl FnOnce(&mut User) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (done, rx) = tokio::sync::oneshot::channel();
+    let ev = crate::user::Event::Run(Box::new(move |u| {
+        let _ = done.send(f(u));
+    }));
+    if tx.send(ev).is_err() {
+        bail!("user stopped");
+    }
+    rx.await.map_err(|_| anyhow!("user stopped"))?
 }
 
 /// How long a downstream's command may wait on other users, like upstream's

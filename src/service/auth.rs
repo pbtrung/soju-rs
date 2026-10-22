@@ -5,9 +5,10 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 
 use super::network::get_network_from_flag;
-use super::{ServiceContext, no_args, parse_flags};
+use super::{ServiceContext, blocking, no_args, parse_flags, run_on_user};
 use crate::database as db;
 use crate::flags::FlagSet;
+use crate::server::Server;
 use crate::user::User;
 
 /// Maximum number of RSA key bits used when generating a new private key.
@@ -15,19 +16,12 @@ const MAX_RSA_BITS: i64 = 8192;
 
 const DEVICE_CERTIFICATE_DISPLAY_BYTES: usize = 6;
 
-fn send_certfp_fingerprints(ctx: &mut ServiceContext, cert: &[u8]) {
-    ctx.print(format!(
-        "SHA-1 fingerprint: {}",
-        hex::encode(Sha1::digest(cert))
-    ));
-    ctx.print(format!(
-        "SHA-256 fingerprint: {}",
-        hex::encode(Sha256::digest(cert))
-    ));
-    ctx.print(format!(
-        "SHA-512 fingerprint: {}",
-        hex::encode(Sha512::digest(cert))
-    ));
+fn certfp_fingerprints(cert: &[u8]) -> [String; 3] {
+    [
+        format!("SHA-1 fingerprint: {}", hex::encode(Sha1::digest(cert))),
+        format!("SHA-256 fingerprint: {}", hex::encode(Sha256::digest(cert))),
+        format!("SHA-512 fingerprint: {}", hex::encode(Sha512::digest(cert))),
+    ]
 }
 
 pub(super) fn handle_certfp_generate(
@@ -50,16 +44,33 @@ pub(super) fn handle_certfp_generate(
         bail!("invalid value for -bits");
     }
     let ni = get_network_from_flag(u, ctx, &p)?;
-    let (key, cert) = crate::certfp::generate_certfp(&key_type, bits as usize)?;
-    let sasl = db::Sasl {
-        mechanism: "EXTERNAL".to_owned(),
-        external_cert: Some(cert.clone()),
-        external_key: Some(key),
-        ..u.networks[ni].record.sasl.clone()
-    };
-    store_sasl(u, ctx, ni, sasl)?;
-    ctx.print("certificate generated");
-    send_certfp_fingerprints(ctx, &cert);
+    let net_id = u.networks[ni].id();
+    let tx = u.tx.clone();
+    let srv = ctx.srv.clone();
+    // Generating a large RSA key takes seconds
+    ctx.defer(move |mut print| async move {
+        let (key, cert) =
+            blocking(move || crate::certfp::generate_certfp(&key_type, bits as usize)).await?;
+        let fingerprints = certfp_fingerprints(&cert);
+        run_on_user(&tx, move |u| {
+            let ni = u
+                .net_index(net_id)
+                .ok_or_else(|| anyhow!("network was deleted"))?;
+            let sasl = db::Sasl {
+                mechanism: "EXTERNAL".to_owned(),
+                external_cert: Some(cert),
+                external_key: Some(key),
+                ..u.networks[ni].record.sasl.clone()
+            };
+            store_sasl(u, &srv, ni, sasl)
+        })
+        .await?;
+        print("certificate generated".to_owned());
+        for line in fingerprints {
+            print(line);
+        }
+        Ok(())
+    });
     Ok(())
 }
 
@@ -77,7 +88,9 @@ pub(super) fn handle_certfp_fingerprints(
         bail!("CertFP not set up");
     }
     let cert = sasl.external_cert.clone().unwrap_or_default();
-    send_certfp_fingerprints(ctx, &cert);
+    for line in certfp_fingerprints(&cert) {
+        ctx.print(line);
+    }
     Ok(())
 }
 
@@ -128,7 +141,7 @@ pub(super) fn handle_sasl_set_plain(
         plain_password: p.args[1].clone(),
         ..u.networks[ni].record.sasl.clone()
     };
-    store_sasl(u, ctx, ni, sasl)?;
+    store_sasl(u, &ctx.srv, ni, sasl)?;
     ctx.print("credentials saved");
     Ok(())
 }
@@ -142,19 +155,19 @@ pub(super) fn handle_sasl_reset(
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
-    store_sasl(u, ctx, ni, db::Sasl::default())?;
+    store_sasl(u, &ctx.srv, ni, db::Sasl::default())?;
     ctx.print("credentials reset");
     Ok(())
 }
 
 /// Replaces the SASL settings of a network. They're stored first: if that
 /// fails, the network is left unchanged.
-fn store_sasl(u: &mut User, ctx: &ServiceContext, ni: usize, sasl: db::Sasl) -> Result<()> {
+fn store_sasl(u: &mut User, srv: &Server, ni: usize, sasl: db::Sasl) -> Result<()> {
     let user_id = u.record.id;
     let net = &mut u.networks[ni];
     let mut record = net.record.clone();
     record.sasl = sasl;
-    ctx.srv.db.store_network(user_id, &mut record)?;
+    srv.db.store_network(user_id, &mut record)?;
     net.record = record;
     net.sync_snapshot();
     Ok(())
