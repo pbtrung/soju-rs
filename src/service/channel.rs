@@ -164,13 +164,12 @@ pub(super) fn handle_channel_create(
     update_channel_from_flags(&p, &mut ch)?;
     // The channel isn't joined yet: no need to detach it from clients
     ch.detached = p.get_bool("detached").unwrap_or(false);
-    let net_id = net.id();
-    net.channels.set(&name, ch);
-    let ch = net.channels.get_mut(&name).unwrap();
+    // Stored first: if that fails, the channel isn't created at all
     ctx.srv
         .db
-        .store_channel(net_id, ch)
+        .store_channel(net.id(), &mut ch)
         .map_err(|e| anyhow!("failed to create channel: {e}"))?;
+    net.channels.set(&name, ch);
     if let Some(uc) = net.upstream() {
         uc.send_message(msg!("JOIN", name.clone()));
     }
