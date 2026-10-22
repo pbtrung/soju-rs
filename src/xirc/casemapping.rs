@@ -51,10 +51,35 @@ pub fn parse_casemapping(s: &str) -> Option<CaseMapping> {
 
 /// A map whose keys are compared according to a case-mapping. The original
 /// spelling of each key is preserved, as is insertion order.
+///
+/// Channel member lists are such maps: to keep them small, keys are stored
+/// with their exact size, and the original spelling only when it differs
+/// from the case-mapped key.
 #[derive(Clone, Debug)]
 pub struct CaseMappingMap<V> {
-    m: IndexMap<String, (String, V)>,
+    m: IndexMap<Box<str>, Entry<V>>,
     casemap: CaseMapping,
+}
+
+#[derive(Clone, Debug)]
+struct Entry<V> {
+    /// The original spelling, if different from the case-mapped key
+    name: Option<Box<str>>,
+    value: V,
+}
+
+impl<V> Entry<V> {
+    fn new(cm: &str, name: &str, value: V) -> Entry<V> {
+        Entry {
+            name: (cm != name).then(|| name.into()),
+            value,
+        }
+    }
+}
+
+/// The original spelling of an entry's key.
+fn original<'a, V>(cm: &'a str, e: &'a Entry<V>) -> &'a str {
+    e.name.as_deref().unwrap_or(cm)
 }
 
 impl<V> CaseMappingMap<V> {
@@ -66,7 +91,7 @@ impl<V> CaseMappingMap<V> {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.m.contains_key(&(self.casemap)(name))
+        self.m.contains_key(&*(self.casemap)(name))
     }
 
     pub fn len(&self) -> usize {
@@ -78,54 +103,60 @@ impl<V> CaseMappingMap<V> {
     }
 
     pub fn get(&self, name: &str) -> Option<&V> {
-        self.m.get(&(self.casemap)(name)).map(|(_, v)| v)
+        self.m.get(&*(self.casemap)(name)).map(|e| &e.value)
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut V> {
-        self.m.get_mut(&(self.casemap)(name)).map(|(_, v)| v)
+        self.m.get_mut(&*(self.casemap)(name)).map(|e| &mut e.value)
     }
 
     /// Sets a value. If the key already exists, its original spelling is
     /// kept.
     pub fn set(&mut self, name: &str, value: V) {
         let cm = (self.casemap)(name);
-        if let Some(entry) = self.m.get_mut(&cm) {
-            entry.1 = value;
+        if let Some(e) = self.m.get_mut(&*cm) {
+            e.value = value;
         } else {
-            self.m.insert(cm, (name.to_owned(), value));
+            let e = Entry::new(&cm, name, value);
+            self.m.insert(cm.into_boxed_str(), e);
         }
     }
 
     pub fn del(&mut self, name: &str) -> Option<V> {
-        self.m.shift_remove(&(self.casemap)(name)).map(|(_, v)| v)
+        self.m.shift_remove(&*(self.casemap)(name)).map(|e| e.value)
     }
 
     /// Iterates over (original key, value) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &V)> {
-        self.m.values().map(|(k, v)| (k.as_str(), v))
+        self.m.iter().map(|(cm, e)| (original(cm, e), &e.value))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut V)> {
-        self.m.values_mut().map(|(k, v)| (k.as_str(), v))
+        self.m
+            .iter_mut()
+            .map(|(cm, e)| (e.name.as_deref().unwrap_or(cm), &mut e.value))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.m.values().map(|(k, _)| k.as_str())
+        self.m.iter().map(|(cm, e)| original(cm, e))
     }
 
     pub fn values(&self) -> impl Iterator<Item = &V> {
-        self.m.values().map(|(_, v)| v)
+        self.m.values().map(|e| &e.value)
     }
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.m.values_mut().map(|(_, v)| v)
+        self.m.values_mut().map(|e| &mut e.value)
     }
 
     pub fn set_casemapping(&mut self, casemap: CaseMapping) {
         self.casemap = casemap;
         let old = std::mem::take(&mut self.m);
-        for (_, (k, v)) in old {
-            self.m.insert(casemap(&k), (k, v));
+        for (cm, e) in old {
+            let name = e.name.unwrap_or(cm);
+            let cm = casemap(&name);
+            let e = Entry::new(&cm, &name, e.value);
+            self.m.insert(cm.into_boxed_str(), e);
         }
     }
 
@@ -157,7 +188,34 @@ mod tests {
         m.set_casemapping(CASEMAPPING_ASCII);
         assert!(!m.has("foo["));
         assert!(m.has("FOO{"));
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["Foo{"]);
         assert_eq!(m.del("foo{"), Some(2));
         assert!(m.is_empty());
+    }
+
+    #[test]
+    fn map_spellings() {
+        let mut m = CaseMappingMap::new(CASEMAPPING_ASCII);
+        // Already case-mapped keys don't store a second spelling
+        m.set("lower", 1);
+        m.set("Mixed", 2);
+        assert!(m.m["lower"].name.is_none());
+        assert_eq!(m.m["mixed"].name.as_deref(), Some("Mixed"));
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["lower", "Mixed"]);
+        assert_eq!(m.iter().collect::<Vec<_>>(), [("lower", &1), ("Mixed", &2)]);
+        for (k, v) in m.iter_mut() {
+            *v += k.len();
+        }
+        assert_eq!(m.values().collect::<Vec<_>>(), [&6, &7]);
+        // A spelling which becomes the case-mapped key isn't stored again
+        let mut m = CaseMappingMap::new(CASEMAPPING_ASCII);
+        m.set("a[", 1);
+        m.set_casemapping(CASEMAPPING_RFC1459);
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["a["]);
+        assert!(m.m["a["].name.is_none());
+        m.set("B{", 2);
+        m.set_casemapping(CASEMAPPING_ASCII);
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["a[", "B{"]);
+        assert_eq!(m.get("b{"), Some(&2));
     }
 }
