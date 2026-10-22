@@ -330,9 +330,9 @@ impl User {
         }
 
         if !self.record.enabled {
-            // TODO: send an error message before disconnecting
-            for dc in &self.downstreams {
-                dc.conn.close();
+            for dc in &mut self.downstreams {
+                dc.send_message(msg!("ERROR", "This bouncer account is disabled"));
+                dc.conn.shutdown();
             }
         }
         Ok(())
@@ -408,6 +408,24 @@ mod tests {
             local_tcp_addr(&nets[..1], 0, "::1".parse().unwrap()).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn highlight() {
+        let mut user = db::User::new("alice");
+        user.nick = "Alice".to_owned();
+        let net = Network::new(
+            &Logger::new(false),
+            db::Network::new("irc.example.org"),
+            vec![],
+        );
+        let msg = |from: &str, text: &str| {
+            msg!("PRIVMSG", "#chan", text).with_prefix(crate::irc::Prefix::new(from))
+        };
+        assert!(net.is_highlight(&user, &msg("bob", "hi Alice")));
+        assert!(!net.is_highlight(&user, &msg("bob", "hi")));
+        // Our own messages aren't highlights, whatever the case
+        assert!(!net.is_highlight(&user, &msg("ALICE", "hi Alice")));
     }
 
     #[test]

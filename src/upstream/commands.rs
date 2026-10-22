@@ -38,7 +38,12 @@ pub fn abort_pending_commands(
                     )));
                 }
                 "REGISTER" | "VERIFY" => {
-                    let account = cmd.msg.params.first().cloned().unwrap_or_default();
+                    let account = cmd
+                        .msg
+                        .params
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "*".to_owned());
                     dc.send_message(msg!(
                         "FAIL",
                         cmd.msg.command.clone(),

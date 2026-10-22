@@ -115,8 +115,7 @@ impl Network {
         if nick.is_empty() {
             return false;
         }
-        // TODO: use case-mapping aware comparison here
-        msg.prefix_name() != nick && ircutil::is_highlight(text, &nick)
+        !self.equal_casemap(msg.prefix_name(), &nick) && ircutil::is_highlight(text, &nick)
     }
 
     pub fn detached_message_needs_relay(
