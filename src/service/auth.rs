@@ -49,14 +49,15 @@ pub(super) fn handle_certfp_generate(
     if bits <= 0 || bits > MAX_RSA_BITS {
         bail!("invalid value for -bits");
     }
-    let ni = get_network_from_flag(u, ctx, p.get("network").unwrap_or(""))?;
+    let ni = get_network_from_flag(u, ctx, &p)?;
     let (key, cert) = crate::certfp::generate_certfp(&key_type, bits as usize)?;
-    let net = &mut u.networks[ni];
-    net.record.sasl.external_cert = Some(cert.clone());
-    net.record.sasl.external_key = Some(key);
-    net.record.sasl.mechanism = "EXTERNAL".to_owned();
-    net.sync_snapshot();
-    ctx.srv.db.store_network(u.record.id, &mut net.record)?;
+    let sasl = db::Sasl {
+        mechanism: "EXTERNAL".to_owned(),
+        external_cert: Some(cert.clone()),
+        external_key: Some(key),
+        ..u.networks[ni].record.sasl.clone()
+    };
+    store_sasl(u, ctx, ni, sasl)?;
     ctx.print("certificate generated");
     send_certfp_fingerprints(ctx, &cert);
     Ok(())
@@ -70,7 +71,7 @@ pub(super) fn handle_certfp_fingerprints(
     let u = u.unwrap();
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
-    let ni = get_network_from_flag(u, ctx, p.get("network").unwrap_or(""))?;
+    let ni = get_network_from_flag(u, ctx, &p)?;
     let sasl = &u.networks[ni].record.sasl;
     if sasl.mechanism != "EXTERNAL" {
         bail!("CertFP not set up");
@@ -88,7 +89,7 @@ pub(super) fn handle_sasl_status(
     let u = u.unwrap();
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
-    let ni = get_network_from_flag(u, ctx, p.get("network").unwrap_or(""))?;
+    let ni = get_network_from_flag(u, ctx, &p)?;
     let net = &u.networks[ni];
     match net.record.sasl.mechanism.as_str() {
         "PLAIN" => ctx.print(format!(
@@ -120,13 +121,14 @@ pub(super) fn handle_sasl_set_plain(
     if p.args.len() != 2 {
         bail!("expected exactly 2 arguments");
     }
-    let ni = get_network_from_flag(u, ctx, p.get("network").unwrap_or(""))?;
-    let net = &mut u.networks[ni];
-    net.record.sasl.plain_username = p.args[0].clone();
-    net.record.sasl.plain_password = p.args[1].clone();
-    net.record.sasl.mechanism = "PLAIN".to_owned();
-    ctx.srv.db.store_network(u.record.id, &mut net.record)?;
-    net.sync_snapshot();
+    let ni = get_network_from_flag(u, ctx, &p)?;
+    let sasl = db::Sasl {
+        mechanism: "PLAIN".to_owned(),
+        plain_username: p.args[0].clone(),
+        plain_password: p.args[1].clone(),
+        ..u.networks[ni].record.sasl.clone()
+    };
+    store_sasl(u, ctx, ni, sasl)?;
     ctx.print("credentials saved");
     Ok(())
 }
@@ -139,12 +141,22 @@ pub(super) fn handle_sasl_reset(
     let u = u.unwrap();
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
-    let ni = get_network_from_flag(u, ctx, p.get("network").unwrap_or(""))?;
-    let net = &mut u.networks[ni];
-    net.record.sasl = db::Sasl::default();
-    net.sync_snapshot();
-    ctx.srv.db.store_network(u.record.id, &mut net.record)?;
+    let ni = get_network_from_flag(u, ctx, &p)?;
+    store_sasl(u, ctx, ni, db::Sasl::default())?;
     ctx.print("credentials reset");
+    Ok(())
+}
+
+/// Replaces the SASL settings of a network. They're stored first: if that
+/// fails, the network is left unchanged.
+fn store_sasl(u: &mut User, ctx: &ServiceContext, ni: usize, sasl: db::Sasl) -> Result<()> {
+    let user_id = u.record.id;
+    let net = &mut u.networks[ni];
+    let mut record = net.record.clone();
+    record.sasl = sasl;
+    ctx.srv.db.store_network(user_id, &mut record)?;
+    net.record = record;
+    net.sync_snapshot();
     Ok(())
 }
 

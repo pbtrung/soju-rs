@@ -27,7 +27,9 @@ fn get_network_from_arg<'a>(
     Ok((ni, rest))
 }
 
-pub(super) fn get_network_from_flag(u: &User, ctx: &ServiceContext, name: &str) -> Result<usize> {
+/// Returns the network named by the -network flag, or the current one.
+pub(super) fn get_network_from_flag(u: &User, ctx: &ServiceContext, p: &Parsed) -> Result<usize> {
+    let name = p.get("network").unwrap_or("");
     if name.is_empty() {
         return ctx
             .network_id
