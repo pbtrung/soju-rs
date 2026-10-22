@@ -187,7 +187,6 @@ pub fn send_target_backlog(u: &mut User, dc_idx: usize, ni: usize, target: &str,
         return;
     }
     let net = &u.networks[ni];
-    let ch = net.channels.get(target).cloned();
     let target_cm = net.casemap(target);
     let opts = crate::msgstore::LoadMessageOptions {
         network: &net.record,
@@ -206,26 +205,17 @@ pub fn send_target_backlog(u: &mut User, dc_idx: usize, ni: usize, target: &str,
         }
     };
 
+    // Disjoint fields of the user: the network is read while the downstream
+    // is written
     let net = &u.networks[ni];
     let user = &u.record;
-    let relays: Vec<(bool, bool)> = history
-        .iter()
-        .map(|m| match &ch {
-            Some(ch) if ch.detached => (
-                net.detached_message_needs_relay(user, ch, m),
-                net.is_highlight(user, m),
-            ),
-            _ => (false, false),
-        })
-        .collect();
-    let detached = ch.as_ref().is_some_and(|c| c.detached);
-
+    let detached_ch = net.channels.get(target).filter(|c| c.detached);
     let dc = &mut u.downstreams[dc_idx];
     let r = dc.begin_batch("chathistory", &[target.to_owned()], Tags::new());
-    for (mut m, (relay, highlight)) in history.into_iter().zip(relays) {
-        if detached {
-            if relay {
-                relay_detached_message(dc, highlight, &m);
+    for mut m in history {
+        if let Some(ch) = detached_ch {
+            if net.detached_message_needs_relay(user, ch, &m) {
+                relay_detached_message(dc, net.is_highlight(user, &m), &m);
             }
         } else {
             m.tags.set("batch", r.clone());

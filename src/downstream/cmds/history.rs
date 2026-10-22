@@ -213,7 +213,7 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                     ]));
                 }
             };
-            let msgs: Vec<Message> = targets
+            let msgs = targets
                 .into_iter()
                 .filter(|t| !net.channels.get(&t.name).is_some_and(|c| c.detached))
                 .map(|t| {
@@ -223,9 +223,8 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                         t.name,
                         xirc::format_server_time(t.latest_message)
                     )
-                })
-                .collect();
-            dc!(u, i).send_batch("draft/chathistory-targets", &[], msgs);
+                });
+            u.downstreams[i].send_batch("draft/chathistory-targets", &[], msgs);
             return Ok(());
         }
         _ => unreachable!(),

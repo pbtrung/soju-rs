@@ -157,12 +157,12 @@ impl DownstreamConn {
             },
         );
         match prepared {
-            xirc::TextMessage::Single(m) => self.send_reply(vec![m]),
+            xirc::TextMessage::Single(m) => self.send_reply([m]),
             // A multiline batch is a single reply
             xirc::TextMessage::Batch(l) => self.send_reply(l),
             xirc::TextMessage::Lines(l) => {
                 for m in l {
-                    self.send_reply(vec![m]);
+                    self.send_reply([m]);
                 }
             }
         }
@@ -172,13 +172,15 @@ impl DownstreamConn {
     /// a labeled-response batch if needed: a multi-message reply (e.g. a
     /// draft/multiline batch) counts as a single reply, its first message
     /// carries the label or batch tag.
-    fn send_reply(&mut self, mut reply: Vec<Message>) {
+    fn send_reply(&mut self, reply: impl IntoIterator<Item = Message>) {
         let Some(label) = self.label.as_mut().filter(|l| !l.label.is_empty()) else {
             for m in reply {
                 self.raw_send(m);
             }
             return;
         };
+        // Only a labeled reply may need buffering
+        let mut reply: Vec<Message> = reply.into_iter().collect();
         if let Some(mut pending) = label.pending_msg.take() {
             // create a batch
             self.last_batch_ref += 1;
@@ -267,7 +269,14 @@ impl DownstreamConn {
     }
 
     /// Sends messages in a batch, tagging each with the batch reference.
-    pub fn send_batch(&mut self, typ: &str, params: &[String], msgs: Vec<Message>) {
+    /// Messages are sent as they're produced: they needn't be collected
+    /// first.
+    pub fn send_batch(
+        &mut self,
+        typ: &str,
+        params: &[String],
+        msgs: impl IntoIterator<Item = Message>,
+    ) {
         let r = self.begin_batch(typ, params, Tags::new());
         for mut m in msgs {
             m.tags.set("batch", r.clone());
