@@ -142,11 +142,12 @@ impl Reader {
                 let Some(frame) = r.next().await else {
                     return Ok(None);
                 };
-                let text = match frame? {
-                    WsMessage::Text(t) => t.to_string(),
-                    WsMessage::Binary(b) => String::from_utf8_lossy(&b).into_owned(),
+                let frame = frame?;
+                let text = match &frame {
+                    WsMessage::Text(t) => std::borrow::Cow::Borrowed(t.as_str()),
+                    WsMessage::Binary(b) => String::from_utf8_lossy(b),
                     WsMessage::Close(frame) => {
-                        return match frame.map(|f| f.code) {
+                        return match frame.as_ref().map(|f| f.code) {
                             None | Some(CloseCode::Normal) | Some(CloseCode::Away) => Ok(None),
                             Some(code) => Err(anyhow!("websocket closed with status {code}")),
                         };

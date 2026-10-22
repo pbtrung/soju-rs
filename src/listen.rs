@@ -732,6 +732,8 @@ fn handle_websocket(
     let upgrade = hyper::upgrade::on(&mut req);
     let info = ConnInfo {
         remote_addr: remote_addr.clone(),
+        // Like upstream, whose WebSocket connections don't have a TCP
+        // address: device certificates record no IP for them
         remote_ip: None,
         peer_cert: cert,
     };
@@ -775,8 +777,17 @@ fn handle_websocket(
 /// bigger ones close the connection.
 const WEBSOCKET_READ_LIMIT: usize = crate::conn::MAX_LINE_LENGTH;
 
+/// The WebSocket read buffer is allocated upfront for each connection, the
+/// write buffer grows up to this size before being written out. IRC lines
+/// are small: the defaults (128 KiB each) would mostly hold nothing. Larger
+/// frames still fit, the buffers grow as needed.
+const WEBSOCKET_READ_BUFFER_SIZE: usize = 4096;
+const WEBSOCKET_WRITE_BUFFER_SIZE: usize = 8192;
+
 fn websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
+        .read_buffer_size(WEBSOCKET_READ_BUFFER_SIZE)
+        .write_buffer_size(WEBSOCKET_WRITE_BUFFER_SIZE)
         .max_message_size(Some(WEBSOCKET_READ_LIMIT))
         .max_frame_size(Some(WEBSOCKET_READ_LIMIT))
 }
@@ -865,6 +876,26 @@ mod tests {
             HeaderValue::from_static("for=1.1.1.1, for=2.2.2.2"),
         );
         assert_eq!(parse_forwarded(&h), None);
+    }
+
+    /// Lines bigger than the WebSocket buffers still go through, both ways.
+    #[tokio::test]
+    async fn websocket_large_lines() {
+        let (a, b) = tokio::io::duplex(1 << 16);
+        let logger = crate::logger::Logger::new(false);
+        let ws = |io: tokio::io::DuplexStream, role| {
+            WebSocketStream::from_raw_socket(Box::new(io) as BoxIo, role, Some(websocket_config()))
+        };
+        let (server, client) = tokio::join!(ws(a, Role::Server), ws(b, Role::Client));
+        let (sc, mut sr) = Conn::new_websocket(server, logger.clone());
+        let (cc, mut cr) = Conn::new_websocket(client, logger);
+        let text = "x".repeat(2 * WEBSOCKET_WRITE_BUFFER_SIZE);
+        cc.send_message(crate::msg!("PRIVMSG", "#a", text.clone()));
+        let m = sr.read_message().await.unwrap().unwrap();
+        assert_eq!(m.params[1], text);
+        sc.send_message(crate::msg!("PRIVMSG", "#a", text.clone()));
+        let m = cr.read_message().await.unwrap().unwrap();
+        assert_eq!(m.params[1], text);
     }
 
     #[test]
