@@ -20,10 +20,17 @@ use sha2::Sha256;
 
 const RECORD_SIZE: u32 = 2048;
 
-/// Returned when the push service reports the subscription has expired
-/// (HTTP 404, RFC 8030 section 7.3).
+/// Returned when the push service reports the subscription has expired, see
+/// is_expired_status.
 #[derive(Debug)]
 pub struct SubscriptionExpired;
+
+/// Whether a push service response means the subscription is gone: 404 Not
+/// Found or 410 Gone (RFC 8030 section 7.3). Mozilla's push service replies
+/// 410 for expired subscriptions.
+fn is_expired_status(status: u16) -> bool {
+    matches!(status, 404 | 410)
+}
 
 impl std::fmt::Display for SubscriptionExpired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -323,7 +330,7 @@ impl Sender {
             .send()
             .await?;
         let status = resp.status();
-        if status.as_u16() == 404 {
+        if is_expired_status(status.as_u16()) {
             return Err(SubscriptionExpired.into());
         } else if !status.is_success() {
             bail!("HTTP error: {status}");
@@ -447,5 +454,13 @@ mod tests {
             let url = reqwest::Url::parse(u).unwrap();
             assert!(check_external_url(&url).is_ok(), "{u}");
         }
+    }
+
+    #[test]
+    fn expired_status() {
+        assert!(is_expired_status(404));
+        assert!(is_expired_status(410));
+        assert!(!is_expired_status(201));
+        assert!(!is_expired_status(429));
     }
 }
