@@ -80,10 +80,12 @@ impl Database {
             .optional()?)
     }
 
+    /// Lists the enabled users who haven't interacted since limit.
     pub fn list_inactive_usernames(&self, limit: DateTime<Utc>) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT username FROM User WHERE coalesce(downstream_interacted_at, created_at) < ?",
+            "SELECT username FROM User
+            WHERE coalesce(downstream_interacted_at, created_at) < ? AND enabled = 1",
         )?;
         let rows = stmt.query_map([xirc::format_server_time(limit)], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

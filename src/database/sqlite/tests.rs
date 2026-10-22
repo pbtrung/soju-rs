@@ -34,6 +34,15 @@ fn users() {
         .list_inactive_usernames(Utc::now() + chrono::Duration::hours(1))
         .unwrap();
     assert_eq!(inactive, vec!["alice"]);
+    // Disabled users are already inactive
+    let mut disabled = got.clone();
+    disabled.enabled = false;
+    db.store_user(&mut disabled).unwrap();
+    assert!(
+        db.list_inactive_usernames(Utc::now() + chrono::Duration::hours(1))
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         db.list_inactive_usernames(Utc::now() - chrono::Duration::hours(1))
             .unwrap()

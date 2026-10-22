@@ -389,15 +389,19 @@ impl Server {
         logf!(self.logger, "found {} inactive users", users.len());
         for (name, h) in users {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            h.send(Event::UserUpdate {
+            let sent = h.send(Event::UserUpdate {
                 password: None,
                 admin: None,
                 enabled: Some(false),
                 max_networks: None,
                 done: tx,
             });
+            if !sent {
+                // The user stopped meanwhile, e.g. it was deleted
+                continue;
+            }
             match tokio::time::timeout(Duration::from_secs(60), rx).await {
-                Ok(Ok(Ok(()))) => logf!(self.logger, "deleted inactive user {name:?}"),
+                Ok(Ok(Ok(()))) => logf!(self.logger, "disabled inactive user {name:?}"),
                 Ok(Ok(Err(e))) => bail!(e),
                 _ => bail!("context deadline exceeded"),
             }
