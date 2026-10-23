@@ -1,6 +1,6 @@
 [package]
 name = "soju"
-version = "0.99.15"
+version = "0.99.16"
 edition = "2024"
 description = "A user-friendly IRC bouncer (Rust port of soju)"
 license = "AGPL-3.0-only"
