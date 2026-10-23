@@ -71,21 +71,27 @@ fn send_next_pending_command(uc: &mut UpstreamConn, cmd: &str) {
     uc.send_message_labeled(id, &label, msg);
 }
 
+/// Maximum number of queued commands of one type, e.g. WHO, per upstream
+/// connection.
+const MAX_PENDING_COMMANDS: usize = 64;
+
 /// Queues a command whose replies need to be routed to a downstream
 /// connection. label is the downstream's label for the command.
-pub fn enqueue_command(uc: &mut UpstreamConn, dc_id: u64, label: String, msg: Message) {
+///
+/// When too many commands of this type are already queued, the command is
+/// returned instead: the caller is expected to abort it.
+pub fn enqueue_command(
+    uc: &mut UpstreamConn,
+    dc_id: u64,
+    label: String,
+    msg: Message,
+) -> Result<(), Box<PendingCommand>> {
     match msg.command.as_str() {
         "LIST" | "WHO" | "WHOIS" | "AUTHENTICATE" | "REGISTER" | "VERIFY" => {}
         c => panic!("Unsupported pending command {c:?}"),
     }
     let cmd = msg.command.clone();
     let l = uc.pending_cmds.entry(cmd.clone()).or_default();
-    l.push(PendingCommand {
-        downstream_id: dc_id,
-        downstream_label: label,
-        msg,
-        sent_at: None,
-    });
 
     // If we didn't get a reply after a while, just give up
     // TODO: consider sending an abort reply to downstream
@@ -95,16 +101,29 @@ pub fn enqueue_command(uc: &mut UpstreamConn, dc_id: u64, label: String, msg: Me
             Some(t) if t.elapsed() > Duration::from_secs(30) => {}
             _ => break,
         }
+        // Only log the command name: parameters may be secrets, e.g. the
+        // password of REGISTER
         logf!(
             uc.logger,
-            "timed out waiting for reply to pending command: {:?}",
-            l[timed_out].msg.to_string()
+            "timed out waiting for reply to pending command: {}",
+            l[timed_out].msg.command
         );
         timed_out += 1;
     }
     if timed_out > 0 {
         l.drain(..timed_out);
     }
+
+    let pending = PendingCommand {
+        downstream_id: dc_id,
+        downstream_label: label,
+        msg,
+        sent_at: None,
+    };
+    if l.len() >= MAX_PENDING_COMMANDS {
+        return Err(Box::new(pending));
+    }
+    l.push(pending);
 
     // Send the head of the queue unless it's already waiting for replies.
     // After dropping timed out commands, it may not have been sent yet.
@@ -114,6 +133,7 @@ pub fn enqueue_command(uc: &mut UpstreamConn, dc_id: u64, label: String, msg: Me
         clear_ended_early(uc, &cmd);
         send_next_pending_command(uc, &cmd);
     }
+    Ok(())
 }
 
 /// Returns the current pending command.

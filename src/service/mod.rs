@@ -123,9 +123,7 @@ async fn wait<F: Future>(deadline: Option<tokio::time::Instant>, fut: F) -> Opti
 /// Runs CPU-heavy work (key generation, password hashing) on a blocking
 /// thread, from a deferred command.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| anyhow!("internal error: {e}"))?
+    crate::util::cpu_work(f).await?
 }
 
 /// Hashes a password on a blocking thread, from a deferred command.

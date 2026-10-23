@@ -27,6 +27,34 @@ configuration file:
 
     listen unix+admin://
 
+The default socket path is `/run/soju/admin`: its directory must exist and be
+writable by soju (with systemd, `RuntimeDirectory=soju` creates it).
+
+The database (`db sqlite3 <path>`) holds upstream passwords, private keys and
+chat history: keep it in a directory only soju can access, for instance
+`/var/lib/soju` owned by the soju user with mode 0700 (with systemd,
+`StateDirectory=soju` and `UMask=0077`).
+
+A minimal systemd unit:
+
+    [Unit]
+    Description=soju IRC bouncer
+    After=network-online.target
+    Wants=network-online.target
+
+    [Service]
+    ExecStart=/usr/local/bin/soju -config /etc/soju/config
+    ExecReload=/bin/kill -HUP $MAINPID
+    User=soju
+    RuntimeDirectory=soju
+    StateDirectory=soju
+    WorkingDirectory=/var/lib/soju
+    UMask=0077
+    Restart=on-failure
+
+    [Install]
+    WantedBy=multi-user.target
+
 Start soju (e.g. via systemd or another supervisor daemon), then create an
 initial user:
 

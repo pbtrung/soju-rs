@@ -552,8 +552,12 @@ pub fn send_upstream_labeled(u: &mut User, dc_idx: usize, ni: usize, msg: Messag
 pub fn enqueue_upstream_command(u: &mut User, dc_idx: usize, ni: usize, msg: Message) {
     let label = u.downstreams[dc_idx].take_label();
     let dc_id = u.downstreams[dc_idx].id;
-    if let Some(uc) = u.networks[ni].upstream_mut() {
-        crate::upstream::enqueue_command(uc, dc_id, label, msg);
+    let Some(uc) = u.networks[ni].upstream_mut() else {
+        return;
+    };
+    if let Err(cmd) = crate::upstream::enqueue_command(uc, dc_id, label, msg) {
+        let pending = HashMap::from([(cmd.msg.command.clone(), vec![*cmd])]);
+        crate::upstream::abort_pending_commands(&mut u.downstreams, pending);
     }
 }
 
@@ -652,9 +656,13 @@ pub async fn serve(
         return;
     }
     loop {
-        match reader.read_message().await {
-            Ok(Some(msg)) => {
-                if !user.send(crate::user::Event::DownstreamMessage { dc_id: id, msg }) {
+        match reader.read_message_limited().await {
+            Ok(Some((msg, permit))) => {
+                if !user.send(crate::user::Event::DownstreamMessage {
+                    dc_id: id,
+                    msg,
+                    permit,
+                }) {
                     break;
                 }
             }

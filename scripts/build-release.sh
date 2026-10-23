@@ -47,7 +47,7 @@ for spec in "${targets[@]}"; do
 	rm -rf "$staging"
 	mkdir -p "$staging"
 	cp "target/$target/release/soju" "target/$target/release/sojuctl" "$staging/"
-	cp LICENSE README.md config.in "$staging/"
+	cp -r LICENSE README.md config.in doc "$staging/"
 	tar -C dist -czf "dist/$name.tar.gz" "$name"
 	rm -rf "$staging"
 done

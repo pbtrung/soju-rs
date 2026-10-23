@@ -243,6 +243,68 @@ fn messages_same_time() {
 }
 
 #[test]
+fn message_ids_not_reused() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+    let m = msg!("PRIVMSG", "#a", "x").with_tag("time", "2024-01-01T00:00:00.000Z");
+    let after = |id| MessageOptions {
+        after_id: id,
+        limit: 10,
+        ..Default::default()
+    };
+
+    // Expiry empties the table
+    let id1 = db
+        .store_messages(n.id, "#a", std::slice::from_ref(&m))
+        .unwrap()[0];
+    assert_eq!(db.delete_messages_before(Utc::now()).unwrap(), 1);
+    let id2 = db
+        .store_messages(n.id, "#a", std::slice::from_ref(&m))
+        .unwrap()[0];
+    assert!(id2 > id1);
+    assert_eq!(db.list_messages(n.id, "#a", &after(id1)).unwrap().len(), 1);
+
+    // Deleting a network or a user removes the highest IDs
+    let mut n2 = Network::new("irc.example.com");
+    db.store_network(u.id, &mut n2).unwrap();
+    let id3 = db
+        .store_messages(n2.id, "#a", std::slice::from_ref(&m))
+        .unwrap()[0];
+    db.delete_network(n2.id).unwrap();
+    let id4 = db
+        .store_messages(n.id, "#a", std::slice::from_ref(&m))
+        .unwrap()[0];
+    assert!(id4 > id3);
+    let mut u2 = User::new("bob");
+    db.store_user(&mut u2).unwrap();
+    let mut n3 = Network::new("irc.example.org");
+    db.store_network(u2.id, &mut n3).unwrap();
+    let id5 = db
+        .store_messages(n3.id, "#a", std::slice::from_ref(&m))
+        .unwrap()[0];
+    db.delete_user(u2.id).unwrap();
+    let id6 = db.store_messages(n.id, "#a", &[m]).unwrap()[0];
+    assert!(id6 > id5);
+}
+
+#[test]
+fn message_last_id_insertion_order() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+    // The upstream server's clock went backwards
+    let m1 = msg!("PRIVMSG", "#a", "x").with_tag("time", "2030-01-01T00:00:00.000Z");
+    let m2 = msg!("PRIVMSG", "#a", "y").with_tag("time", "2024-01-01T00:00:00.000Z");
+    let ids = db.store_messages(n.id, "#a", &[m1, m2]).unwrap();
+    assert_eq!(db.get_message_last_id(n.id, "#a").unwrap(), ids[1]);
+}
+
+#[test]
 fn delete_messages_vacuum() {
     let dir = std::env::temp_dir().join(format!("soju-rs-vacuum-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

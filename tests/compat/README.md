@@ -2,7 +2,9 @@
 
 Tools used to check soju-rs against upstream Go soju, the IRCv3
 specifications and the gamja web client. They start local servers on ports
-1666x-1669x and 1679x.
+1666x-1669x and 1679x. `env-up.sh` stops the servers it started on a previous
+run (tracked by pid files in `work/env/`), but other processes using these
+ports make the tests fail.
 
     ./setup.sh                 # build Go soju and ergo, generate configs
     cargo build                # build soju-rs (debug binaries are used)

@@ -91,6 +91,46 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Updates an existing user like store_user, except for its password:
+    /// the record may hold an outdated hash, see upgrade_user_password.
+    pub fn store_user_keep_password(&self, user: &User) -> Result<()> {
+        self.conn().execute(
+            "UPDATE User
+            SET admin = :admin, nick = :nick, realname = :realname,
+                enabled = :enabled, downstream_interacted_at = :downstream_interacted_at,
+                max_networks = :max_networks
+            WHERE username = :username",
+            named_params! {
+                ":username": user.username,
+                ":admin": user.admin,
+                ":nick": null_string(&user.nick),
+                ":realname": null_string(&user.realname),
+                ":enabled": user.enabled,
+                ":downstream_interacted_at": time_to_sql(user.downstream_interacted_at),
+                ":max_networks": user.max_networks,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Replaces a user's password hash with a stronger hash of the same
+    /// password, unless the password was changed meanwhile.
+    pub fn upgrade_user_password(&self, id: i64, old: &str, new: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE User SET password = :new WHERE id = :id AND password = :old",
+            named_params! {":id": id, ":old": old, ":new": new},
+        )?;
+        Ok(())
+    }
+
+    pub fn set_user_downstream_interacted_at(&self, id: i64, t: DateTime<Utc>) -> Result<()> {
+        self.conn().execute(
+            "UPDATE User SET downstream_interacted_at = ? WHERE id = ?",
+            params![xirc::format_server_time(t), id],
+        )?;
+        Ok(())
+    }
+
     pub fn store_user(&self, user: &mut User) -> Result<()> {
         let interacted = time_to_sql(user.downstream_interacted_at);
         let fields = named_params! {
@@ -152,6 +192,7 @@ impl Database {
             )",
             [id],
         )?;
+        super::messages::record_message_id_high_water(&tx)?;
         tx.execute(
             "DELETE FROM Message
             WHERE id IN (

@@ -118,6 +118,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
     let (conn, mut reader) = Conn::new_stream(io, logger.clone(), Some((rate, rate_flag.clone())));
     let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
     let (outcome_tx, outcome_rx) = oneshot::channel();
+    let registered = CancellationToken::new();
 
     let new = NewConn {
         id: conn_id,
@@ -127,6 +128,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         net_id: record.id,
         events: p.tx.clone(),
         srv: p.srv.clone(),
+        registered: registered.clone(),
     };
     if p.tx
         .send(Event::UpstreamConnected {
@@ -140,9 +142,16 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         return Ok(());
     }
 
+    // A server which accepts the connection but never completes
+    // registration would otherwise keep the network connecting forever
+    let register_deadline = tokio::time::Instant::now() + REGISTER_TIMEOUT;
     let read_error = loop {
         let res = tokio::select! {
-            res = reader.read_message() => res,
+            res = reader.read_message_limited() => res,
+            _ = tokio::time::sleep_until(register_deadline), if !registered.is_cancelled() => {
+                conn.close();
+                Err(anyhow!("registration timed out"))
+            }
             _ = p.stop.cancelled() => {
                 conn.close();
                 Ok(None)
@@ -153,12 +162,13 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
             }
         };
         match res {
-            Ok(Some(msg)) => {
+            Ok(Some((msg, permit))) => {
                 metrics::inc(&p.srv.metrics.upstream_in_messages_total);
                 let _ = p.tx.send(Event::UpstreamMessage {
                     net_id: record.id,
                     conn_id,
                     msg,
+                    permit,
                 });
             }
             Ok(None) => break None,
@@ -231,6 +241,16 @@ async fn connect_tcp(addr: &str) -> Result<tokio::net::TcpStream> {
 }
 
 async fn dial_tcp(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::TcpStream> {
+    let s = dial_tcp_from(srv, user_id, addr).await?;
+    // Detect dead peers on idle connections
+    let keepalive = socket2::TcpKeepalive::new().with_time(KEEP_ALIVE);
+    let _ = socket2::SockRef::from(&s).set_tcp_keepalive(&keepalive);
+    Ok(s)
+}
+
+/// Connects to a TCP address, from the user's IP if upstream-user-ip is
+/// set.
+async fn dial_tcp_from(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::TcpStream> {
     let upstream_user_ips = srv.config().basic.upstream_user_ips.clone();
     if upstream_user_ips.is_empty() {
         return connect_tcp(addr).await;

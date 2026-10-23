@@ -61,6 +61,11 @@ use commands::{
 use users::start_regain_nick_timer;
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long an upstream server has to complete registration (RPL_WELCOME)
+/// once connected.
+pub const REGISTER_TIMEOUT: Duration = Duration::from_secs(60);
+/// TCP keep-alive period of upstream connections, like Go's net.Dialer.
+pub const KEEP_ALIVE: Duration = Duration::from_secs(15);
 pub const UPSTREAM_MESSAGE_DELAY: Duration = Duration::from_secs(2);
 pub const UPSTREAM_MESSAGE_BURST: u32 = 10;
 /// The delay after each connect command, to let the server process it, e.g.
@@ -168,6 +173,8 @@ pub struct NewConn {
     pub net_id: i64,
     pub events: mpsc::UnboundedSender<Event>,
     pub srv: Arc<Server>,
+    /// Cancelled once registered, stopping the registration timeout
+    pub registered: CancellationToken,
 }
 
 pub struct UpstreamChannel {
@@ -311,6 +318,7 @@ pub struct UpstreamConn {
     pub isupport: Isupport,
 
     pub registered: bool,
+    registered_token: CancellationToken,
     pub nick: String,
     pub username: String,
     pub realname: String,
@@ -364,6 +372,7 @@ impl UpstreamConn {
             available_memberships: ircutil::std_memberships(),
             isupport: Isupport::new(),
             registered: false,
+            registered_token: new.registered,
             nick: String::new(),
             username: String::new(),
             realname: String::new(),

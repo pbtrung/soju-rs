@@ -86,6 +86,14 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.upgrade()?;
+        // Not part of upstream's schema, see
+        // messages::record_message_id_high_water
+        db.conn().execute_batch(
+            "CREATE TABLE IF NOT EXISTS MessageIdHighWater (
+                id INTEGER PRIMARY KEY CHECK (id = 0),
+                last_id INTEGER NOT NULL
+            );",
+        )?;
         Ok(db)
     }
 

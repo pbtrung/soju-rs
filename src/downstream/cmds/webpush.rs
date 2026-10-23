@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// Maximum number of Web Push subscriptions per user and network.
+const MAX_SUBSCRIPTIONS: usize = 25;
+
+/// Maximum number of test notifications being sent at once per user.
+const MAX_PENDING_CHECKS: usize = 4;
+
 /// Finishes WEBPUSH REGISTER, once the test notification was sent.
 pub fn web_push_tested(
     u: &mut User,
@@ -10,7 +16,14 @@ pub fn web_push_tested(
     network_id: i64,
     mut sub: db::WebPushSubscription,
     res: Result<(), String>,
+    check: u64,
 ) {
+    let key = (network_id, sub.endpoint.clone());
+    // A later REGISTER of the same endpoint is being checked: it stores the
+    // subscription
+    let superseded = u.web_push_checks.get(&key).is_some_and(|&c| c != check);
+    // UNREGISTER was received meanwhile
+    let cancelled = !superseded && u.web_push_checks.remove(&key).is_none();
     let Some(i) = u.dc_index(dc_id) else {
         return;
     };
@@ -34,6 +47,35 @@ pub fn web_push_tested(
                 "REGISTER",
                 "Invalid endpoint",
             ]));
+        }
+        if cancelled {
+            return Err(fail(&[
+                "WEBPUSH",
+                "INTERNAL_ERROR",
+                "REGISTER",
+                "Registration cancelled",
+            ]));
+        }
+        if superseded {
+            dc!(u, i).send_message(msg!("WEBPUSH", "REGISTER", sub.endpoint.clone()));
+            return Ok(());
+        }
+        // The subscriptions may have changed while the notification was
+        // being sent
+        let subs = match u.srv.db.list_web_push_subscriptions(user_id, network_id) {
+            Ok(s) => s,
+            Err(e) => {
+                logf!(
+                    dc!(u, i).logger,
+                    "failed to fetch Web push subscription: {e}"
+                );
+                return Err(internal_error("WEBPUSH", "REGISTER"));
+            }
+        };
+        match subs.iter().find(|s| s.endpoint == sub.endpoint) {
+            Some(old) => sub.id = old.id,
+            None if subs.len() >= MAX_SUBSCRIPTIONS => return Err(too_many_subscriptions()),
+            None => sub.id = 0,
         }
         if let Err(e) = u
             .srv
@@ -104,17 +146,21 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                     return Err(internal_error("WEBPUSH", &subcommand));
                 }
             };
-            if subs.len() > 25 {
-                return Err(fail(&[
-                    "WEBPUSH",
-                    "INTERNAL_ERROR",
-                    &subcommand,
-                    "Too many subscriptions",
-                ]));
+            let old = subs.iter().find(|s| s.endpoint == endpoint);
+            // Refreshing an existing subscription is always allowed
+            if old.is_none() {
+                let pending_new = u
+                    .web_push_checks
+                    .keys()
+                    .filter(|(n, e)| *n == network_id && !subs.iter().any(|s| s.endpoint == *e))
+                    .count();
+                if subs.len() + pending_new >= MAX_SUBSCRIPTIONS {
+                    return Err(too_many_subscriptions());
+                }
             }
 
             let mut update_sub = true;
-            if let Some(old) = subs.iter().find(|s| s.endpoint == endpoint) {
+            if let Some(old) = old {
                 // Update the old subscription instead of creating a new one
                 new_sub.id = old.id;
                 // Rate-limit subscription checks
@@ -140,6 +186,20 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         "Invalid endpoint",
                     ]));
                 }
+                let key = (network_id, endpoint.clone());
+                if !u.web_push_checks.contains_key(&key)
+                    && u.web_push_checks.len() >= MAX_PENDING_CHECKS
+                {
+                    return Err(fail(&[
+                        "WEBPUSH",
+                        "INTERNAL_ERROR",
+                        &subcommand,
+                        "Too many pending subscriptions, try again later",
+                    ]));
+                }
+                let check = u.next_web_push_check;
+                u.next_web_push_check += 1;
+                u.web_push_checks.insert(key, check);
                 // The test notification is sent in the background: the reply
                 // comes with Event::WebPushTested
                 let dc_id = dc!(u, i).id;
@@ -161,6 +221,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         network_id,
                         sub: new_sub,
                         res,
+                        check,
                     });
                 });
                 return Ok(());
@@ -170,6 +231,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
         "UNREGISTER" => {
             need_params(msg, 2)?;
             let endpoint = msg.params[1].clone();
+            u.web_push_checks.remove(&(network_id, endpoint.clone()));
             let subs = match u.srv.db.list_web_push_subscriptions(user_id, network_id) {
                 Ok(s) => s,
                 Err(e) => {
@@ -201,6 +263,15 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
         }
     }
     Ok(())
+}
+
+fn too_many_subscriptions() -> anyhow::Error {
+    fail(&[
+        "WEBPUSH",
+        "INTERNAL_ERROR",
+        "REGISTER",
+        "Too many subscriptions",
+    ])
 }
 
 fn sanity_check_web_push_endpoint(endpoint: &str) -> Result<()> {

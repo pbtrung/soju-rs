@@ -47,8 +47,14 @@ pub(super) fn handle_certfp_generate(
     let net_id = u.networks[ni].id();
     let tx = u.tx.clone();
     let srv = ctx.srv.clone();
+    let generating = u
+        .certfp_generating
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| anyhow!("a certificate is already being generated"))?;
     // Generating a large RSA key takes seconds
     ctx.defer(move |mut print| async move {
+        let _generating = generating;
         let (key, cert) =
             blocking(move || crate::certfp::generate_certfp(&key_type, bits as usize)).await?;
         let fingerprints = certfp_fingerprints(&cert);

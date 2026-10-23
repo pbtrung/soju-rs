@@ -2,6 +2,7 @@
 
 pub mod numerics;
 
+use std::collections::hash_map::Entry;
 use std::fmt;
 
 /// Characters which are escaped in tag values.
@@ -51,13 +52,32 @@ impl Tags {
         Tags(Vec::new())
     }
 
-    /// Parses a tag string (without the leading '@').
+    /// Parses a tag string (without the leading '@'). A duplicate key keeps
+    /// its first position and its last value.
     pub fn parse(s: &str) -> Tags {
+        let split = |tag: &'_ str| match tag.split_once('=') {
+            Some((k, v)) => (k.to_owned(), parse_tag_value(v)),
+            None => (tag.to_owned(), String::new()),
+        };
         let mut tags = Tags::new();
+        if s.bytes().filter(|&b| b == b';').count() < 16 {
+            for tag in s.split(';') {
+                let (k, v) = split(tag);
+                tags.set(k, v);
+            }
+            return tags;
+        }
+        // Looking up previous keys linearly would make parsing quadratic in
+        // the number of tags, which a client controls
+        let mut index = std::collections::HashMap::<String, usize>::new();
         for tag in s.split(';') {
-            match tag.split_once('=') {
-                Some((k, v)) => tags.set(k, parse_tag_value(v)),
-                None => tags.set(tag, ""),
+            let (k, v) = split(tag);
+            match index.entry(k) {
+                Entry::Occupied(e) => tags.0[*e.get()].1 = v,
+                Entry::Vacant(e) => {
+                    tags.0.push((e.key().clone(), v));
+                    e.insert(tags.0.len() - 1);
+                }
             }
         }
         tags
@@ -394,6 +414,22 @@ mod tests {
         assert_eq!(m.command, "CMD");
         assert_eq!(m.params, vec!["x", "y"]);
         assert_eq!(m.to_string(), "@a=b\\sc;d;e=\\:\\\\x :srv CMD x y");
+    }
+
+    #[test]
+    fn parse_many_tags() {
+        // Same semantics with and without the key index
+        for n in [4, 100] {
+            let s: Vec<String> = (0..n).map(|i| format!("k{}={i}", i % (n / 2))).collect();
+            let tags = Tags::parse(&s.join(";"));
+            let mut want = Tags::new();
+            for i in 0..n {
+                want.set(format!("k{}", i % (n / 2)), i.to_string());
+            }
+            assert_eq!(tags, want);
+            assert_eq!(tags.len(), n / 2);
+            assert_eq!(tags.get("k0"), Some((n / 2).to_string().as_str()));
+        }
     }
 
     #[test]

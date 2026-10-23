@@ -5,6 +5,7 @@ import base64
 import difflib
 import os
 import re
+import signal
 import sys
 import time
 import traceback
@@ -817,11 +818,19 @@ def ergo_ctl(env, action):
     port = env.ports["ergo"]
     d = f"{WORK}/env/ergo-{port}"
     if action == "stop":
-        subprocess.run(["pkill", "-f", f"ergo run --conf {d}/ircd.yaml"])
-        subprocess.run(["bash", "-c", f"cd {d} && pkill -f 'ergo run --conf ircd.yaml' -P $$ || true"])
-        out = subprocess.run(["bash", "-c", f"for p in $(pgrep -x ergo); do [ \"$(readlink /proc/$p/cwd)\" = \"{d}\" ] && kill $p; done; true"])
+        # Only the instance started for this environment (pid file written
+        # by env-up.sh or below), checked by its working directory
+        try:
+            with open(f"{d}/pid") as f:
+                pid = int(f.read())
+            if os.readlink(f"/proc/{pid}/cwd") == d:
+                os.kill(pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
     else:
-        subprocess.Popen(["bash", "-c", f"cd {d} && exec {WORK}/bin/ergo run --conf ircd.yaml >> ergo.log 2>&1"])
+        p = subprocess.Popen(["bash", "-c", f"cd {d} && exec {WORK}/bin/ergo run --conf ircd.yaml >> ergo.log 2>&1"])
+        with open(f"{d}/pid", "w") as f:
+            f.write(str(p.pid))
         time.sleep(1)
 
 

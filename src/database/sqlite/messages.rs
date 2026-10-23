@@ -10,14 +10,18 @@ use crate::irc::Message;
 use crate::xirc;
 
 impl Database {
-    /// Returns the ID of the last message for a target, or 0.
+    /// Returns the ID of the last message stored for a target, or 0.
+    ///
+    /// Delivery receipts are cursors in insertion order (see after_id in
+    /// list_messages): this is the last message stored, not the one with the
+    /// latest time, which upstream servers may send out of order.
     pub fn get_message_last_id(&self, network_id: i64, name: &str) -> Result<i64> {
         let conn = self.conn();
         Ok(conn
             .query_row(
                 "SELECT m.id FROM Message AS m, MessageTarget AS t
                 WHERE t.network = :network AND t.target = :target AND m.target = t.id
-                ORDER BY m.time DESC, m.id DESC LIMIT 1",
+                ORDER BY m.id DESC LIMIT 1",
                 named_params! {":network": network_id, ":target": name},
                 |r| r.get(0),
             )
@@ -119,9 +123,15 @@ impl Database {
         .execute(named_params! {":network": network_id, ":target": name})?;
         let mut ids = Vec::with_capacity(msgs.len());
         {
+            // Message IDs are delivery receipt cursors: never reuse the IDs
+            // of deleted messages, see record_message_id_high_water
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO Message(target, raw, time, sender, text)
-                SELECT id, :raw, :time, :sender, :text
+                "INSERT INTO Message(id, target, raw, time, sender, text)
+                SELECT max(
+                        coalesce((SELECT max(id) FROM Message), 0),
+                        coalesce((SELECT last_id FROM MessageIdHighWater), 0)
+                    ) + 1,
+                    id, :raw, :time, :sender, :text
                 FROM MessageTarget as t
                 WHERE network = :network AND target = :target",
             )?;
@@ -295,11 +305,32 @@ impl Database {
     /// Deletes messages older than before. Returns the number of deleted
     /// messages.
     pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<usize> {
-        Ok(self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        record_message_id_high_water(&tx)?;
+        let n = tx.execute(
             "DELETE FROM Message WHERE time < ?",
             [xirc::format_server_time(before)],
-        )?)
+        )?;
+        tx.commit()?;
+        Ok(n)
     }
+}
+
+/// Records the highest message ID before deleting messages. SQLite would
+/// otherwise reuse the IDs of deleted messages with the highest IDs, and
+/// delivery receipts pointing past them would hide new messages.
+///
+/// The table isn't part of upstream's schema: Go soju ignores it, and keeps
+/// reusing IDs if it deletes messages itself.
+pub(super) fn record_message_id_high_water(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO MessageIdHighWater(id, last_id)
+        SELECT 0, max(id) FROM Message HAVING max(id) IS NOT NULL
+        ON CONFLICT(id) DO UPDATE SET last_id = max(last_id, excluded.last_id)",
+        [],
+    )?;
+    Ok(())
 }
 
 /// Returns whether a character is a token character for FTS5's unicode61

@@ -152,15 +152,18 @@ impl PlainAuthenticator {
                 let db = db.clone();
                 let username = username.to_owned();
                 let password = password.to_owned();
-                tokio::task::spawn_blocking(move || -> Result<()> {
+                crate::util::cpu_work(move || -> Result<()> {
                     let Some(mut u) = db.get_user(&username)? else {
                         return Err(invalid_credentials(anyhow!(
                             "user not found: sql: no rows in result set"
                         )));
                     };
+                    let old = u.password.clone();
                     let upgraded = u.check_password(&password).map_err(invalid_credentials)?;
                     if upgraded {
-                        db.store_user(&mut u)?;
+                        // Only the hash: the rest of the record may be
+                        // updated meanwhile by the user's event loop
+                        db.upgrade_user_password(u.id, &old, &u.password)?;
                     }
                     Ok(())
                 })
@@ -388,6 +391,27 @@ mod tests {
         let err = a.auth_plain(&db, "bob", "secret", "").await.unwrap_err();
         assert_eq!(auth_error_reason(&err), "Invalid credentials");
         assert_eq!(auth_error_reason(&anyhow!("x")), "Authentication failed");
+    }
+
+    #[tokio::test]
+    async fn password_upgrade_kept() {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        let mut u = User::new("alice");
+        u.password = bcrypt::hash("secret", 4).unwrap();
+        db.store_user(&mut u).unwrap();
+        let a = PlainAuthenticator::Internal;
+        a.auth_plain(&db, "alice", "secret", "").await.unwrap();
+        let upgraded = db.get_user("alice").unwrap().unwrap().password;
+        assert_ne!(upgraded, u.password);
+        // A live user's record still holds the old hash
+        u.realname = "Alice".to_owned();
+        db.store_user_keep_password(&u).unwrap();
+        db.set_user_downstream_interacted_at(u.id, chrono::Utc::now())
+            .unwrap();
+        let stored = db.get_user("alice").unwrap().unwrap();
+        assert_eq!(stored.password, upgraded);
+        assert_eq!(stored.realname, "Alice");
+        a.auth_plain(&db, "alice", "secret", "").await.unwrap();
     }
 
     #[test]

@@ -6,20 +6,33 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=${COMPAT_WORK:-$HERE/work}
 RSBIN=${RSBIN:-$HERE/../../target/debug}
-pkill -x ergo || true
-pkill -f "soju -config $S/env/go/config" || true
-pkill -f "soju -config $S/env/rs/config" || true
+# Only stop the processes started by a previous run, recorded in pid files,
+# if they're still what was started there
+stop() { # dir
+  local pid
+  [ -f "$1/pid" ] || return 0
+  pid=$(cat "$1/pid")
+  if [ "$(readlink "/proc/$pid/cwd")" = "$1" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$1/pid"
+}
+for d in "$S/env/ergo-16667" "$S/env/ergo-16668" "$S/env/rs" "$S/env/go"; do
+  stop "$d"
+done
 sleep 0.5
 for port in 16667 16668; do
   D=$S/env/ergo-$port
-  rm -rf $D; mkdir -p $D
-  ln -s $S/src/ergo/languages $D/languages
-  sed -e "s/127.0.0.1:16667/127.0.0.1:$port/" -e "s/TLSPORT/$((port+30))/" -e "s#$S/env/ergo/ircd.db#$D/ircd.db#" $S/env/ergo/ircd.yaml > $D/ircd.yaml
-  (cd $D && $S/bin/ergo initdb --conf ircd.yaml >/dev/null 2>&1 && $S/bin/ergo run --conf ircd.yaml > ergo.log 2>&1 &)
+  rm -rf "$D"; mkdir -p "$D"
+  ln -s "$S/src/ergo/languages" "$D/languages"
+  sed -e "s/127.0.0.1:16667/127.0.0.1:$port/" -e "s/TLSPORT/$((port+30))/" -e "s#$S/env/ergo/ircd.db#$D/ircd.db#" "$S/env/ergo/ircd.yaml" > "$D/ircd.yaml"
+  (cd "$D" && "$S/bin/ergo" initdb --conf ircd.yaml >/dev/null 2>&1)
+  (cd "$D" && exec "$S/bin/ergo" run --conf ircd.yaml > ergo.log 2>&1) &
+  echo $! > "$D/pid"
 done
 start() { # name bin ircport wsport ergoport
   local D=$S/env/$1
-  rm -rf $D; mkdir -p $D
+  rm -rf "$D"; mkdir -p "$D"
   cat > $D/config <<CFG
 db sqlite3 $D/soju.db
 hostname soju.test
@@ -29,10 +42,11 @@ listen unix+admin://$D/admin
 http-origin *
 ${EXTRA_CONFIG//%D%/$D}
 CFG
-  $2/soju -config $D/config ${SOJU_FLAGS:-} > $D/soju.log 2>&1 &
-  for i in $(seq 50); do [ -S $D/admin ] && break; sleep 0.1; done
-  $2/sojuctl -config $D/config user create -username alice -password secret -admin >/dev/null
-  $2/sojuctl -config $D/config user create -username bob -password secret >/dev/null
+  (cd "$D" && exec "$2/soju" -config "$D/config" ${SOJU_FLAGS:-} > "$D/soju.log" 2>&1) &
+  echo $! > "$D/pid"
+  for i in $(seq 50); do [ -S "$D/admin" ] && break; sleep 0.1; done
+  "$2/sojuctl" -config "$D/config" user create -username alice -password secret -admin >/dev/null
+  "$2/sojuctl" -config "$D/config" user create -username bob -password secret >/dev/null
 }
 start rs $RSBIN 16670 16671
 start go $S/bin 16680 16681

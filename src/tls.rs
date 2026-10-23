@@ -160,20 +160,22 @@ impl ServerCertVerifier for PinnedCert {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
+        _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        for raw in std::iter::once(end_entity).chain(intermediates) {
-            let remote = match self.algo.as_str() {
-                "sha-512" => hex::encode(Sha512::digest(raw.as_ref())),
-                "sha-256" => hex::encode(Sha256::digest(raw.as_ref())),
-                _ => String::new(),
-            };
-            if remote == self.fingerprint {
-                return Ok(ServerCertVerified::assertion());
-            }
+        // Only the leaf is checked: the handshake signature proves possession
+        // of the leaf key, but nothing links the leaf to the other
+        // certificates the server sent, so matching those would let anyone
+        // append the pinned (public) certificate to their own chain.
+        let remote = match self.algo.as_str() {
+            "sha-512" => hex::encode(Sha512::digest(end_entity.as_ref())),
+            "sha-256" => hex::encode(Sha256::digest(end_entity.as_ref())),
+            _ => String::new(),
+        };
+        if !remote.is_empty() && remote == self.fingerprint {
+            return Ok(ServerCertVerified::assertion());
         }
         // Fingerprints don't match, let's give the user a fingerprint they
         // can use to connect
@@ -240,4 +242,75 @@ pub fn client_config(
     };
     cfg.alpn_protocols = vec![b"irc".to_vec()];
     Ok(Arc::new(cfg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+        let (key, cert) = crate::certfp::generate_certfp("ed25519", 0).unwrap();
+        (
+            CertificateDer::from(cert),
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+        )
+    }
+
+    /// Runs a handshake against a server presenting chain (signed with key)
+    /// while the client pins pinned. Returns whether it succeeded.
+    async fn handshake(
+        chain: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+        pinned: &CertificateDer<'_>,
+        version: &'static rustls::SupportedProtocolVersion,
+    ) -> bool {
+        let server_cfg = rustls::ServerConfig::builder_with_provider(provider())
+            .with_protocol_versions(&[version])
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain, key)
+            .unwrap();
+        let certfp = format!("sha-256:{}", hex::encode(Sha256::digest(pinned.as_ref())));
+        let mut client_cfg = (*client_config(&certfp, None).unwrap()).clone();
+        client_cfg.alpn_protocols.clear();
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(client_cfg));
+        let server = tokio::spawn(async move {
+            let mut s = acceptor.accept(a).await.ok()?;
+            s.write_all(b"x").await.ok()?;
+            s.flush().await.ok()
+        });
+        let name = ServerName::try_from("example.org").unwrap();
+        let ok = match connector.connect(name, b).await {
+            Ok(mut s) => {
+                let mut buf = [0u8; 1];
+                s.read_exact(&mut buf).await.is_ok()
+            }
+            Err(_) => false,
+        };
+        let _ = server.await;
+        ok
+    }
+
+    #[tokio::test]
+    async fn pinned_cert() {
+        for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
+            let (cert_a, key_a) = self_signed();
+            let (cert_b, key_b) = self_signed();
+            assert!(handshake(vec![cert_a.clone()], key_a, &cert_a, version).await);
+            // An unrelated leaf followed by the pinned certificate must be
+            // rejected
+            assert!(
+                !handshake(
+                    vec![cert_b.clone(), cert_a.clone()],
+                    key_b,
+                    &cert_a,
+                    version
+                )
+                .await
+            );
+        }
+    }
 }

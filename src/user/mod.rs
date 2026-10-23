@@ -4,6 +4,7 @@
 //! upstream connections and downstream connections. Connection readers post
 //! events to that task, so the dispatch logic never races.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Mutex};
@@ -15,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::MsgStoreDriver;
+use crate::conn::InputPermit;
 use crate::database::{self as db, get_nick, get_realname};
 use crate::downstream::DownstreamConn;
 use crate::irc::Message;
@@ -51,6 +53,8 @@ pub enum Event {
         net_id: i64,
         conn_id: u64,
         msg: Message,
+        /// Released once the message is handled
+        permit: InputPermit,
     },
     /// The upstream connection's reader stopped.
     UpstreamClosed {
@@ -71,6 +75,8 @@ pub enum Event {
     DownstreamMessage {
         dc_id: u64,
         msg: Message,
+        /// Released once the message is handled
+        permit: InputPermit,
     },
     DownstreamDisconnected {
         dc_id: u64,
@@ -116,6 +122,8 @@ pub enum Event {
         network_id: i64,
         sub: db::WebPushSubscription,
         res: Result<(), String>,
+        /// The ID of the check, see User::web_push_checks
+        check: u64,
     },
     /// Runs a function on the user's event loop, e.g. to apply the result of
     /// a deferred BouncerServ command.
@@ -208,6 +216,14 @@ pub struct User {
     pub networks: Vec<Network>,
     pub downstreams: Vec<DownstreamConn>,
     pub msg_store: Store,
+    /// Held while a certificate is being generated for this user: key
+    /// generation is expensive, only one runs at a time
+    pub certfp_generating: Arc<tokio::sync::Semaphore>,
+    /// Web Push subscriptions being checked with a test notification, by
+    /// network ID and endpoint: the ID of the latest check. UNREGISTER
+    /// removes the entry, cancelling the check.
+    pub web_push_checks: HashMap<(i64, String), u64>,
+    pub next_web_push_check: u64,
     next_runner_id: u64,
     stopped: bool,
 }
@@ -237,6 +253,9 @@ impl User {
             networks: Vec::new(),
             downstreams: Vec::new(),
             msg_store,
+            certfp_generating: Arc::new(tokio::sync::Semaphore::new(1)),
+            web_push_checks: HashMap::new(),
+            next_web_push_check: 1,
             next_runner_id: 1,
             stopped: false,
         }
@@ -277,10 +296,14 @@ impl User {
         let nick_updated = self.record.nick != record.nick;
         let realname_updated = self.record.realname != record.realname;
         let enabled_updated = self.record.enabled != record.enabled;
-        self.srv
-            .db
-            .store_user(&mut record)
-            .map_err(|e| anyhow!("failed to update user {:?}: {e}", self.record.username))?;
+        // The stored password hash may have been upgraded since the record
+        // was loaded: only write it when it's changed
+        let res = if self.record.password != record.password {
+            self.srv.db.store_user(&mut record)
+        } else {
+            self.srv.db.store_user_keep_password(&record)
+        };
+        res.map_err(|e| anyhow!("failed to update user {:?}: {e}", self.record.username))?;
         self.record = record;
         *self.handle_record.lock().unwrap() = self.record.clone();
 
@@ -342,15 +365,20 @@ impl User {
     }
 
     fn bump_downstream_interaction_time(&mut self) {
-        if let Err(e) = self.update_user(|record| {
-            record.downstream_interacted_at = Some(Utc::now());
-            Ok(())
-        }) {
+        let now = Utc::now();
+        if let Err(e) = self
+            .srv
+            .db
+            .set_user_downstream_interacted_at(self.record.id, now)
+        {
             logf!(
                 self.logger,
                 "failed to bump downstream interaction time: {e}"
             );
+            return;
         }
+        self.record.downstream_interacted_at = Some(now);
+        self.handle_record.lock().unwrap().downstream_interacted_at = Some(now);
     }
 }
 

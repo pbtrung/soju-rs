@@ -292,6 +292,7 @@ pub(super) fn handle_message(
             let uc = uc!(u, ni);
             uc.nick = msg.params[0].clone();
             uc.registered = true;
+            uc.registered_token.cancel();
             uc.server_prefix = msg.prefix.clone().unwrap_or_default();
             logf!(uc.logger, "connection registered with nick {:?}", uc.nick);
         }

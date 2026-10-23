@@ -12,7 +12,7 @@ use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadHalf,
     WriteHalf,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -29,6 +29,25 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// at most 8191 bytes of tags plus 512 bytes: leave room for servers with a
 /// larger LINELEN.
 pub const MAX_LINE_LENGTH: usize = 32768;
+
+/// Maximum size of the messages queued on a connection and not written yet.
+/// A peer which doesn't read fast enough is disconnected once it's reached,
+/// instead of letting the queue grow without bounds.
+pub const MAX_QUEUED_BYTES: usize = 16 << 20;
+
+/// Accounted size of a queued line on top of its length, for the channel
+/// node and string header.
+const QUEUED_LINE_OVERHEAD: usize = 64;
+
+/// Maximum number of messages read from a connection and still being
+/// processed (see ConnReader::read_message_limited). Once it's reached, the
+/// connection isn't read anymore: the peer is slowed down by TCP flow
+/// control instead of growing the event queue.
+pub const MAX_INPUT_IN_FLIGHT: usize = 64;
+
+/// Held while a message returned by ConnReader::read_message_limited is
+/// being processed.
+pub type InputPermit = tokio::sync::OwnedSemaphorePermit;
 
 pub trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
@@ -223,6 +242,8 @@ struct Shared {
     tx: mpsc::UnboundedSender<Outgoing>,
     /// The number of messages queued and not written yet
     queued: AtomicUsize,
+    /// The accounted size of these messages, see MAX_QUEUED_BYTES
+    queued_bytes: AtomicUsize,
     closed: AtomicBool,
     cancel: CancellationToken,
     logger: Logger,
@@ -278,6 +299,7 @@ impl Conn {
         let shared = Arc::new(Shared {
             tx,
             queued: AtomicUsize::new(0),
+            queued_bytes: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             logger: logger.clone(),
@@ -300,6 +322,9 @@ impl Conn {
                     Some(Outgoing::Shutdown) | None => break,
                 };
                 c.shared.queued.fetch_sub(1, Ordering::Relaxed);
+                c.shared
+                    .queued_bytes
+                    .fetch_sub(line.len() + QUEUED_LINE_OVERHEAD, Ordering::Relaxed);
                 let limited = rate
                     .as_ref()
                     .is_some_and(|(_, f)| f.load(Ordering::Relaxed));
@@ -335,6 +360,7 @@ impl Conn {
         debugf!(logger, "new connection");
         let reader = ConnReader {
             reader,
+            input: Arc::new(Semaphore::new(MAX_INPUT_IN_FLIGHT)),
             cancel: conn.shared.cancel.clone(),
             logger,
         };
@@ -353,13 +379,26 @@ impl Conn {
     }
 
     /// Queues an outgoing message. Messages sent after the connection is
-    /// closed are silently dropped.
+    /// closed are silently dropped. The connection is closed if more than
+    /// MAX_QUEUED_BYTES would be queued.
     pub fn send_message(&self, msg: Message) {
         if self.is_closed() {
             return;
         }
+        let line = format_line(&msg);
+        let size = line.len() + QUEUED_LINE_OVERHEAD;
+        let queued = self.shared.queued_bytes.fetch_add(size, Ordering::Relaxed);
+        if queued + size > MAX_QUEUED_BYTES {
+            self.shared.queued_bytes.fetch_sub(size, Ordering::Relaxed);
+            logf!(
+                self.shared.logger,
+                "closing connection: too many messages waiting to be sent"
+            );
+            self.close();
+            return;
+        }
         self.shared.queued.fetch_add(1, Ordering::Relaxed);
-        let _ = self.shared.tx.send(Outgoing::Line(format_line(&msg)));
+        let _ = self.shared.tx.send(Outgoing::Line(line));
     }
 
     /// The number of messages queued and not written yet, e.g. because the
@@ -380,6 +419,7 @@ impl Conn {
 /// The reading side of a connection.
 pub struct ConnReader {
     reader: Reader,
+    input: Arc<Semaphore>,
     cancel: CancellationToken,
     logger: Logger,
 }
@@ -396,6 +436,18 @@ impl ConnReader {
             debugf!(self.logger, "received: {msg}");
         }
         res
+    }
+
+    /// Like read_message, but first waits until less than
+    /// MAX_INPUT_IN_FLIGHT messages previously returned by this function
+    /// still have their permit alive. The permit is meant to be dropped once
+    /// the message is processed.
+    pub async fn read_message_limited(&mut self) -> Result<Option<(Message, InputPermit)>> {
+        let permit = tokio::select! {
+            p = self.input.clone().acquire_owned() => p.expect("semaphore is never closed"),
+            _ = self.cancel.cancelled() => return Ok(None),
+        };
+        Ok(self.read_message().await?.map(|msg| (msg, permit)))
     }
 }
 
@@ -508,6 +560,39 @@ mod tests {
             WsMessage::Text(t) => assert_eq!(t.as_str(), msg.to_string()),
             m => panic!("unexpected frame: {m:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn queue_budget() {
+        // The peer never reads
+        let (a, _b) = tokio::io::duplex(4096);
+        let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let text = "x".repeat(400);
+        let n = MAX_QUEUED_BYTES / (text.len() + QUEUED_LINE_OVERHEAD) + 1;
+        for _ in 0..n {
+            c.send_message(crate::msg!("PRIVMSG", "#a", text.clone()));
+        }
+        assert!(c.is_closed());
+        assert!(c.shared.queued_bytes.load(Ordering::Relaxed) <= MAX_QUEUED_BYTES);
+    }
+
+    #[tokio::test]
+    async fn input_in_flight() {
+        let (a, b) = tokio::io::duplex(1 << 20);
+        let (ca, _ra) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let (_cb, mut rb) = Conn::new_stream(Box::new(b), Logger::new(false), None);
+        for i in 0..MAX_INPUT_IN_FLIGHT + 1 {
+            ca.send_message(crate::msg!("PING", i.to_string()));
+        }
+        let mut permits = Vec::new();
+        for _ in 0..MAX_INPUT_IN_FLIGHT {
+            permits.push(rb.read_message_limited().await.unwrap().unwrap());
+        }
+        let next = tokio::time::timeout(Duration::from_millis(50), rb.read_message_limited());
+        assert!(next.await.is_err());
+        permits.pop();
+        let (msg, _) = rb.read_message_limited().await.unwrap().unwrap();
+        assert_eq!(msg.params, [MAX_INPUT_IN_FLIGHT.to_string()]);
     }
 
     #[test]

@@ -118,6 +118,21 @@ impl Server {
         *self.config.write().unwrap() = Arc::new(cfg);
     }
 
+    /// Applies a reloaded configuration. The message store can't be
+    /// changed at run time: users keep the store they were started with, so
+    /// the setting in effect is kept until restart.
+    pub fn reload_config(&self, mut cfg: ServerConfig) {
+        let cur = self.config();
+        if cfg.basic.msg_store != cur.basic.msg_store {
+            logf!(
+                self.logger,
+                "message-store changed: restart to apply the new setting"
+            );
+            cfg.basic.msg_store = cur.basic.msg_store.clone();
+        }
+        self.set_config(cfg);
+    }
+
     pub fn prefix(&self) -> Prefix {
         Prefix::new(self.config().basic.hostname.clone())
     }
@@ -630,5 +645,18 @@ mod tests {
         }
         assert_eq!(srv.db.list_users().unwrap().len(), 1);
         srv.shutdown().await;
+    }
+
+    #[test]
+    fn msg_store_not_reloaded() {
+        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+        srv.set_config(ServerConfig::default());
+        let mut cfg = ServerConfig::default();
+        cfg.basic.msg_store.driver = MsgStoreDriver::Memory;
+        cfg.basic.title = "reloaded".to_owned();
+        srv.reload_config(cfg);
+        let cfg = srv.config();
+        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
+        assert_eq!(cfg.basic.title, "reloaded");
     }
 }

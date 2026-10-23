@@ -229,7 +229,7 @@ impl Signals {
                 _ = self.hup.recv() => {
                     logf!(srv.logger, "reloading configuration");
                     match reload(args, certs).await {
-                        Ok(cfg) => srv.set_config(cfg),
+                        Ok(cfg) => srv.reload_config(cfg),
                         Err(e) => logf!(srv.logger, "failed to reload configuration: {e}"),
                     }
                 }

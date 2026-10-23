@@ -299,9 +299,9 @@ Commands can be sent via regular private messages
 abbreviated form, for instance *network* can be abbreviated as *net* or just
 *n*.
 
-Commands are parsed according the POSIX shell rules. In particular, words can
-be quoted (via double or single quotes) and a backslash escapes the next
-character.
+Commands are split into words similarly to a shell. Words can be quoted (via
+double or single quotes) and a backslash escapes the next character, including
+inside single quotes. Other escape sequences (e.g. *\\t*) are not supported.
 
 *help* [command]
 	Show a list of commands. If _command_ is specified, show a help message for
@@ -342,8 +342,9 @@ character.
 		Instead of using certificate authorities to check the server's TLS
 		certificate, check whether the server certificate matches the provided
 		fingerprint. This can be used to connect to servers using self-signed
-		certificates. The fingerprint format is SHA512. An empty string
-		removes any previous fingerprint.
+		certificates. The fingerprint is a hex-encoded SHA-256 or SHA-512 hash
+		of the server's (leaf) certificate. An empty string removes any
+		previous fingerprint.
 
 		The following command can be used to fetch the certificate fingerprint
 		of an IRC server:

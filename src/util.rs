@@ -1,5 +1,59 @@
 //! Small helpers shared across the crate.
 
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use anyhow::{Result, anyhow, bail};
+use tokio::sync::Semaphore;
+
+/// Maximum number of CPU-heavy jobs waiting for a free CPU, see cpu_work.
+const MAX_CPU_WORK_WAITING: usize = 64;
+
+struct CpuWork {
+    sem: Semaphore,
+    waiting: AtomicUsize,
+}
+
+/// Decrements the waiting count, even if the waiting future is dropped.
+struct Waiting<'a>(&'a AtomicUsize);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Runs CPU-heavy work (password hashing, key generation) on a blocking
+/// thread. At most one job per CPU runs at once, so that such work can't
+/// starve the rest of the server (blocking SQLite calls share the same
+/// thread pool), and at most MAX_CPU_WORK_WAITING jobs wait for their turn:
+/// further jobs fail immediately. A started job runs to completion even if
+/// the returned future is dropped.
+pub async fn cpu_work<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    static CPU_WORK: OnceLock<CpuWork> = OnceLock::new();
+    let w = CPU_WORK.get_or_init(|| CpuWork {
+        sem: Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get())),
+        waiting: AtomicUsize::new(0),
+    });
+    let permit = match w.sem.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            if w.waiting.fetch_add(1, Ordering::Relaxed) >= MAX_CPU_WORK_WAITING {
+                w.waiting.fetch_sub(1, Ordering::Relaxed);
+                bail!("server busy, try again later");
+            }
+            let _waiting = Waiting(&w.waiting);
+            w.sem.acquire().await.expect("semaphore is never closed")
+        }
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|e| anyhow!("internal error: {e}"))
+}
+
 /// Error returned by [`path_match`] for a malformed pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadPattern;

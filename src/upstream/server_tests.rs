@@ -323,3 +323,34 @@ async fn labeled_nested_batch() {
     assert_eq!(env.downstream.expect("BATCH").await.params, ["-o"]);
     env.srv.shutdown().await;
 }
+
+#[tokio::test]
+async fn registration_timeout() {
+    let database = Database::open_in_memory().unwrap();
+    let mut user = db::User::new(USERNAME);
+    database.store_user(&mut user).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut network = db::Network::new(&format!(
+        "irc+insecure://{}",
+        listener.local_addr().unwrap()
+    ));
+    database.store_network(user.id, &mut network).unwrap();
+    let srv = Server::new(database, Logger::new(false));
+    srv.set_config(ServerConfig::default());
+    srv.start().unwrap();
+
+    let (s, _) = tokio::time::timeout(TIMEOUT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut upstream = TestConn::new(Box::new(s));
+    upstream.expect("CAP").await;
+    upstream.expect("NICK").await;
+    upstream.expect("USER").await;
+    // The server never completes registration
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    assert!(upstream.reader.read_message().await.unwrap().is_none());
+    assert!(start.elapsed() >= crate::upstream::REGISTER_TIMEOUT);
+    srv.shutdown().await;
+}

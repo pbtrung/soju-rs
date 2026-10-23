@@ -10,7 +10,9 @@ use crate::xirc::{self, CaseMappingMap, Membership, MembershipSet};
 /// credentials.
 pub fn redact_for_log(msg: &Message) -> String {
     match msg.command.as_str() {
-        "PASS" | "AUTHENTICATE" | "OPER" => format!("{} <redacted>", msg.command),
+        "PASS" | "AUTHENTICATE" | "OPER" | "REGISTER" | "VERIFY" => {
+            format!("{} <redacted>", msg.command)
+        }
         _ => msg.to_string(),
     }
 }

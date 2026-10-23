@@ -116,6 +116,7 @@ impl User {
                 net_id,
                 conn_id,
                 msg,
+                permit: _permit,
             } => {
                 self.upstream_message(net_id, conn_id, msg);
             }
@@ -207,7 +208,11 @@ impl User {
                     self.bump_downstream_interaction_time();
                 }
             }
-            Event::DownstreamMessage { dc_id, msg } => {
+            Event::DownstreamMessage {
+                dc_id,
+                msg,
+                permit: _permit,
+            } => {
                 let Some(i) = self.dc_index(dc_id) else {
                     return;
                 };
@@ -321,7 +326,10 @@ impl User {
                 network_id,
                 sub,
                 res,
-            } => crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res),
+                check,
+            } => {
+                crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res, check)
+            }
             Event::Run(f) => f(self),
             Event::Stop => {
                 for dc in &self.downstreams {

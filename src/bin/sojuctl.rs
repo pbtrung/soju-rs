@@ -9,33 +9,27 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const USAGE: &str = "usage: sojuctl [-config path] <command>\n";
 
-/// Quotes a word like Go's strconv.Quote.
+/// Quotes a word for split_words, which only understands backslash escapes
+/// of the next character: other characters are kept as-is. CR, LF and NUL
+/// can't be sent in an IRC line, see check_words.
 fn quote(word: &str) -> String {
     let mut s = String::from("\"");
     for c in word.chars() {
-        match c {
-            '"' => s.push_str("\\\""),
-            '\\' => s.push_str("\\\\"),
-            '\n' => s.push_str("\\n"),
-            '\r' => s.push_str("\\r"),
-            '\t' => s.push_str("\\t"),
-            '\x07' => s.push_str("\\a"),
-            '\x08' => s.push_str("\\b"),
-            '\x0c' => s.push_str("\\f"),
-            '\x0b' => s.push_str("\\v"),
-            c if c.is_control() => {
-                let n = c as u32;
-                if n < 0x10000 {
-                    s.push_str(&format!("\\u{n:04x}"));
-                } else {
-                    s.push_str(&format!("\\U{n:08x}"));
-                }
-            }
-            c => s.push(c),
+        if c == '"' || c == '\\' {
+            s.push('\\');
         }
+        s.push(c);
     }
     s.push('"');
     s
+}
+
+/// Rejects words which can't be sent to the server unchanged.
+fn check_words(words: &[String]) -> Result<(), String> {
+    if words.iter().any(|w| w.contains(['\r', '\n', '\0'])) {
+        return Err("arguments can't contain CR, LF or NUL characters".to_owned());
+    }
+    Ok(())
 }
 
 fn quote_words(words: &[String]) -> String {
@@ -58,6 +52,7 @@ fn admin_socket_path(cfg: &config::Server) -> Option<String> {
 
 #[cfg(unix)]
 async fn run(cfg: &config::Server, words: &[String]) -> Result<(), String> {
+    check_words(words)?;
     let Some(path) = admin_socket_path(cfg) else {
         return Err("no listen unix+admin directive found in config".to_owned());
     };
@@ -171,5 +166,30 @@ mod tests {
         );
         let parsed = soju::ircutil::split_words(&quote_words(&words)).unwrap();
         assert_eq!(parsed, words);
+    }
+
+    #[test]
+    fn quoting_roundtrip() {
+        for word in [
+            "a\tb",
+            "\x07\x1b[1m",
+            "'single' \"double\"",
+            "back\\slash\\",
+            "",
+            "é ✓",
+        ] {
+            let words = vec![word.to_owned()];
+            assert!(check_words(&words).is_ok());
+            let line = quote_words(&words);
+            // The line survives IRC framing
+            let m = Message::new("BOUNCERSERV", vec![line.clone()]);
+            assert_eq!(Message::parse(&m.to_string()).unwrap().params[0], line);
+            assert_eq!(
+                soju::ircutil::split_words(&line).unwrap(),
+                words,
+                "{word:?}"
+            );
+        }
+        assert!(check_words(&["a\nb".to_owned()]).is_err());
     }
 }
