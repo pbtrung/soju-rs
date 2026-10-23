@@ -4,6 +4,7 @@
 #include <libwebsockets.h>
 #include <openssl/crypto.h>
 #include <sqlite3.h>
+#include <stdlib.h>
 #include <utf8proc.h>
 #include <uv.h>
 #include <yyjson.h>
@@ -21,6 +22,12 @@ void print_build_info(FILE *f) {
 	fprintf(f, "libwebsockets %s\n", lws_get_library_version());
 	fprintf(f, "utf8proc %s\n", utf8proc_version());
 	fprintf(f, "yyjson %s\n", YYJSON_VERSION_STRING);
+	yyjson_doc *json = yyjson_read("null", 4, 0);
+	if (json == nullptr) {
+		fputs("yyjson smoke test failed\n", stderr);
+		abort();
+	}
+	yyjson_doc_free(json);
 	fprintf(f, "SQLite %s\n", sqlite3_libversion());
 	char salt[CRYPT_GENSALT_OUTPUT_SIZE];
 	bool bcrypt = crypt_gensalt_rn("$2b$", 10, nullptr, 0, salt, sizeof(salt)) != nullptr;

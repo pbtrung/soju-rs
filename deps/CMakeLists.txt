@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.29)
 project(soju_deps C)
 
 include(ExternalProject)
+find_program(SOJU_PATCH patch REQUIRED)
 include(${CMAKE_CURRENT_LIST_DIR}/versions.cmake)
 
 set(SOJU_MODE "debug" CACHE STRING "Build mode")
@@ -19,6 +20,18 @@ option(SOJU_MIMALLOC_SECURE "mimalloc secure mode" OFF)
 option(SOJU_BUNDLE_LIBXCRYPT "Build libxcrypt from source" OFF)
 option(SOJU_OPENSSL_NO_ASM "Build OpenSSL without assembly (MSan)" OFF)
 option(SOJU_MUSL "Target musl libc" OFF)
+
+include(${CMAKE_CURRENT_LIST_DIR}/fetch.cmake)
+foreach(dep LIBUV OPENSSL LWS UTF8PROC YYJSON SQLITE CMOCKA)
+	soju_fetch(${dep})
+endforeach()
+if(SOJU_WITH_MIMALLOC)
+	soju_fetch(MIMALLOC)
+endif()
+if(SOJU_BUNDLE_LIBXCRYPT)
+	soju_fetch(LIBXCRYPT)
+endif()
+set(SOJU_BUILD_JOBS 4 CACHE STRING "Parallel jobs per dependency build")
 
 set(P "${CMAKE_INSTALL_PREFIX}")
 set(cflags "${SOJU_DEP_CFLAGS} -fPIC")
@@ -36,7 +49,7 @@ set(common_cmake_args
 	-DBUILD_TESTING=OFF
 	-G Ninja
 )
-set(dl DOWNLOAD_DIR ${SOJU_DOWNLOAD_DIR} DOWNLOAD_EXTRACT_TIMESTAMP ON)
+set(dl DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/download DOWNLOAD_EXTRACT_TIMESTAMP ON)
 
 ExternalProject_Add(libuv
 	URL ${LIBUV_URL} URL_HASH SHA256=${LIBUV_SHA256} ${dl}
@@ -52,17 +65,19 @@ endif()
 ExternalProject_Add(openssl
 	URL ${OPENSSL_URL} URL_HASH SHA256=${OPENSSL_SHA256} ${dl}
 	BUILD_IN_SOURCE ON
+	PATCH_COMMAND ${SOJU_PATCH} -p1 -i ${CMAKE_CURRENT_LIST_DIR}/patches/openssl-callback-types.patch
 	CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
 		"CFLAGS=${cflags}" "LDFLAGS=${SOJU_DEP_LDFLAGS}"
 		perl ./Configure linux-x86_64 --prefix=${P} --libdir=lib
 		--openssldir=/etc/ssl ${openssl_opts}
-	BUILD_COMMAND make -j build_libs
+	BUILD_COMMAND make -j${SOJU_BUILD_JOBS} build_libs
 	INSTALL_COMMAND make install_dev
 )
 
 ExternalProject_Add(libwebsockets
 	URL ${LWS_URL} URL_HASH SHA256=${LWS_SHA256} ${dl}
 	DEPENDS libuv openssl
+	PATCH_COMMAND ${SOJU_PATCH} -p1 -i ${CMAKE_CURRENT_LIST_DIR}/patches/lws-address-size.patch
 	LIST_SEPARATOR |
 	CMAKE_ARGS ${common_cmake_args}
 		-DDISABLE_WERROR=ON
@@ -138,7 +153,7 @@ if(SOJU_BUNDLE_LIBXCRYPT)
 			--disable-shared --enable-static --disable-werror
 			--enable-obsolete-api=no --enable-hashes=strong,glibc
 			CC=${CMAKE_C_COMPILER} "CFLAGS=${cflags}" "LDFLAGS=${SOJU_DEP_LDFLAGS}"
-		BUILD_COMMAND make -j
+		BUILD_COMMAND make -j${SOJU_BUILD_JOBS}
 		INSTALL_COMMAND make install
 	)
 endif()

@@ -11,9 +11,11 @@ cd "$(dirname "$0")/.."
 
 jobs=1
 if [[ "${1:-}" == "-j" ]]; then
-	jobs="$2"
+	jobs="${2:-}"
+	[[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'usage: tools/ci.sh [-j N] [preset...]' >&2; exit 2; }
 	shift 2
 fi
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 presets=("$@")
 if [[ ${#presets[@]} -eq 0 ]]; then
@@ -28,17 +30,25 @@ if [[ ${#presets[@]} -eq 0 ]]; then
 fi
 
 run_preset() {
-	local p="$1" log="build/ci-$1.log"
+	local p="$1" log="build/ci-$1.log" lock
 	mkdir -p build
-	{
+	# Serialize repeated invocations for the same build tree and log.
+	exec {lock}>"build/ci-$p.lock"
+	flock "$lock"
+	if (
 		echo "== $p"
-		cmake --preset "$p"
+		cmake --preset "$p" || exit 1
 		if [[ -z "${CI_CONFIGURE_ONLY:-}" ]]; then
-			cmake --build --preset "$p"
-			ctest --preset "$p"
+			cmake --build --preset "$p" || exit 1
+			ctest --preset "$p" --output-junit "ci-$p.xml" || exit 1
 		fi
-	} >"$log" 2>&1 && echo "ok     $p" || { echo "FAILED $p (see $log)"; return 1; }
+	) >"$log" 2>&1; then
+		echo "ok     $p"
+	else
+		echo "FAILED $p (see $log)"
+		return 1
+	fi
 }
 export -f run_preset
 
-printf '%s\n' "${presets[@]}" | xargs -P "$jobs" -I{} bash -c 'run_preset {}'
+printf '%s\n' "${presets[@]}" | xargs -P "$jobs" -I{} bash -c "run_preset \"\$1\"" _ '{}'

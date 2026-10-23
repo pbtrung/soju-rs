@@ -66,6 +66,10 @@ endfunction()
 
 soju_executable(soju src/main/soju.c src/main/buildinfo.c)
 soju_executable(sojuctl src/main/sojuctl.c)
+soju_executable(hello spikes/hello.c src/main/buildinfo.c)
+target_link_libraries(hello PRIVATE soju::cmocka)
+add_test(NAME hello COMMAND hello)
+soju_test_env(hello)
 
 # Unit tests: one executable per tests/unit/test_*.c; each cmocka test in it
 # is registered as its own CTest test, so every test runs in its own

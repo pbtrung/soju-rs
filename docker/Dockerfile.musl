@@ -12,9 +12,9 @@ RUN apk upgrade --no-cache --available \
 	&& test -n "$llvm" \
 	&& apk add --no-cache \
 		gcc musl-dev linux-headers "clang$llvm" "llvm$llvm" "lld$llvm" \
-		cmake samurai make perl pkgconf \
+		cmake samurai make perl pkgconf patch \
 		valgrind valgrind-dev \
-		bash coreutils diffutils file findutils grep sed tar gzip xz \
+		bash coreutils diffutils file findutils grep sed tar gzip xz util-linux \
 	&& for t in clang clang-cpp llvm-symbolizer llvm-ar llvm-nm llvm-ranlib ld.lld; do \
 		ln -sf "/usr/lib/llvm$llvm/bin/$t" "/usr/local/bin/$t"; \
 	done \

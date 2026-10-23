@@ -1,0 +1,11 @@
+# Source of truth for versions, upstream URLs and SHA-256 checksums:
+# deps/versions.cmake. Archives are verified before extraction.
+libuv        1.53.0
+OpenSSL      4.0.3
+libwebsockets 5.0.0
+mimalloc     3.5.4
+utf8proc     2.12.0
+yyjson       0.13.0
+SQLite       3.54.1
+cmocka       2.0.2
+libxcrypt    4.5.2  # system GNU; vendored musl/MSan

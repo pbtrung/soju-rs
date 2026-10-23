@@ -1,6 +1,9 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **plan only, nothing implemented yet.**
+Status: **partial bootstrap implementation; phases 0 and 1 are not complete.**
+The C build scaffold, base helpers and IRC parser exist. Bootstrap spikes,
+dependency fixes and CI wiring are recorded in `doc/spikes.md`; the full
+phase exit criteria below have not yet been met.
 Source of truth for behaviour: soju-rs `main` at v0.99.15 (`02acf7d`), ~25k
 lines of Rust in 106 files. This branch (`c-port`) starts empty; the Rust tree
 stays on `main` and is used as a reference and as a test oracle.
