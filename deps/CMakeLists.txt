@@ -65,7 +65,6 @@ endif()
 ExternalProject_Add(openssl
 	URL ${OPENSSL_URL} URL_HASH SHA256=${OPENSSL_SHA256} ${dl}
 	BUILD_IN_SOURCE ON
-	PATCH_COMMAND ${SOJU_PATCH} -p1 -i ${CMAKE_CURRENT_LIST_DIR}/patches/openssl-callback-types.patch
 	CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
 		"CFLAGS=${cflags}" "LDFLAGS=${SOJU_DEP_LDFLAGS}"
 		perl ./Configure linux-x86_64 --prefix=${P} --libdir=lib

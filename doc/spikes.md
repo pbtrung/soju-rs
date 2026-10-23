@@ -47,23 +47,22 @@ dependency cache key. Sanitizer checks remain enabled.
   `sockaddr_in` to the larger IPv4/IPv6 union. Parsing a numeric IPv4
   interface overwrote the stack. Parse into a full union, check the address
   family and destination size, then copy only the matching sockaddr.
-- `openssl-callback-types.patch`: sparse-array helpers cast callbacks
-  taking typed pointers to function pointers taking `void *`. Clang UBSan
-  rejects calls through those incompatible function types. Typed callback
-  contexts and correctly declared trampolines remove the casts. The same
-  patch adds a correctly typed adapter for the X509 public-key BIO encoder,
-  which otherwise calls a typed encoder through a `const void *` callback.
-  Key-management enumeration also uses a typed callback context.
+- OpenSSL calls its stack, hash and sparse-array callbacks through
+  function pointers cast to generic types, by design and throughout the
+  library. Clang's UBSan `function` check rejects every such call (first
+  seen as `ossl_decoder_instance_dup` called through
+  `void *(*)(const void *)` in `OPENSSL_sk_deep_copy`). Patching each call
+  site was not bounded, so the dependencies are built with
+  `-fno-sanitize=function` in the Clang `asan` and `fuzz` modes
+  (`cmake/SojuMode.cmake`). Our own code keeps the check; only calls made
+  from inside dependency code are unchecked. The earlier
+  `openssl-callback-types.patch` is removed. The dependency cache key now
+  hashes every file in `deps/patches/`.
 
 ## Validation at this checkpoint
 
-GCC debug, GCC ASan/UBSan and Clang debug passed all 26 tests before the
-last key-management callback patch. Formatting, clang-tidy, shell syntax
-checks and ShellCheck passed. The final four-configuration rerun remains
-outstanding. A targeted Clang sanitizer run with that last patch still
-fails in OpenSSL's decoder stack deep-copy callback (`ossl_decoder_instance_dup`
-called through an incompatible function-pointer type). This finding is
-unresolved; sanitizer checks have not been disabled.
+`tools/ci.sh gcc-debug gcc-asan clang-debug clang-asan`: all 26 tests pass
+in each preset (2026-10-23).
 
 ## Reproduction
 
