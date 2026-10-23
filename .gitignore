@@ -1,0 +1,8 @@
+/build/
+/dist/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+/fuzz/corpus/
+/fuzz/crashes/
