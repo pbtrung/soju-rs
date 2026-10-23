@@ -1,0 +1,23 @@
+# Build and test image for the x86_64-linux-musl target (PLAN.md 3.1-3.2):
+# the latest GCC and the newest clangNN package of a freshly upgraded
+# Alpine edge (found with `apk search` instead of hard-coding the number;
+# `clang` on PATH points at it), and valgrind. Built with
+# `docker build --pull` by tools/docker-test.sh and
+# scripts/build-release.sh; builds run as the invoking user.
+FROM docker.io/library/alpine:edge
+
+RUN apk upgrade --no-cache --available \
+	&& llvm=$(apk search --no-cache 'clang*' \
+		| sed -n 's/^clang\([0-9][0-9]*\)-[0-9].*/\1/p' | sort -n | tail -1) \
+	&& test -n "$llvm" \
+	&& apk add --no-cache \
+		gcc musl-dev linux-headers "clang$llvm" "llvm$llvm" "lld$llvm" \
+		cmake samurai make perl pkgconf \
+		valgrind valgrind-dev \
+		bash coreutils diffutils file findutils grep sed tar gzip xz \
+	&& for t in clang clang-cpp llvm-symbolizer llvm-ar llvm-nm llvm-ranlib ld.lld; do \
+		ln -sf "/usr/lib/llvm$llvm/bin/$t" "/usr/local/bin/$t"; \
+	done \
+	&& gcc --version && clang --version && valgrind --version
+
+WORKDIR /src

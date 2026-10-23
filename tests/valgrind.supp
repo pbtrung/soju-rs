@@ -1,0 +1,2 @@
+# Valgrind suppressions. Each entry needs a comment linking the upstream
+# bug it works around (PLAN.md 2.4).

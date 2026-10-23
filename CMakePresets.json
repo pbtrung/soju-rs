@@ -1,0 +1,356 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 29,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "gcc-debug",
+      "inherits": "base",
+      "displayName": "debug (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "debug"
+      }
+    },
+    {
+      "name": "gcc-asan",
+      "inherits": "base",
+      "displayName": "asan (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "asan"
+      }
+    },
+    {
+      "name": "gcc-tsan",
+      "inherits": "base",
+      "displayName": "tsan (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "tsan"
+      }
+    },
+    {
+      "name": "gcc-valgrind",
+      "inherits": "base",
+      "displayName": "valgrind (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "valgrind"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "inherits": "base",
+      "displayName": "release (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "release"
+      }
+    },
+    {
+      "name": "gcc-ubsan-trap",
+      "inherits": "base",
+      "displayName": "ubsan-trap (gcc)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "SOJU_MODE": "ubsan-trap"
+      }
+    },
+    {
+      "name": "clang-debug",
+      "inherits": "base",
+      "displayName": "debug (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "debug"
+      }
+    },
+    {
+      "name": "clang-asan",
+      "inherits": "base",
+      "displayName": "asan (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "asan"
+      }
+    },
+    {
+      "name": "clang-msan",
+      "inherits": "base",
+      "displayName": "msan (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "msan"
+      }
+    },
+    {
+      "name": "clang-tsan",
+      "inherits": "base",
+      "displayName": "tsan (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "tsan"
+      }
+    },
+    {
+      "name": "clang-valgrind",
+      "inherits": "base",
+      "displayName": "valgrind (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "valgrind"
+      }
+    },
+    {
+      "name": "clang-release",
+      "inherits": "base",
+      "displayName": "release (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "release"
+      }
+    },
+    {
+      "name": "clang-ubsan-trap",
+      "inherits": "base",
+      "displayName": "ubsan-trap (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "ubsan-trap"
+      }
+    },
+    {
+      "name": "clang-fuzz",
+      "inherits": "base",
+      "displayName": "fuzz (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "fuzz"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug"
+    },
+    {
+      "name": "gcc-asan",
+      "configurePreset": "gcc-asan"
+    },
+    {
+      "name": "gcc-tsan",
+      "configurePreset": "gcc-tsan"
+    },
+    {
+      "name": "gcc-valgrind",
+      "configurePreset": "gcc-valgrind"
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release"
+    },
+    {
+      "name": "gcc-ubsan-trap",
+      "configurePreset": "gcc-ubsan-trap"
+    },
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug"
+    },
+    {
+      "name": "clang-asan",
+      "configurePreset": "clang-asan"
+    },
+    {
+      "name": "clang-msan",
+      "configurePreset": "clang-msan"
+    },
+    {
+      "name": "clang-tsan",
+      "configurePreset": "clang-tsan"
+    },
+    {
+      "name": "clang-valgrind",
+      "configurePreset": "clang-valgrind"
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release"
+    },
+    {
+      "name": "clang-ubsan-trap",
+      "configurePreset": "clang-ubsan-trap"
+    },
+    {
+      "name": "clang-fuzz",
+      "configurePreset": "clang-fuzz"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-asan",
+      "configurePreset": "gcc-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-tsan",
+      "configurePreset": "gcc-tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-valgrind",
+      "configurePreset": "gcc-valgrind",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gcc-ubsan-trap",
+      "configurePreset": "gcc-ubsan-trap",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-asan",
+      "configurePreset": "clang-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-msan",
+      "configurePreset": "clang-msan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-tsan",
+      "configurePreset": "clang-tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-valgrind",
+      "configurePreset": "clang-valgrind",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-ubsan-trap",
+      "configurePreset": "clang-ubsan-trap",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-fuzz",
+      "configurePreset": "clang-fuzz",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

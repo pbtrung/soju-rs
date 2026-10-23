@@ -1,0 +1,113 @@
+# Compiler flags of the build modes (PLAN.md section 2.2). Sets:
+#   SOJU_CFLAGS / SOJU_LDFLAGS          our code
+#   SOJU_DEP_CFLAGS / SOJU_DEP_LDFLAGS  vendored dependencies
+#   SOJU_USE_MIMALLOC                   link mimalloc as the malloc override
+#   SOJU_MIMALLOC_DEBUG / _SECURE / _TRACK
+#   SOJU_OPENSSL_NO_ASM, SOJU_BUNDLE_LIBXCRYPT, SOJU_MUSL, SOJU_STATIC
+
+set(SOJU_MODES debug asan msan tsan valgrind release ubsan-trap fuzz)
+if(NOT SOJU_MODE IN_LIST SOJU_MODES)
+	message(FATAL_ERROR "SOJU_MODE must be one of: ${SOJU_MODES}")
+endif()
+
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+	set(SOJU_GCC ON)
+elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
+	set(SOJU_CLANG ON)
+else()
+	message(FATAL_ERROR "Unsupported compiler ${CMAKE_C_COMPILER_ID}")
+endif()
+if(SOJU_MODE MATCHES "^(msan|fuzz)$" AND NOT SOJU_CLANG)
+	message(FATAL_ERROR "SOJU_MODE=${SOJU_MODE} needs Clang")
+endif()
+
+execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpmachine
+	OUTPUT_VARIABLE SOJU_TRIPLE OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(SOJU_TRIPLE MATCHES "musl")
+	set(SOJU_MUSL ON)
+	if(SOJU_MODE MATCHES "^(asan|msan|tsan|fuzz)$")
+		message(FATAL_ERROR "SOJU_MODE=${SOJU_MODE} isn't supported on musl")
+	endif()
+else()
+	set(SOJU_MUSL OFF)
+endif()
+
+set(san_common "-fno-omit-frame-pointer -fno-sanitize-recover=all")
+set(SOJU_USE_MIMALLOC OFF)
+set(SOJU_MIMALLOC_DEBUG OFF)
+set(SOJU_MIMALLOC_SECURE OFF)
+set(SOJU_MIMALLOC_TRACK OFF)
+set(SOJU_OPENSSL_NO_ASM OFF)
+set(SOJU_BUNDLE_LIBXCRYPT ${SOJU_MUSL})
+set(SOJU_STATIC ${SOJU_MUSL})
+set(SOJU_LDFLAGS "")
+set(SOJU_DEP_LDFLAGS "")
+
+if(SOJU_MODE STREQUAL "debug")
+	set(SOJU_CFLAGS "-O0 -g3 -ftrivial-auto-var-init=pattern")
+	set(SOJU_DEP_CFLAGS "-O1 -g")
+	set(SOJU_USE_MIMALLOC ON)
+	set(SOJU_MIMALLOC_DEBUG ON)
+elseif(SOJU_MODE STREQUAL "asan")
+	set(san "-fsanitize=address,undefined ${san_common}")
+	set(SOJU_CFLAGS "-O1 -g ${san}")
+	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
+	set(SOJU_LDFLAGS "-fsanitize=address,undefined")
+	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
+elseif(SOJU_MODE STREQUAL "msan")
+	set(san "-fsanitize=memory -fsanitize-memory-track-origins=2 ${san_common}")
+	set(SOJU_CFLAGS "-O1 -g ${san}")
+	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
+	set(SOJU_LDFLAGS "-fsanitize=memory")
+	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
+	set(SOJU_OPENSSL_NO_ASM ON)
+	set(SOJU_BUNDLE_LIBXCRYPT ON)
+elseif(SOJU_MODE STREQUAL "tsan")
+	set(SOJU_CFLAGS "-O1 -g -fsanitize=thread ${san_common}")
+	set(SOJU_DEP_CFLAGS "${SOJU_CFLAGS}")
+	set(SOJU_LDFLAGS "-fsanitize=thread")
+	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
+elseif(SOJU_MODE STREQUAL "valgrind")
+	set(SOJU_CFLAGS "-O1 -g")
+	set(SOJU_DEP_CFLAGS "-O1 -g")
+	set(SOJU_USE_MIMALLOC ON)
+	set(SOJU_MIMALLOC_TRACK VALGRIND)
+elseif(SOJU_MODE STREQUAL "release")
+	set(harden "-D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fcf-protection")
+	set(SOJU_CFLAGS "-O2 -g ${harden}")
+	set(SOJU_DEP_CFLAGS "-O2 -g ${harden}")
+	set(SOJU_LDFLAGS "-Wl,-z,relro,-z,now")
+	set(SOJU_USE_MIMALLOC ON)
+	set(SOJU_MIMALLOC_SECURE ON)
+elseif(SOJU_MODE STREQUAL "ubsan-trap")
+	set(SOJU_CFLAGS "-O1 -g -fsanitize=undefined -fsanitize-trap=all")
+	set(SOJU_DEP_CFLAGS "-O1 -g")
+	set(SOJU_USE_MIMALLOC ON)
+elseif(SOJU_MODE STREQUAL "fuzz")
+	set(san "-fsanitize=address,undefined ${san_common}")
+	set(SOJU_CFLAGS "-O1 -g ${san} -fsanitize=fuzzer-no-link")
+	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
+	set(SOJU_LDFLAGS "-fsanitize=address,undefined")
+	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
+endif()
+
+if(SOJU_STATIC)
+	string(APPEND SOJU_LDFLAGS " -static")
+else()
+	string(APPEND SOJU_LDFLAGS " -pie")
+	string(APPEND SOJU_CFLAGS " -fPIE")
+endif()
+
+# Warnings (PLAN.md 2.2), errors in every mode
+set(SOJU_WARNINGS
+	-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wvla -Wnull-dereference
+	-Wimplicit-fallthrough -Wstrict-prototypes -Wmissing-prototypes
+	-Wcast-qual -Wundef -Wwrite-strings -Wpointer-arith -Werror
+)
+if(SOJU_GCC)
+	list(APPEND SOJU_WARNINGS -Wformat-truncation=2 -Wformat-overflow=2
+		-Wlogical-op -Wduplicated-cond -Wduplicated-branches)
+else()
+	list(APPEND SOJU_WARNINGS -Wcomma -Wunreachable-code-aggressive
+		-Wthread-safety -Wassign-enum)
+endif()

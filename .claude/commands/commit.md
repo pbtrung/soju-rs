@@ -10,21 +10,20 @@ description: Commit staged/modified changes with a detailed message and push, no
 2. Format, lint and test whatever's actually touched, before staging anything:
    - Any `*.c` or `*.h` changed (outside `deps/`): `clang-format -i` each
      changed file (uses the repo's `.clang-format`), then
-     `clang-tidy -p build/debug` on each changed `*.c` file.
+     `clang-tidy -p build/clang-asan` on each changed `*.c` file.
    - Any `*.c`, `*.h`, `CMakeLists.txt`, `CMakePresets.json`, `*.cmake` or
      anything under `deps/` changed: build and test the `debug` and `asan`
-     modes with both compilers (sections 2.2 and 3.2 of `PLAN.md`), e.g.
-     `CC=gcc cmake --preset asan && cmake --build --preset asan && ctest --preset asan`,
-     then the same with `CC=clang`. A build warning is an error (`-Werror`),
+     modes with both compilers (sections 2.2 and 3.2 of `PLAN.md`):
+     `tools/ci.sh -j 4 gcc-debug gcc-asan clang-debug clang-asan` (logs in
+     `build/ci-<preset>.log`). A build warning is an error (`-Werror`),
      and any ASan/UBSan/LSan report fails the check. If the change touches
-     the DB thread or threadpool handoff, also run the `tsan` preset.
-   - Any `fuzz/**` changed: build the `fuzz` preset (Clang) and run each
+     the DB thread or threadpool handoff, also run `gcc-tsan` and `clang-tsan`.
+   - Any `fuzz/**` changed: build the `clang-fuzz` preset and run each
      changed harness for 60 s (`-max_total_time=60`).
    - Any `tests/**/*.py` changed: `python3 -m ruff format tests` then
      `python3 -m ruff check tests` (skip if ruff isn't installed).
    - Any `docker/Dockerfile*`, `scripts/*.sh` or `tools/*.sh` changed:
      `bash -n` each changed script, and `shellcheck` it if available.
-   - Until the CMake tree exists (phase 0 of `PLAN.md`), skip the C checks.
    - If formatting rewrote a file, or any check reports an error, fix it and
      re-run before continuing.
    - Never commit `build/`, local databases (`*.db`, `*.db-wal`, `*.db-shm`),

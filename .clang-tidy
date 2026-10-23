@@ -1,0 +1,20 @@
+# Disabled: Annex K (*_s functions) suggestions, which glibc and musl don't
+# provide; cert-err33-c, which flags every unchecked fprintf/memcpy return;
+# multi-level pointer conversion, which flags memmove on pointer arrays.
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -cert-err33-c,
+  -bugprone-multi-level-implicit-pointer-conversion
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/src/.*'

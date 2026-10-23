@@ -345,10 +345,10 @@ their own default standards; only our code is compiled as C23, and public
 headers we include from them must compile cleanly under `-std=c23`
 (checked in phase 0).
 
-Build system: CMake ≥ 3.25 with Ninja (libuv, libwebsockets, mimalloc,
+Build system: CMake ≥ 3.29 with Ninja (libuv, libwebsockets, mimalloc,
 utf8proc, yyjson and cmocka are CMake projects). Each build mode of 2.2 is a
 preset in `CMakePresets.json` (configure, build and test presets, build tree
-in `build/<mode>`), with the compiler chosen by `CC`. Formatting is defined
+in `build/<compiler>-<mode>`, e.g. `gcc-asan`, `clang-msan`). Formatting is defined
 by `.clang-format` and enforced on changed files by `/commit`.
 
 ### 3.1 Targets and Docker images

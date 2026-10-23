@@ -1,0 +1,23 @@
+# C style of soju-c: kernel-like tabs, 100 columns
+BasedOnStyle: LLVM
+UseTab: ForContinuationAndIndentation
+IndentWidth: 8
+TabWidth: 8
+ContinuationIndentWidth: 8
+ColumnLimit: 100
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AlignAfterOpenBracket: Align
+AlignEscapedNewlines: Left
+AlignTrailingComments: false
+AlignConsecutiveMacros: None
+IndentCaseLabels: false
+SortIncludes: Never
+SpaceBeforeParens: ControlStatements
+BreakBeforeBraces: Attach
+InsertBraces: true
+Cpp11BracedListStyle: true
+ReflowComments: false
