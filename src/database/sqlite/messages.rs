@@ -2,7 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, named_params};
+use rusqlite::{OptionalExtension, TransactionBehavior, named_params, params};
 
 use super::{Database, lossy_string, time_from_sql, time_to_sql};
 use crate::database::{MessageOptions, MessageTarget, MessageTargetLast, strip_ansi};
@@ -302,15 +302,24 @@ impl Database {
         Ok(l)
     }
 
-    /// Deletes messages older than before. Returns the number of deleted
-    /// messages.
-    pub fn delete_messages_before(&self, before: DateTime<Utc>) -> Result<usize> {
+    /// Deletes up to limit messages older than before. Returns the number of
+    /// deleted messages: less than limit once there are none left.
+    ///
+    /// The database is locked meanwhile: deleting in chunks lets other
+    /// queries run in between. Expired messages are mostly the oldest, with
+    /// the lowest IDs: each chunk finds them at the start of the table.
+    pub fn delete_messages_before(&self, before: DateTime<Utc>, limit: usize) -> Result<usize> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         record_message_id_high_water(&tx)?;
         let n = tx.execute(
-            "DELETE FROM Message WHERE time < ?",
-            [xirc::format_server_time(before)],
+            "DELETE FROM Message WHERE id IN (
+                SELECT id FROM Message WHERE time < ? LIMIT ?
+            )",
+            params![
+                xirc::format_server_time(before),
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
         )?;
         tx.commit()?;
         Ok(n)

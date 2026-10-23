@@ -93,6 +93,7 @@ pub fn web_push_tested(
                 "Internal error",
             ]));
         }
+        u.reset_web_push_networks();
         dc!(u, i).send_message(msg!("WEBPUSH", "REGISTER", sub.endpoint.clone()));
         Ok(())
     })();
@@ -242,6 +243,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                     return Err(internal_error("WEBPUSH", &subcommand));
                 }
             };
+            u.reset_web_push_networks();
             if let Some(old) = subs.iter().find(|s| s.endpoint == endpoint)
                 && let Err(e) = u.srv.db.delete_web_push_subscription(old.id)
             {

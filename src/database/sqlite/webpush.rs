@@ -41,6 +41,17 @@ impl Database {
         Ok(())
     }
 
+    /// Lists the networks a user has subscriptions for (0 for the bouncer
+    /// connection).
+    pub fn list_web_push_networks(&self, user_id: i64) -> Result<Vec<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT coalesce(network, 0) FROM WebPushSubscription WHERE user = ?",
+        )?;
+        let rows = stmt.query_map([user_id], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Lists subscriptions for a user and network (0 means the bouncer
     /// connection, not bound to any network).
     pub fn list_web_push_subscriptions(

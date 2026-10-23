@@ -99,8 +99,11 @@ pub(super) fn handle_message(
                 }
             }
 
-            let mut send_web_push =
-                !self_msg && !detached && is_text && (highlight || direct_message);
+            let mut send_web_push = !self_msg
+                && !detached
+                && is_text
+                && (highlight || direct_message)
+                && u.has_web_push_subscriptions(net_id);
 
             let source_cm = cm(&prefix_name);
             let mut blocked = false;

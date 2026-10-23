@@ -191,8 +191,11 @@ fn messages() {
         xirc::parse_server_time("2024-01-01T00:00:02.000Z")
     );
 
-    db.delete_messages_before(xirc::parse_server_time("2024-01-01T00:00:01.500Z").unwrap())
-        .unwrap();
+    db.delete_messages_before(
+        xirc::parse_server_time("2024-01-01T00:00:01.500Z").unwrap(),
+        usize::MAX,
+    )
+    .unwrap();
     let opts = MessageOptions {
         limit: 10,
         events: true,
@@ -260,7 +263,10 @@ fn message_ids_not_reused() {
     let id1 = db
         .store_messages(n.id, "#a", std::slice::from_ref(&m))
         .unwrap()[0];
-    assert_eq!(db.delete_messages_before(Utc::now()).unwrap(), 1);
+    assert_eq!(
+        db.delete_messages_before(Utc::now(), usize::MAX).unwrap(),
+        1
+    );
     let id2 = db
         .store_messages(n.id, "#a", std::slice::from_ref(&m))
         .unwrap()[0];
@@ -288,6 +294,30 @@ fn message_ids_not_reused() {
     db.delete_user(u2.id).unwrap();
     let id6 = db.store_messages(n.id, "#a", &[m]).unwrap()[0];
     assert!(id6 > id5);
+}
+
+#[test]
+fn delete_messages_in_chunks() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+    let old = msg!("PRIVMSG", "#a", "x").with_tag("time", "2024-01-01T00:00:00.000Z");
+    let new = msg!("PRIVMSG", "#a", "y").with_tag("time", "2030-01-01T00:00:00.000Z");
+    let mut msgs = vec![old; 5];
+    msgs.push(new);
+    db.store_messages(n.id, "#a", &msgs).unwrap();
+    let before = xirc::parse_server_time("2025-01-01T00:00:00.000Z").unwrap();
+    assert_eq!(db.delete_messages_before(before, 2).unwrap(), 2);
+    assert_eq!(db.delete_messages_before(before, 2).unwrap(), 2);
+    assert_eq!(db.delete_messages_before(before, 2).unwrap(), 1);
+    assert_eq!(db.delete_messages_before(before, 2).unwrap(), 0);
+    let opts = MessageOptions {
+        limit: 10,
+        ..Default::default()
+    };
+    assert_eq!(db.list_messages(n.id, "#a", &opts).unwrap().len(), 1);
 }
 
 #[test]
@@ -327,7 +357,10 @@ fn delete_messages_vacuum() {
     let before = size();
 
     assert!(db.free_page_ratio().unwrap() < 0.05);
-    assert_eq!(db.delete_messages_before(Utc::now()).unwrap(), 2000);
+    assert_eq!(
+        db.delete_messages_before(Utc::now(), usize::MAX).unwrap(),
+        2000
+    );
     assert!(db.free_page_ratio().unwrap() > 0.5);
     db.optimize().unwrap();
     db.vacuum().unwrap();
@@ -443,6 +476,7 @@ fn receipts_targets_webpush_certs() {
     };
     db.store_web_push_subscription(u.id, 0, &mut sub).unwrap();
     assert_eq!(db.list_web_push_subscriptions(u.id, 0).unwrap().len(), 1);
+    assert_eq!(db.list_web_push_networks(u.id).unwrap(), [0]);
     assert!(
         db.list_web_push_subscriptions(u.id, n.id)
             .unwrap()
@@ -450,6 +484,7 @@ fn receipts_targets_webpush_certs() {
     );
     db.delete_web_push_subscription(sub.id).unwrap();
     assert!(db.list_web_push_subscriptions(u.id, 0).unwrap().is_empty());
+    assert!(db.list_web_push_networks(u.id).unwrap().is_empty());
 
     let mut cert = DeviceCertificate {
         label: "laptop".into(),

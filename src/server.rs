@@ -33,6 +33,12 @@ pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 /// message-expiry.
 const VACUUM_FREE_RATIO: f64 = 0.25;
 
+/// Message expiry deletes this many messages at a time, pausing for
+/// EXPIRY_CHUNK_PAUSE in between, so that users waiting on the database
+/// aren't blocked for the whole deletion.
+const EXPIRY_CHUNK_SIZE: usize = 2000;
+const EXPIRY_CHUNK_PAUSE: Duration = Duration::from_millis(10);
+
 /// Runs synchronous code that may block on SQLite calls (e.g. a user's
 /// event handlers). On a multi-threaded runtime, the runtime moves its
 /// other tasks to another worker meanwhile. A current-thread runtime has no
@@ -457,10 +463,19 @@ impl Server {
                     .db
                     .free_page_ratio()
                     .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
-                let n = self
-                    .db
-                    .delete_messages_before(before)
-                    .map_err(|e| anyhow!("failed to delete expired messages from db: {e}"))?;
+                let mut n = 0;
+                loop {
+                    let deleted = self
+                        .db
+                        .delete_messages_before(before, EXPIRY_CHUNK_SIZE)
+                        .map_err(|e| anyhow!("failed to delete expired messages from db: {e}"))?;
+                    n += deleted;
+                    if deleted < EXPIRY_CHUNK_SIZE || self.stop.is_cancelled() {
+                        break;
+                    }
+                    // Runs on a blocking thread, see start
+                    std::thread::sleep(EXPIRY_CHUNK_PAUSE);
+                }
                 logf!(
                     self.logger,
                     "deleted {n} expired messages older than {before_str} from db"

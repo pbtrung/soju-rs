@@ -223,6 +223,11 @@ pub struct User {
     /// network ID and endpoint: the ID of the latest check. UNREGISTER
     /// removes the entry, cancelling the check.
     pub web_push_checks: HashMap<(i64, String), u64>,
+    /// The networks with Web Push subscriptions (0 for the bouncer
+    /// connection), if loaded. Subscriptions are only added by the event
+    /// loop, which resets it: it may only list networks whose subscriptions
+    /// were deleted meanwhile, e.g. expired ones.
+    web_push_networks: Option<std::collections::HashSet<i64>>,
     pub next_web_push_check: u64,
     next_runner_id: u64,
     stopped: bool,
@@ -255,6 +260,7 @@ impl User {
             msg_store,
             certfp_generating: Arc::new(tokio::sync::Semaphore::new(1)),
             web_push_checks: HashMap::new(),
+            web_push_networks: None,
             next_web_push_check: 1,
             next_runner_id: 1,
             stopped: false,

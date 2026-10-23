@@ -13,8 +13,38 @@ use crate::logger::Logger;
 use crate::server::Server;
 
 impl User {
+    /// Whether a network (0 for the bouncer connection) may have Web Push
+    /// subscriptions. Most users have none: this avoids sending
+    /// notifications in the background just to find out.
+    pub fn has_web_push_subscriptions(&mut self, net_id: i64) -> bool {
+        if self.srv.web_push().is_none() {
+            return false;
+        }
+        if self.web_push_networks.is_none() {
+            match self.srv.db.list_web_push_networks(self.record.id) {
+                Ok(l) => self.web_push_networks = Some(l.into_iter().collect()),
+                Err(e) => {
+                    logf!(self.logger, "failed to list Web push subscriptions: {e}");
+                    return true;
+                }
+            }
+        }
+        self.web_push_networks
+            .as_ref()
+            .is_some_and(|n| n.contains(&net_id))
+    }
+
+    /// Forgets the networks with Web Push subscriptions, after adding or
+    /// deleting some.
+    pub fn reset_web_push_networks(&mut self) {
+        self.web_push_networks = None;
+    }
+
     /// Broadcasts a Web Push notification for a message, in the background.
-    pub fn broadcast_web_push(&self, ni: usize, msg: Message) {
+    pub fn broadcast_web_push(&mut self, ni: usize, msg: Message) {
+        if !self.has_web_push_subscriptions(self.networks[ni].id()) {
+            return;
+        }
         let net = &self.networks[ni];
         let (srv, user_id, net_id) = (self.srv.clone(), self.record.id, net.id());
         let logger = net.logger.clone();
