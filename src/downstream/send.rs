@@ -53,6 +53,7 @@ impl DownstreamConn {
             logger,
             registered: false,
             network_id: None,
+            parent_id: None,
             client_name: String::new(),
             impersonating: false,
             nick: "*".to_owned(),

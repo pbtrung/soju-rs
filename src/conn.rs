@@ -249,10 +249,21 @@ struct Shared {
     logger: Logger,
 }
 
+/// A virtual connection multiplexed on a connection (soju.im/multiplex):
+/// its messages carry a tag, and closing it leaves the connection open.
+struct View {
+    tag_key: String,
+    tag_value: String,
+    closed: AtomicBool,
+    /// Called once the view is closed
+    on_close: Box<dyn Fn() + Send + Sync>,
+}
+
 /// A handle to a connection's writer. Cloning is cheap.
 #[derive(Clone)]
 pub struct Conn {
     shared: Arc<Shared>,
+    view: Option<Arc<View>>,
 }
 
 /// Rate limiting for outgoing messages: one message every `delay`, with a
@@ -304,7 +315,7 @@ impl Conn {
             cancel: CancellationToken::new(),
             logger: logger.clone(),
         });
-        let conn = Conn { shared };
+        let conn = Conn { shared, view: None };
 
         let c = conn.clone();
         tokio::spawn(async move {
@@ -367,14 +378,63 @@ impl Conn {
         (conn, reader)
     }
 
+    /// A virtual connection on this one: its messages are sent with the
+    /// tag, and closing it calls on_close instead of closing this
+    /// connection. Unless closed with close_quietly, the peer gets an ERROR
+    /// with the tag first.
+    pub fn view(
+        &self,
+        tag_key: &str,
+        tag_value: &str,
+        on_close: impl Fn() + Send + Sync + 'static,
+    ) -> Conn {
+        Conn {
+            shared: self.shared.clone(),
+            view: Some(Arc::new(View {
+                tag_key: tag_key.to_owned(),
+                tag_value: tag_value.to_owned(),
+                closed: AtomicBool::new(false),
+                on_close: Box::new(on_close),
+            })),
+        }
+    }
+
     pub fn is_closed(&self) -> bool {
         self.shared.closed.load(Ordering::SeqCst)
+            || self
+                .view
+                .as_ref()
+                .is_some_and(|v| v.closed.load(Ordering::SeqCst))
     }
 
     /// Closes the connection immediately. Safe to call several times.
     pub fn close(&self) {
-        if !self.shared.closed.swap(true, Ordering::SeqCst) {
+        if let Some(v) = &self.view {
+            self.close_view(v, true);
+        } else if !self.shared.closed.swap(true, Ordering::SeqCst) {
             self.shared.cancel.cancel();
+        }
+    }
+
+    /// Like close, but a view is closed without telling the peer, e.g.
+    /// because it asked for it.
+    pub fn close_quietly(&self) {
+        match &self.view {
+            Some(v) => self.close_view(v, false),
+            None => self.close(),
+        }
+    }
+
+    fn close_view(&self, v: &View, notify: bool) {
+        if self.is_closed() {
+            v.closed.store(true, Ordering::SeqCst);
+            return;
+        }
+        if notify {
+            self.send_message(crate::msg!("ERROR", "Closing link"));
+        }
+        if !v.closed.swap(true, Ordering::SeqCst) {
+            (v.on_close)();
         }
     }
 
@@ -385,7 +445,10 @@ impl Conn {
         if self.is_closed() {
             return;
         }
-        let line = format_line(&msg);
+        let line = match &self.view {
+            Some(v) => format_line(&msg.with_tag(&v.tag_key, &v.tag_value)),
+            None => format_line(&msg),
+        };
         let size = line.len() + QUEUED_LINE_OVERHEAD;
         let queued = self.shared.queued_bytes.fetch_add(size, Ordering::Relaxed);
         if queued + size > MAX_QUEUED_BYTES {
@@ -409,6 +472,12 @@ impl Conn {
 
     /// Gracefully closes the connection, flushing pending messages first.
     pub fn shutdown(&self) {
+        if self.view.is_some() {
+            // Messages of a view are queued on the connection: they're
+            // still sent once it's closed
+            self.close();
+            return;
+        }
         if self.is_closed() {
             return;
         }
@@ -593,6 +662,47 @@ mod tests {
         permits.pop();
         let (msg, _) = rb.read_message_limited().await.unwrap().unwrap();
         assert_eq!(msg.params, [MAX_INPUT_IN_FLIGHT.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn view() {
+        let (a, b) = tokio::io::duplex(4096);
+        let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let (_cb, mut rb) = Conn::new_stream(Box::new(b), Logger::new(false), None);
+        let closed = Arc::new(AtomicUsize::new(0));
+        let n = closed.clone();
+        let v = c.view("soju.im/network", "1", move || {
+            n.fetch_add(1, Ordering::SeqCst);
+        });
+        v.send_message(crate::msg!("PING", "x").with_tag("label", "a"));
+        let m = rb.read_message().await.unwrap().unwrap();
+        assert_eq!(m.tags.get("soju.im/network"), Some("1"));
+        assert_eq!(m.tags.get("label"), Some("a"));
+
+        // Closing the view tells the peer, and leaves the connection open
+        v.close();
+        v.close();
+        assert!(v.is_closed() && !c.is_closed());
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        let m = rb.read_message().await.unwrap().unwrap();
+        assert_eq!(m.command, "ERROR");
+        assert_eq!(m.tags.get("soju.im/network"), Some("1"));
+        v.send_message(crate::msg!("PING", "dropped"));
+        c.send_message(crate::msg!("PING", "y"));
+        let m = rb.read_message().await.unwrap().unwrap();
+        assert_eq!(m.params, ["y"]);
+        assert!(m.tags.get("soju.im/network").is_none());
+
+        // Closed quietly: no ERROR
+        let q = c.view("soju.im/network", "2", || {});
+        q.close_quietly();
+        c.send_message(crate::msg!("PING", "z"));
+        assert_eq!(rb.read_message().await.unwrap().unwrap().params, ["z"]);
+
+        // Closing the connection closes its views
+        let w = c.view("soju.im/network", "3", || {});
+        c.close();
+        assert!(w.is_closed());
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub(super) const PERMANENT_DOWNSTREAM_CAPS: &[(&str, &str)] = &[
     ("soju.im/account-required", ""),
     ("soju.im/bouncer-networks", ""),
     ("soju.im/bouncer-networks-notify", ""),
+    ("soju.im/multiplex", ""),
     ("soju.im/no-implicit-names", ""),
     ("soju.im/read", ""),
     ("soju.im/webpush", ""),

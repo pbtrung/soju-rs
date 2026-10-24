@@ -24,6 +24,7 @@ use crate::{debugf, logf, msg};
 
 mod caps;
 mod cmds;
+mod multiplex;
 mod registration;
 mod sasl;
 mod send;
@@ -32,6 +33,7 @@ mod welcome;
 
 pub use caps::*;
 pub use cmds::*;
+pub use multiplex::*;
 pub use registration::*;
 pub use sasl::*;
 pub use sync::*;
@@ -250,6 +252,9 @@ pub struct DownstreamConn {
     // These don't change after connection registration
     pub registered: bool,
     pub network_id: Option<i64>,
+    /// For a virtual connection (soju.im/multiplex), the bouncer connection
+    /// it's multiplexed on
+    pub parent_id: Option<u64>,
     pub client_name: String,
     pub impersonating: bool,
 

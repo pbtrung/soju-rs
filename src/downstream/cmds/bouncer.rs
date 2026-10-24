@@ -97,6 +97,37 @@ pub(super) fn handle_bouncer(u: &mut User, dc_id: u64, msg: &Message) -> Result<
                 dc!(u, i).send_message(msg!("BOUNCER", "DELNETWORK", id_str));
             }
         }
+        "ATTACH" | "DETACH" if dc!(u, i).caps.is_enabled(MULTIPLEX_CAP) => {
+            need_params(msg, 2)?;
+            let id_str = msg.params[1].clone();
+            let id = parse_bouncer_net_id(&subcommand, &id_str)?;
+            if dc!(u, i).network_id.is_some() || dc!(u, i).parent_id.is_some() {
+                return Err(fail(&[
+                    "BOUNCER",
+                    "INVALID_CONNECTION",
+                    &subcommand,
+                    "Networks can only be attached to the bouncer connection",
+                ]));
+            }
+            if subcommand.eq_ignore_ascii_case("DETACH") {
+                // Detaching a network which isn't attached is a no-op: the
+                // bouncer may have closed it meanwhile
+                if let Some(child) = find_attached(u, dc_id, id) {
+                    detach_network(u, child);
+                }
+                return Ok(());
+            }
+            if u.net_index(id).is_none() {
+                return Err(fail(&[
+                    "BOUNCER",
+                    "INVALID_NETID",
+                    &subcommand,
+                    &id_str,
+                    "Invalid network ID",
+                ]));
+            }
+            attach_network(u, dc_id, id);
+        }
         _ => {
             return Err(fail(&[
                 "BOUNCER",

@@ -44,6 +44,12 @@ Not supported:
 - `sojudb` and the tools from upstream's `contrib/` directory: users are
   managed with `sojuctl` over the admin socket
 
+Additions:
+
+- `soju.im/multiplex`: a client can attach its bouncer networks to its
+  bouncer connection instead of opening one connection per network, see
+  [doc/multiplex.md](doc/multiplex.md). gamja uses it when available
+
 Behaviour changes:
 
 - `/msg NickServ SET <anything>` no longer overwrites the saved SASL

@@ -183,36 +183,15 @@ impl User {
                 self.store_channel(ni, &name);
             }
             Event::DownstreamConnected(dc) => self.downstream_connected(*dc),
-            Event::DownstreamDisconnected { dc_id } => {
-                let Some(i) = self.dc_index(dc_id) else {
-                    return;
-                };
-                let dc = self.downstreams.remove(i);
-                self.num_downstream_conns.fetch_sub(1, Ordering::SeqCst);
-
-                if let Some(net_id) = dc.network_id
-                    && let Some(ni) = self.net_index(net_id)
-                {
-                    self.store_client_delivery_receipts(ni, &dc.client_name);
-                }
-
-                for ni in 0..self.networks.len() {
-                    if let Some(uc) = self.networks[ni].upstream_mut() {
-                        uc.cancel_pending_commands_by_downstream_id(dc_id);
-                    }
-                    self.update_away(ni);
-                    self.update_monitor(ni);
-                }
-
-                if !dc.impersonating {
-                    self.bump_downstream_interaction_time();
-                }
-            }
+            Event::DownstreamDisconnected { dc_id } => self.remove_downstream(dc_id),
             Event::DownstreamMessage {
                 dc_id,
                 msg,
                 permit: _permit,
             } => {
+                let Some((dc_id, msg)) = downstream::route_message(self, dc_id, msg) else {
+                    return;
+                };
                 let Some(i) = self.dc_index(dc_id) else {
                     return;
                 };
@@ -350,7 +329,45 @@ impl User {
         }
     }
 
-    fn downstream_connected(&mut self, mut dc: DownstreamConn) {
+    /// Removes a downstream connection, once closed. The virtual
+    /// connections multiplexed on it go with it.
+    pub fn remove_downstream(&mut self, dc_id: u64) {
+        let Some(i) = self.dc_index(dc_id) else {
+            return;
+        };
+        let dc = self.downstreams.remove(i);
+        self.num_downstream_conns.fetch_sub(1, Ordering::SeqCst);
+
+        if let Some(net_id) = dc.network_id
+            && let Some(ni) = self.net_index(net_id)
+        {
+            self.store_client_delivery_receipts(ni, &dc.client_name);
+        }
+
+        for ni in 0..self.networks.len() {
+            if let Some(uc) = self.networks[ni].upstream_mut() {
+                uc.cancel_pending_commands_by_downstream_id(dc_id);
+            }
+            self.update_away(ni);
+            self.update_monitor(ni);
+        }
+
+        if !dc.impersonating {
+            self.bump_downstream_interaction_time();
+        }
+
+        let children: Vec<u64> = self
+            .downstreams
+            .iter()
+            .filter(|d| d.parent_id == Some(dc_id))
+            .map(|d| d.id)
+            .collect();
+        for id in children {
+            self.remove_downstream(id);
+        }
+    }
+
+    pub(crate) fn downstream_connected(&mut self, mut dc: DownstreamConn) {
         if !self.record.enabled
             && self.srv.config().basic.enable_users_on_auth
             && let Err(e) = self.update_user(|record| {
