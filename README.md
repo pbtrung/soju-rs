@@ -14,6 +14,7 @@ protocol extensions. It works with [gamja] and other soju-aware clients.
 
 * [Getting started](doc/getting-started.md)
 * [Man page](doc/soju.1.scd) ([sojuctl](doc/sojuctl.1.scd))
+* [Turso Cloud storage and administrator bootstrap](doc/turso.md)
 
 ```
 soju -config /etc/soju/config
@@ -46,6 +47,8 @@ Not supported:
 
 Additions:
 
+- `message-store turso`: Turso Cloud storage with a controller directory and
+  one database per user; see [the setup guide](doc/turso.md)
 - `soju.im/multiplex`: a client can attach its bouncer networks to its
   bouncer connection instead of opening one connection per network, see
   [doc/multiplex.md](doc/multiplex.md). gamja uses it when available

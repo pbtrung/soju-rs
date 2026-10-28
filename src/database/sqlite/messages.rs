@@ -332,7 +332,7 @@ impl Database {
 ///
 /// The table isn't part of upstream's schema: Go soju ignores it, and keeps
 /// reusing IDs if it deletes messages itself.
-pub(super) fn record_message_id_high_water(conn: &rusqlite::Connection) -> Result<()> {
+pub(super) fn record_message_id_high_water(conn: &super::Connection) -> Result<()> {
     conn.execute(
         "INSERT INTO MessageIdHighWater(id, last_id)
         SELECT 0, max(id) FROM Message HAVING max(id) IS NOT NULL

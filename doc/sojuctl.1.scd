@@ -16,6 +16,12 @@ _IRC SERVICE_ section in *soju*(1) for more information.
 sojuctl requires a _listen unix+admin://_ directive in the soju configuration
 file. sojuctl needs to be run with write permissions on the soju admin socket.
 
+With _message-store turso_, *turso create-admin -username* <name>
+*-password* <password> creates an administrator and their cloud database
+directly, without a running server or admin socket. Run it before starting
+soju, or restart soju afterwards to load the new account. Other commands
+continue to use the running server's admin socket.
+
 # OPTIONS
 
 *-h, -help*

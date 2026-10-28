@@ -99,13 +99,13 @@ impl Database {
             )?;
         } else {
             conn.execute(
-                "INSERT INTO Network(user, name, addr, nick, username, realname, certfp, pass,
+                "INSERT INTO Network(id, user, name, addr, nick, username, realname, certfp, pass,
                     connect_commands, sasl_mechanism, sasl_plain_username,
                     sasl_plain_password, sasl_external_cert, sasl_external_key, auto_away, enabled)
-                VALUES (:user, :name, :addr, :nick, :username, :realname, :certfp, :pass,
+                VALUES (:id, :user, :name, :addr, :nick, :username, :realname, :certfp, :pass,
                     :connect_commands, :sasl_mechanism, :sasl_plain_username,
                     :sasl_plain_password, :sasl_external_cert, :sasl_external_key, :auto_away, :enabled)",
-                [fields, named_params! {":user": user_id}].concat().as_slice(),
+                [fields, named_params! {":user": user_id, ":id": super::new_row_id(&conn)}].concat().as_slice(),
             )?;
             network.id = conn.last_insert_rowid();
         }
@@ -181,9 +181,9 @@ impl Database {
             )?;
         } else {
             conn.execute(
-                "INSERT INTO Channel(network, name, key, detached, detached_internal_msgid, relay_detached, reattach_on, detach_after, detach_on)
-                VALUES (:network, :name, :key, :detached, :detached_internal_msgid, :relay_detached, :reattach_on, :detach_after, :detach_on)",
-                fields,
+                "INSERT INTO Channel(id, network, name, key, detached, detached_internal_msgid, relay_detached, reattach_on, detach_after, detach_on)
+                VALUES (:id, :network, :name, :key, :detached, :detached_internal_msgid, :relay_detached, :reattach_on, :detach_after, :detach_on)",
+                [fields, named_params! {":id": super::new_row_id(&conn)}].concat().as_slice(),
             )?;
             ch.id = conn.last_insert_rowid();
         }

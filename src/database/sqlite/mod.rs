@@ -3,9 +3,10 @@
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
+use super::connection::{Connection, Row};
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection as SqliteConnection, TransactionBehavior};
 
 use super::*;
 use crate::xirc;
@@ -43,7 +44,7 @@ fn time_from_sql(s: Option<String>) -> Result<Option<DateTime<Utc>>> {
 /// a database it wrote may hold e.g. Latin-1 messages or channel names.
 /// Invalid sequences are replaced, so the result may not match the stored
 /// value in later lookups by that column.
-fn lossy_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<String> {
+fn lossy_string(r: &Row, i: usize) -> rusqlite::Result<String> {
     match r.get_ref(i)? {
         rusqlite::types::ValueRef::Null => Ok(String::new()),
         v => Ok(String::from_utf8_lossy(v.as_bytes()?).into_owned()),
@@ -59,6 +60,14 @@ fn null_id(id: i64) -> Option<i64> {
     if id == 0 { None } else { Some(id) }
 }
 
+/// Tenant databases share the server's ID namespace. Local SQLite retains
+/// its usual sequential IDs; remote networks, channels and subscriptions
+/// use random positive IDs to avoid collisions between tenant databases.
+fn new_row_id(conn: &Connection) -> Option<i64> {
+    conn.is_remote()
+        .then(|| ((rand::random::<u64>() & i64::MAX as u64) as i64).max(1))
+}
+
 /// The SQLite database. All operations are serialized on a single
 /// connection.
 pub struct Database {
@@ -66,16 +75,40 @@ pub struct Database {
 }
 
 impl Database {
+    pub(super) fn open_remote(conn: Connection, controller: bool) -> Result<Database> {
+        let db = Database {
+            conn: Mutex::new(conn),
+        };
+        if controller {
+            let mut conn = db.conn();
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            match version {
+                0 => {
+                    tx.execute_batch(include_str!("../turso/controller_schema.sql"))?;
+                    tx.execute_batch("PRAGMA user_version = 1")?;
+                }
+                1 => {}
+                _ => bail!("unsupported Turso controller schema version {version}"),
+            }
+            tx.commit()?;
+        } else {
+            db.upgrade()?;
+            db.conn().execute_batch("CREATE TABLE IF NOT EXISTS MessageIdHighWater (id INTEGER PRIMARY KEY CHECK (id = 0), last_id INTEGER NOT NULL);")?;
+        }
+        Ok(db)
+    }
+
     pub fn open(source: &str) -> Result<Database> {
-        let conn = Connection::open(source)?;
+        let conn = SqliteConnection::open(source)?;
         Self::setup(conn)
     }
 
     pub fn open_in_memory() -> Result<Database> {
-        Self::setup(Connection::open_in_memory()?)
+        Self::setup(SqliteConnection::open_in_memory()?)
     }
 
-    fn setup(conn: Connection) -> Result<Database> {
+    fn setup(conn: SqliteConnection) -> Result<Database> {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
         // journal_mode returns a row
@@ -83,7 +116,7 @@ impl Database {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "cache_size", -512)?;
         let db = Database {
-            conn: Mutex::new(conn),
+            conn: Mutex::new(Connection::Local(conn)),
         };
         db.upgrade()?;
         // Not part of upstream's schema, see
@@ -97,7 +130,7 @@ impl Database {
         Ok(db)
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub(super) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -120,6 +153,19 @@ impl Database {
 
     fn run_migrations(conn: &mut Connection, version: i64) -> Result<()> {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Another process may have initialized the database while BEGIN waited.
+        let version = if tx.is_remote() {
+            tx.query_row("PRAGMA user_version", [], |r| r.get(0))?
+        } else {
+            version
+        };
+        if version > SCHEMA_VERSION {
+            bail!("unsupported database schema version {version}");
+        }
+        if version == SCHEMA_VERSION {
+            tx.commit()?;
+            return Ok(());
+        }
         if version == 0 {
             tx.execute_batch(SCHEMA)
                 .map_err(|e| anyhow!("failed to initialize schema: {e}"))?;

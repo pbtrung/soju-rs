@@ -455,7 +455,7 @@ impl Server {
             crate::VERSION
         );
         match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db => {
+            MsgStoreDriver::Db | MsgStoreDriver::Turso => {
                 // Measured before deleting: the space freed by the previous
                 // run has normally been reused since, what's still free is
                 // wasted
@@ -491,7 +491,9 @@ impl Server {
                         start.elapsed().as_secs_f64()
                     );
                 }
-                if force_vacuum || free >= VACUUM_FREE_RATIO {
+                if cfg.basic.msg_store.driver == MsgStoreDriver::Db
+                    && (force_vacuum || free >= VACUUM_FREE_RATIO)
+                {
                     let start = Instant::now();
                     self.db
                         .vacuum()

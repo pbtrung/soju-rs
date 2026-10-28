@@ -10,7 +10,7 @@ use crate::xirc;
 
 impl Database {
     fn user_from_row(
-        r: &rusqlite::Row,
+        r: &super::Row,
         username: Option<String>,
     ) -> rusqlite::Result<(User, Option<String>)> {
         // Columns: id, [username], password, admin, nick, realname, enabled,

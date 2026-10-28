@@ -7,7 +7,34 @@ use soju::config;
 use soju::irc::Message;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-const USAGE: &str = "usage: sojuctl [-config path] <command>\n";
+const USAGE: &str = "usage: sojuctl [-config path] <command>\n       sojuctl -config path turso create-admin -username name -password password\n";
+
+/// Explicit offline bootstrap. The regular commands always use the running
+/// server, so they cannot leave its in-memory user directory out of sync.
+fn create_turso_admin(cfg: &config::Server, args: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        cfg.turso.is_some(),
+        "turso create-admin requires message-store turso"
+    );
+    let flags = soju::flags::FlagSet::new()
+        .string("username")
+        .string("password");
+    let parsed = flags.parse(args)?;
+    anyhow::ensure!(parsed.args.is_empty(), "unexpected positional arguments");
+    let username = parsed.string_or("username", "");
+    let password = parsed.string_or("password", "");
+    anyhow::ensure!(!username.is_empty(), "flag -username is required");
+    anyhow::ensure!(!password.is_empty(), "flag -password is required");
+    let mut user = soju::database::User::new(&username);
+    user.set_password(&password)?;
+    user.admin = true;
+    let db = soju::database::Database::open_config(cfg)?;
+    db.store_user(&mut user)?;
+    println!(
+        "created admin {username:?} and their Turso database; start or restart soju to load the user"
+    );
+    Ok(())
+}
 
 /// Quotes a word for split_words, which only understands backslash escapes
 /// of the next character: other characters are kept as-is. CR, LF and NUL
@@ -141,7 +168,14 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .expect("failed to start the async runtime");
-    match rt.block_on(run(&cfg, &args)) {
+    let result = if args.first().map(String::as_str) == Some("turso")
+        && args.get(1).map(String::as_str) == Some("create-admin")
+    {
+        create_turso_admin(&cfg, &args[2..]).map_err(|e| format!("{e:#}"))
+    } else {
+        rt.block_on(run(&cfg, &args))
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
@@ -153,6 +187,37 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turso_bootstrap_validates_before_connecting() {
+        let mut cfg = config::Server::defaults();
+        assert!(
+            create_turso_admin(&cfg, &[])
+                .unwrap_err()
+                .to_string()
+                .contains("message-store turso")
+        );
+        cfg.turso = Some(config::Turso {
+            organization: "example".into(),
+            group: "bouncer".into(),
+            controller: "soju-controller".into(),
+            api_token: "api-secret".into(),
+            group_token: "sql-secret".into(),
+        });
+        assert!(
+            create_turso_admin(&cfg, &[])
+                .unwrap_err()
+                .to_string()
+                .contains("-username")
+        );
+        let args = vec!["-username".to_owned(), "alice".to_owned()];
+        assert!(
+            create_turso_admin(&cfg, &args)
+                .unwrap_err()
+                .to_string()
+                .contains("-password")
+        );
+    }
 
     #[test]
     fn quoting() {

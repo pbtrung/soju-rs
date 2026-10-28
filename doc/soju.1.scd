@@ -159,6 +159,10 @@ The following directives are supported:
 
 	- _db_ stores messages in the database. A full-text search index is used to
 	  speed up search queries.
+	- _turso_ uses Turso Cloud for all bouncer storage, with a controller
+	  account directory and a separate database per user. Omit the _db_
+	  directive and configure the _turso-_ directives below. Databases and
+	  schemas are provisioned automatically before accepting connections.
 	- _memory_ stores messages in memory. For each channel/user, only the
 	  latest 4K messages are kept in memory, older messages are discarded. This
 	  driver is very basic and doesn't support features such as the
@@ -167,6 +171,28 @@ The following directives are supported:
 	Upstream soju's _fs_ driver (ZNC-format log files) isn't supported.
 
 	(_log_ is a deprecated alias for this directive.)
+
+*turso-organization* <slug>
+	Turso organization owning the databases. Required with _message-store turso_.
+
+*turso-group* <name>
+	Existing Turso group in which databases are created. Required with
+	_message-store turso_.
+
+*turso-controller* <name>
+	Controller database name. Defaults to _soju-controller_. Each user database
+	gets a random name encoding 128 random bits using only lowercase letters
+	and digits. Run one soju instance per controller.
+
+*turso-group-token* <token>
+	Full-access SQL token for the configured group. Required with
+	_message-store turso_. The token is used for controller and user SQL access.
+
+*turso-api-token* <token>
+	Platform API token with read, database-create and database-delete access
+	to the configured group. Required for automatic provisioning; a group SQL
+	token cannot create databases through the Platform API. All Turso settings
+	require a restart to change. See _doc/turso.md_ for setup and recovery.
 
 *http-origin* <patterns...>
 	List of allowed HTTP origins for WebSocket listeners. The parameters are

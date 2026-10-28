@@ -170,7 +170,7 @@ async fn run(args: Args) -> ExitCode {
         raw.listen.push(":6697".to_owned());
     }
 
-    let db = match Database::open(&raw.db.source) {
+    let db = match Database::open_config(&raw) {
         Ok(db) => db,
         Err(e) => return fatal(&logger, format!("failed to open database: {e}")),
     };

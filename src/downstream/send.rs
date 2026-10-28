@@ -31,7 +31,7 @@ impl DownstreamConn {
         // TODO: we should only enable chathistory after authentication and
         // then check that the user's message store supports it
         match cfg.basic.msg_store.driver {
-            crate::config::MsgStoreDriver::Db => {
+            crate::config::MsgStoreDriver::Db | crate::config::MsgStoreDriver::Turso => {
                 caps.available
                     .insert("draft/chathistory".to_owned(), String::new());
                 caps.available
