@@ -2,7 +2,8 @@
 
 Audited the Turso implementation introduced by `d478f60`, including its
 configuration, controller directory, user routing, Hrana transport, command
-bootstrap, expiry and documentation. Findings below were addressed before
+bootstrap, expiry and documentation. The v0.99.20 follow-up also audits
+background batching, history visibility, request limits and schema metadata. Findings below were addressed before
 release. The scope includes local SQLite regressions caused by the shared
 connection interface.
 
@@ -15,7 +16,7 @@ connection interface.
 | Medium | New streams did not carry the previous write's replication index, allowing reads to miss recent writes on replicas. | Track the highest observed index and include it in subsequent requests. Sequence operations collect an index on their own stream before it closes. Verify the subsequent read sends the write's index. |
 | Medium | Remote event handlers blocked the current-thread runtime; the HTTP worker serialized all requests, and account provisioning held the whole user-directory lock. | Run remote handlers and deferred creation on blocking workers, serve independent HTTP streams concurrently, and keep the directory lock out of cloud I/O. Test timers, an existing user lookup during provisioning, and a fast HTTP request while another response is delayed. |
 | Medium | A changed group, corrupt link, or update using another user's network ID could operate on the wrong database or poison the routing cache. | Validate link names and owners, record the controller/owner in each user database, check existing network ownership before updating, and recheck the group before deletion. Test corrupt links, owner mismatches, moved groups, and cross-tenant updates after restart. |
-| Low | The offline bootstrap bypassed the admin-socket argument checks. Some cloud failures during readiness probing were not retried. | Reject CR/LF/NUL before connecting and retry only readiness reads, including transport failures. Keep SQL writes and commits non-retryable. |
+| Low | The offline bootstrap bypassed the admin-socket argument checks. Some cloud failures during readiness probing were not retried. | Reject CR/LF/NUL before connecting and retry only readiness reads, including transport failures. Keep general SQL writes and commits non-retryable; v0.99.20 adds a separate idempotent buffered-message writer. |
 
 ## Message expiry and maintenance
 
@@ -37,6 +38,37 @@ The updated setup and man pages describe maintenance limits, recovery of a
 missing ready database, controller backups, ownership checks, credential
 separation and ambiguous write outcomes.
 
+## Background batching follow-up (v0.99.20)
+
+- Removed one transaction and several HTTP round trips per incoming line.
+  Per-user filling and committing buffers use `chathistory-limit`, a
+  one-second partial flush, and an 8 MiB filling-buffer data budget.
+- Kept writer streams independent of read connections and their mutexes.
+  Shared replication watermarks and an in-memory SQLite/FTS overlay preserve
+  pending history, search, target timestamps, ordering, and receipts.
+- Reserved cursor IDs durably, and prefetched future ranges on a separate
+  stream so ID allocation cannot queue behind a commit's mutex. Exact
+  contents are checked on retries; conflicting IDs abort the request.
+- Capped complete encoded HTTP bodies at 512 KiB. Large buffers split into
+  independently atomic requests. Payload text uses bound blobs cast to text
+  to avoid worst-case JSON control-character expansion. Simulated HTTP 413
+  and transaction-timeout limits verify adaptive splitting and stable IDs.
+- Retained failed batches with backoff. Full buffers defer message events
+  while preserving input permits; control events remain serviceable. The
+  two-buffer limit does not guarantee unlimited intake during an outage.
+- Prevented deletion races by making queued inserts conditional on the
+  network still existing. Deletion does not need to wait for the writer's
+  HTTP response, and subsequent flushes cannot resurrect that network.
+- Reproduced an existing, empty controller with the read-only pragma
+  restriction and verified successful initialization and admin creation.
+  Startup database errors now include the underlying error chain instead
+  of only `initialize Turso controller`.
+- Moved cloud schema tracking to `SojuSchemaVersion`: current cloud docs
+  mark `PRAGMA user_version` read-only. Legacy versions are imported once,
+  while local SQLite continues using its existing pragma.
+- Documented forwarding before persistence, crash-loss exposure, limited
+  shutdown retries, cloud request budgets, and read-query latency.
+
 ## Validation and limits
 
 Run the required checks:
@@ -47,8 +79,9 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Result: formatting and Clippy passed; all 176 tests passed (139 library,
-3 sojuctl, and 34 bouncer integration tests).
+v0.99.20 validation: formatting and Clippy passed; all 191 tests passed
+(154 library, 3 sojuctl, and 34 bouncer integration tests). The earlier
+v0.99.19 audit passed its then-current 176 tests.
 
 Turso regressions use the production HTTP client against an independent
 Platform/Hrana mock backed by SQLite, with hosted maintenance restrictions
@@ -63,9 +96,10 @@ tokens and provisioning API credentials are separate.
 
 Live Turso credentials were not available. These tests do not establish the
 behavior of a particular hosted deployment, actual replica lag, account
-quotas or production latency. A lost response after a successful commit is
-inherently ambiguous; the client reports the error and does not replay the
-write. The controller cannot be reconstructed from the random user database
+quotas or production latency. A lost response after a successful general SQL commit is
+inherently ambiguous; that path reports the error without replay. Buffered
+message writes use reserved IDs and identical-content checks, allowing
+retries without duplicate rows. The controller cannot be reconstructed from the random user database
 names, so recovery requires its backup as well as the user databases.
 
 [statement classifier and pragma allowlist]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/query_analysis.rs

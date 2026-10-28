@@ -245,9 +245,12 @@ impl User {
             .with_prefix(format!("user {:?}: ", record.username));
         let cfg = srv.config();
         let msg_store = match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db | MsgStoreDriver::Turso => {
-                Store::Db(msgstore::DbStore::new(srv.db.clone()))
-            }
+            MsgStoreDriver::Db => Store::Db(msgstore::DbStore::new(srv.db.clone())),
+            MsgStoreDriver::Turso => Store::Db(msgstore::DbStore::new_turso(
+                srv.db.clone(),
+                record.id,
+                cfg.basic.chat_history_limit,
+            )),
             MsgStoreDriver::Memory => Store::Memory(msgstore::MemoryStore::new()),
         };
         User {

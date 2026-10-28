@@ -172,7 +172,7 @@ async fn run(args: Args) -> ExitCode {
 
     let db = match Database::open_config(&raw) {
         Ok(db) => db,
-        Err(e) => return fatal(&logger, format!("failed to open database: {e}")),
+        Err(e) => return fatal(&logger, format!("failed to open database: {e:#}")),
     };
 
     let srv = Server::new(db, logger.clone());

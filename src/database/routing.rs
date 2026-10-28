@@ -73,6 +73,21 @@ tenant_methods! {
 }
 
 impl Database {
+    pub(crate) fn message_writer(&self, user_id: i64) -> Result<MessageWriter> {
+        Ok(MessageWriter::new(
+            self.user_db(user_id)?.conn().fork_remote()?,
+        ))
+    }
+
+    pub(crate) fn list_message_rows(
+        &self,
+        network_id: i64,
+        name: &str,
+        options: &MessageOptions,
+    ) -> Result<Vec<MessageRow>> {
+        self.network_db(network_id)?
+            .list_message_rows(network_id, name, options)
+    }
     pub fn is_remote(&self) -> bool {
         self.cloud.is_some()
     }

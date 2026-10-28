@@ -112,7 +112,64 @@ user databases that should be removable through soju.
 Deletion validates the link and group again before calling the Platform API;
 it refuses to delete the controller or a database moved to another group.
 
-History, search, message expiry and receipt behavior match the `db` store.
+## Background message batches
+
+Turso buffers incoming logical IRC messages, including logged events, per
+user across their networks. An assembled multiline message counts as one. `chathistory-limit` is also the
+batch line target (default 1000, range 100–1000); config reload updates the
+target. A one-second timer flushes partial batches on quiet connections.
+The filling buffer is also dispatched at an 8 MiB message-data budget.
+
+One buffer accepts messages while an independent background writer commits
+the other. Commits use conditional Hrana batches, including BEGIN and
+COMMIT, so a statement error cannot leave a partial transaction. Large
+batches are split to keep each serialized HTTP body at or below 512 KiB,
+including JSON escaping, bound arguments, and protocol envelopes. HTTP 413
+responses and processing timeouts cause further splitting; a timeout also
+lowers subsequent request sizes. These are application budgets, not a claim
+about a fixed hosted quota. The upstream libSQL server defaults to a
+[five-second transaction timeout][libsql transaction timeout]; hosted
+settings and proxy limits may differ. One logical buffer may therefore
+require several independently atomic requests.
+
+Live IRC processing continues during commits. History, search, target lists,
+and delivery cursors include pending messages through an in-memory SQLite
+index using the same filters and FTS tokenizer. Reads use a separate HTTP
+stream, sharing the writer's replication watermark, and merge results
+without duplicates. Normal database queries still wait for their own HTTP
+responses; they do not wait for the background writer's client-side lock.
+
+If both buffers fill, incoming message events retain their socket input
+permits and wait for space; control commands can still run. This applies
+backpressure rather than keeping an unlimited backlog. A single IRC event
+that fans out to several channels finishes before further input is deferred.
+A long cloud outage can eventually exhaust the socket input budget too.
+Pending network deletions cannot recreate their old parent networks when a
+buffer is written later.
+
+Message IDs are reserved durably in advance, with the next range fetched
+in the background. Restarts and expiry may leave ID gaps but cannot reuse
+an ID already exposed to a client. Only buffered message writes are retried:
+the same reserved ID and contents make a lost-response retry idempotent,
+and an ID collision with different contents fails the entire request.
+Unrelated SQL writes retain their previous non-retryable behavior.
+
+Messages are forwarded before Turso confirms persistence. Buffers and their
+history index are in memory, so a crash or forced shutdown can lose pending
+lines. Graceful shutdown drains both buffers and retries failures up to
+three times, then logs any remaining flush error. Cloud unavailability
+prevents a durability guarantee during that interval. Local `message-store
+db` keeps its immediate SQLite writes.
+
+Cloud schema versions live in `SojuSchemaVersion`, avoiding writes to
+`PRAGMA user_version`, which [Turso Cloud documents as read-only][cloud
+limitations]. Existing databases initialized by v0.99.19 import their legacy
+pragma version on first open, then use the table for future upgrades.
+Cloud databases first initialized by v0.99.20 need v0.99.20 or later: older
+builds do not understand this schema-version table.
+
+[libsql transaction timeout]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/connection/mod.rs
+[cloud limitations]: https://docs.turso.tech/cloud/limitations
 Expiry removes messages and optimizes each user's FTS index. It never sends
 `VACUUM`, `PRAGMA wal_checkpoint`, `PRAGMA shrink_memory` or file-space probes
 to Turso, including after the startup expiry pass. These operations are for

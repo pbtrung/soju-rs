@@ -259,6 +259,14 @@ The following directives are supported:
 	while sending history to clients, at the cost of more round-trips.
 	Default: 1000.
 
+	With _message-store turso_, this also sets the per-user background message
+	batch target. Partial batches flush after one second. HTTP requests are
+	split below a 512 KiB encoded-body budget, and further on hosted size or
+	processing limits. Live messages and pending history remain available
+	while commits run. Full buffers apply input backpressure. Pending lines
+	are in memory until committed and may be lost on a crash; graceful
+	shutdown drains them. See _doc/turso.md_ for retry and durability details.
+
 *message-expiry* <duration>
 	Automatically delete messages older than the specified duration.
 

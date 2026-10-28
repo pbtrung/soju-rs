@@ -3,6 +3,7 @@
 mod bare;
 mod db;
 mod memory;
+mod turso;
 
 pub use db::DbStore;
 pub use memory::MemoryStore;
@@ -73,7 +74,34 @@ impl Store {
                 s.close();
                 Ok(())
             }
-            Store::Db(_) => Ok(()),
+            Store::Db(s) => s.flush(),
+        }
+    }
+
+    pub(crate) fn set_batch_limit(&self, limit: usize) {
+        if let Store::Db(s) = self {
+            s.set_batch_limit(limit);
+        }
+    }
+
+    pub(crate) fn prepare(&self) -> Result<()> {
+        match self {
+            Store::Db(s) => s.prepare(),
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn has_capacity(&self) -> bool {
+        match self {
+            Store::Db(s) => s.has_capacity(),
+            _ => true,
+        }
+    }
+
+    pub(crate) fn poll(&self) -> Result<()> {
+        match self {
+            Store::Db(s) => s.poll(),
+            _ => Ok(()),
         }
     }
 

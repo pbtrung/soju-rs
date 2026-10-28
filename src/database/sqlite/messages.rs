@@ -235,8 +235,21 @@ impl Database {
         name: &str,
         options: &MessageOptions,
     ) -> Result<Vec<Message>> {
+        Ok(self
+            .list_message_rows(network_id, name, options)?
+            .into_iter()
+            .map(|r| r.message)
+            .collect())
+    }
+
+    pub(crate) fn list_message_rows(
+        &self,
+        network_id: i64,
+        name: &str,
+        options: &MessageOptions,
+    ) -> Result<Vec<crate::database::MessageRow>> {
         let mut query = String::from(
-            "SELECT m.raw
+            "SELECT m.id, m.time, m.raw
             FROM Message AS m, MessageTarget AS t
             WHERE m.target = t.id AND t.network = :network AND t.target = :target ",
         );
@@ -291,10 +304,17 @@ impl Database {
 
         let conn = self.conn();
         let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(binds.as_slice(), |r| lossy_string(r, 0))?;
+        let rows = stmt.query_map(binds.as_slice(), |r| {
+            Ok((r.get(0)?, lossy_string(r, 1)?, lossy_string(r, 2)?))
+        })?;
         let mut l = Vec::new();
-        for raw in rows {
-            l.push(Message::parse(&raw?)?);
+        for row in rows {
+            let (id, time, raw) = row?;
+            l.push(crate::database::MessageRow {
+                id,
+                time,
+                message: Message::parse(&raw)?,
+            });
         }
         if options.take_last {
             l.reverse();

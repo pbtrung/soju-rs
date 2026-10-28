@@ -76,17 +76,18 @@ pub struct Database {
 
 impl Database {
     pub(super) fn open_remote(conn: Connection, controller: bool) -> Result<Database> {
+        conn.initialize_remote_schema_version()?;
         let db = Database {
             conn: Mutex::new(conn),
         };
         if controller {
             let mut conn = db.conn();
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            let version = tx.schema_version()?;
             match version {
                 0 => {
                     tx.execute_batch(include_str!("../turso/controller_schema.sql"))?;
-                    tx.execute_batch("PRAGMA user_version = 1")?;
+                    tx.set_schema_version(1)?;
                 }
                 1 => {}
                 _ => bail!("unsupported Turso controller schema version {version}"),
@@ -136,7 +137,7 @@ impl Database {
 
     fn upgrade(&self) -> Result<()> {
         let mut conn = self.conn();
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let version = conn.schema_version()?;
         if version == SCHEMA_VERSION {
             return Ok(());
         } else if version > SCHEMA_VERSION {
@@ -155,7 +156,7 @@ impl Database {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Another process may have initialized the database while BEGIN waited.
         let version = if tx.is_remote() {
-            tx.query_row("PRAGMA user_version", [], |r| r.get(0))?
+            tx.schema_version()?
         } else {
             version
         };
@@ -182,7 +183,7 @@ impl Database {
                     .map_err(|e| anyhow!("failed to execute migration #{i}: {e}"))?;
             }
         }
-        tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+        tx.set_schema_version(SCHEMA_VERSION)
             .map_err(|e| anyhow!("failed to bump schema version: {e}"))?;
         tx.commit()?;
         Ok(())

@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -11,6 +12,10 @@ use rusqlite::{Params as SqliteParams, Result, ToSql, TransactionBehavior};
 use serde_json::{Value as Json, json};
 
 use super::turso::http::Http;
+
+// An application budget, deliberately below typical proxy body limits.
+// Count encoded JSON bytes, including parameters and protocol envelopes.
+pub(super) const MESSAGE_HTTP_BODY_BUDGET: usize = 512 * 1024;
 
 fn error(e: impl std::fmt::Display) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(std::io::Error::other(e.to_string()).into())
@@ -30,6 +35,12 @@ fn encode(v: &dyn ToSql) -> Result<Json> {
         ValueRef::Text(v) => json!({"type":"text", "value":String::from_utf8_lossy(v)}),
         ValueRef::Blob(v) => json!({"type":"blob", "base64":STANDARD_NO_PAD.encode(v)}),
     })
+}
+
+pub(super) fn statement<P: Params>(sql: &str, params: P) -> Result<Json> {
+    let mut stmt = json!({"sql":sql, "want_rows":false});
+    params.bind(&mut stmt)?;
+    Ok(stmt)
 }
 
 fn stream_endpoint(base: &str) -> Result<String> {
@@ -180,7 +191,7 @@ pub(super) struct Remote {
     baton: RefCell<Option<String>>,
     transaction: Cell<bool>,
     transaction_failed: Cell<bool>,
-    replication_index: Cell<Option<u64>>,
+    replication_index: Arc<Mutex<Option<u64>>>,
     last_id: Cell<i64>,
     foreign_keys: Cell<bool>,
 }
@@ -192,9 +203,11 @@ impl Remote {
                 "Turso transaction failed; discard it before issuing more SQL",
             ));
         }
-        if let Some(index) = self.replication_index.get() {
+        if let Some(index) = *self.replication_index.lock().unwrap() {
             let target = if request["type"] == "execute" {
                 &mut request["stmt"]
+            } else if request["type"] == "batch" {
+                &mut request["batch"]
             } else {
                 &mut request
             };
@@ -233,13 +246,19 @@ impl Remote {
         if !keep && expected != "close" {
             requests.push(json!({"type":"close"}));
         }
+        let body = json!({"baton":*self.baton.borrow(), "requests":requests});
+        if expected == "batch"
+            && serde_json::to_vec(&body).map_err(error)?.len() > MESSAGE_HTTP_BODY_BUDGET
+        {
+            return Err(error("Turso message batch exceeds HTTP body budget"));
+        }
         let response = self
             .http
             .json(
                 reqwest::Method::POST,
                 &self.stream_url.borrow(),
                 &self.token,
-                Some(json!({"baton":*self.baton.borrow(), "requests":requests})),
+                Some(body),
             )
             .map_err(error)?;
         let baton = match response.get("baton") {
@@ -263,11 +282,8 @@ impl Remote {
             let payload = pipeline_result(result, request["type"].as_str().unwrap())?;
             if let Some(index) = payload["result"]["replication_index"].as_str() {
                 let index = index.parse::<u64>().map_err(error)?;
-                self.replication_index.set(Some(
-                    self.replication_index
-                        .get()
-                        .map_or(index, |last| last.max(index)),
-                ));
+                let mut last = self.replication_index.lock().unwrap();
+                *last = Some(last.map_or(index, |last| last.max(index)));
             }
         }
         if keep && self.baton.borrow().is_none() {
@@ -327,7 +343,7 @@ impl Connection {
             baton: RefCell::new(None),
             transaction: Cell::new(false),
             transaction_failed: Cell::new(false),
-            replication_index: Cell::new(None),
+            replication_index: Arc::new(Mutex::new(None)),
             last_id: Cell::new(0),
             foreign_keys: Cell::new(true),
         })
@@ -335,6 +351,98 @@ impl Connection {
 
     pub fn is_remote(&self) -> bool {
         matches!(self, Self::Remote(_))
+    }
+
+    pub fn initialize_remote_schema_version(&self) -> Result<()> {
+        self.execute_batch(
+            "CREATE TABLE IF NOT EXISTS SojuSchemaVersion (
+            id INTEGER PRIMARY KEY CHECK(id=0), version INTEGER NOT NULL)",
+        )?;
+        let rows: i64 =
+            self.query_row("SELECT count(*) FROM SojuSchemaVersion", [], |r| r.get(0))?;
+        if rows == 0 {
+            // Read legacy installations without writing the hosted read-only
+            // pragma. New databases have user_version=0.
+            let legacy: i64 = self.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            self.execute(
+                "INSERT INTO SojuSchemaVersion(id, version) VALUES(0, ?) ON CONFLICT DO NOTHING",
+                [legacy],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn schema_version(&self) -> Result<i64> {
+        let sql = if self.is_remote() {
+            "SELECT version FROM SojuSchemaVersion WHERE id=0"
+        } else {
+            "PRAGMA user_version"
+        };
+        self.query_row(sql, [], |r| r.get(0))
+    }
+
+    pub fn set_schema_version(&self, version: i64) -> Result<()> {
+        if self.is_remote() {
+            self.execute(
+                "UPDATE SojuSchemaVersion SET version=? WHERE id=0",
+                [version],
+            )?;
+        } else {
+            self.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+        }
+        Ok(())
+    }
+
+    /// An independent HTTP stream for background message writes. It shares
+    /// the read-your-writes watermark, never the read connection's mutex.
+    pub fn fork_remote(&self) -> Result<Self> {
+        let Self::Remote(c) = self else {
+            return Err(error("background message writer requires Turso"));
+        };
+        let Self::Remote(mut fork) = Self::remote(c.http.clone(), c.url.clone(), c.token.clone())
+        else {
+            unreachable!()
+        };
+        fork.replication_index = c.replication_index.clone();
+        Ok(Self::Remote(fork))
+    }
+
+    /// Execute an atomic batch in one HTTP round trip. Every step depends
+    /// on the preceding step succeeding, so an error skips COMMIT. Closing
+    /// the stream rolls back any unfinished transaction.
+    pub fn atomic_batch(&self, statements: Vec<Json>) -> Result<()> {
+        let Self::Remote(c) = self else {
+            return Err(error("HTTP batches require Turso"));
+        };
+        let mut steps = vec![json!({"stmt":{"sql":"BEGIN IMMEDIATE"}})];
+        for stmt in statements {
+            steps.push(json!({"condition":{"type":"ok", "step":steps.len()-1}, "stmt":stmt}));
+        }
+        steps.push(
+            json!({"condition":{"type":"ok", "step":steps.len()-1}, "stmt":{"sql":"COMMIT"}}),
+        );
+        let n = steps.len();
+        let response = c.request(json!({"type":"batch", "batch":{"steps":steps}}))?;
+        let results = response["result"]["step_results"]
+            .as_array()
+            .filter(|r| r.len() == n)
+            .ok_or_else(|| error("incomplete Turso batch results"))?;
+        let errors = response["result"]["step_errors"]
+            .as_array()
+            .filter(|r| r.len() == n)
+            .ok_or_else(|| error("incomplete Turso batch errors"))?;
+        for (result, err) in results.iter().zip(errors) {
+            if !err.is_null() {
+                return Err(error(format!(
+                    "Turso message batch failed ({})",
+                    err["code"].as_str().unwrap_or("UNKNOWN")
+                )));
+            }
+            if !result.is_object() {
+                return Err(error("Turso message batch skipped a statement"));
+            }
+        }
+        Ok(())
     }
 
     pub fn execute<P: Params>(&self, sql: &str, params: P) -> Result<usize> {

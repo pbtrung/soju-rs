@@ -13,6 +13,19 @@ use crate::{logf, msg};
 impl User {
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
         let user_id = self.record.id;
+        if self.srv.db.is_remote() {
+            let (user, prepared) = tokio::task::spawn_blocking(move || {
+                let prepared = self.msg_store.prepare();
+                (self, prepared)
+            })
+            .await
+            .expect("message store initialization task failed");
+            self = user;
+            if let Err(e) = prepared {
+                logf!(self.logger, "failed to prepare Turso message buffers: {e}");
+                return;
+            }
+        }
         let networks = match db::run(&self.srv.db, move |db| db.list_networks(user_id)).await {
             Ok(mut n) => {
                 n.sort_by_key(|n| n.id);
@@ -74,12 +87,62 @@ impl User {
             self.start_network(i);
         }
 
-        while let Some(ev) = rx.recv().await {
+        let mut flush_tick = tokio::time::interval(std::time::Duration::from_millis(100));
+        flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // These retain the input permits, so storage backpressure reaches
+        // socket readers while PING/PONG and read-only commands stay live.
+        let mut deferred = std::collections::VecDeque::new();
+        loop {
+            let capacity = self.msg_store.has_capacity();
+            let ev = if capacity && !deferred.is_empty() {
+                deferred.pop_front().unwrap()
+            } else {
+                tokio::select! {
+                    ev = rx.recv() => match ev { Some(ev) => ev, None => break },
+                    _ = flush_tick.tick(), if self.srv.db.is_remote() => {
+                        self.msg_store.set_batch_limit(self.srv.config().basic.chat_history_limit);
+                        if let Err(e) = self.msg_store.poll() {
+                            logf!(self.logger, "Turso message batch failed; retaining it for retry: {e}");
+                        }
+                        continue;
+                    }
+                }
+            };
+            let bypass = match &ev {
+                Event::UpstreamMessage { msg, .. } => {
+                    matches!(msg.command.as_str(), "PING" | "PONG")
+                }
+                Event::DownstreamMessage { msg, .. } => {
+                    !matches!(
+                        msg.command.as_str(),
+                        "PRIVMSG" | "NOTICE" | "TAGMSG" | "BATCH"
+                    ) || msg.param(0).eq_ignore_ascii_case("BouncerServ")
+                }
+                Event::UpstreamConnected { .. }
+                | Event::UpstreamClosed { .. }
+                | Event::UpstreamConnectionError { .. } => false,
+                _ => true,
+            };
+            if !capacity && !bypass {
+                deferred.push_back(ev);
+                continue;
+            }
             if self.srv.db.is_remote() {
+                // Events held for storage backpressure precede STOP in the
+                // input stream. Finish them before draining the store rather
+                // than silently dropping already-read lines on shutdown.
+                let before_stop = if matches!(ev, Event::Stop) {
+                    std::mem::take(&mut deferred)
+                } else {
+                    std::collections::VecDeque::new()
+                };
                 // Cloud I/O must not stop the current-thread runtime's network
                 // and timer tasks. The blocking pool retains the Tokio context
                 // used by handlers to spawn upstream and deferred tasks.
                 self = tokio::task::spawn_blocking(move || {
+                    for queued in before_stop {
+                        self.handle_event(queued);
+                    }
                     self.handle_event(ev);
                     self
                 })
@@ -92,7 +155,13 @@ impl User {
                 break;
             }
         }
-        self.close_msg_store();
+        if self.srv.db.is_remote() {
+            tokio::task::spawn_blocking(move || self.close_msg_store())
+                .await
+                .expect("message store shutdown task failed");
+        } else {
+            self.close_msg_store();
+        }
     }
 
     fn close_msg_store(&mut self) {

@@ -60,7 +60,13 @@ impl Http {
                                 if let Some(body) = request.body {
                                     req = req.json(&body);
                                 }
-                                let response = req.send().await?;
+                                let response = req.send().await.map_err(|e| {
+                                    if e.is_timeout() {
+                                        anyhow!("Turso HTTP request timed out")
+                                    } else {
+                                        e.into()
+                                    }
+                                })?;
                                 let status = response.status();
                                 // Do not include response bodies in HTTP errors: these may
                                 // contain SQL arguments or credentials returned by a proxy.

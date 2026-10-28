@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
+use chrono::Utc;
 use rusqlite::types::{Value, ValueRef};
 use serde_json::Value as Json;
 
@@ -34,6 +35,10 @@ struct State {
     bad_group: bool,
     fault: Option<(String, Fault)>,
     delay: Option<(String, Duration)>,
+    delay_before: Option<(String, Duration)>,
+    max_body: Option<usize>,
+    max_batch_lines: Option<usize>,
+    request_sizes: Vec<usize>,
     requests: Vec<Json>,
     replication_index: u64,
 }
@@ -60,6 +65,10 @@ impl Cloud {
             bad_group: false,
             fault: None,
             delay: None,
+            delay_before: None,
+            max_body: None,
+            max_batch_lines: None,
+            request_sizes: Vec::new(),
             requests: Vec::new(),
             replication_index: 0,
         }));
@@ -173,6 +182,13 @@ fn serve(mut stream: TcpStream, shared: &Arc<Mutex<State>>) {
                     .as_str()
                     .or_else(|| r["stmt"]["sql"].as_str())
                     .is_some_and(|sql| sql.contains(needle))
+                    || r["batch"]["steps"].as_array().is_some_and(|steps| {
+                        steps.iter().any(|s| {
+                            s["stmt"]["sql"]
+                                .as_str()
+                                .is_some_and(|sql| sql.contains(needle))
+                        })
+                    })
             })
         })
     };
@@ -181,6 +197,17 @@ fn serve(mut stream: TcpStream, shared: &Arc<Mutex<State>>) {
         .as_ref()
         .filter(|(sql, _)| contains_sql(sql))
         .map(|(_, delay)| *delay);
+    let delay_before = state
+        .delay_before
+        .as_ref()
+        .filter(|(sql, _)| contains_sql(sql))
+        .map(|(_, delay)| *delay);
+    if let Some(delay) = delay_before {
+        state.delay_before = None;
+        drop(state);
+        std::thread::sleep(delay);
+        state = shared.lock().unwrap();
+    }
     let fault = if state
         .fault
         .as_ref()
@@ -248,8 +275,13 @@ fn serve(mut stream: TcpStream, shared: &Arc<Mutex<State>>) {
         } else if state.fail_sql.as_deref() == Some(name) {
             (503, Json::Null)
         } else {
+            state.request_sizes.push(length);
             state.requests.push(body.clone());
-            (200, pipeline(&mut state, name, &body))
+            if state.max_body.is_some_and(|max| length > max) {
+                (413, Json::Null)
+            } else {
+                (200, pipeline(&mut state, name, &body))
+            }
         }
     };
     if let Some(fault) = fault {
@@ -299,6 +331,31 @@ fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
     let results: Vec<_> = body["requests"].as_array().unwrap().iter().map(|request| {
         let result = match request["type"].as_str().unwrap() {
             "execute" => execute(&mut conn, &request["stmt"]).map(|r| json!({"type":"execute", "result":r})),
+            "batch" => {
+                let steps = request["batch"]["steps"].as_array().unwrap();
+                let lines = steps.iter().filter(|s| s["stmt"]["sql"].as_str().unwrap().starts_with("INSERT INTO Message(")).count();
+                if state.max_batch_lines.is_some_and(|max| lines > max) {
+                    let mut errors = vec![Json::Null; steps.len()];
+                    errors[0] = json!({"code":"TRANSACTION_TIMEOUT", "message":"mock processing budget"});
+                    return json!({"type":"ok", "response":{"type":"batch", "result":{
+                        "step_results":vec![Json::Null; steps.len()], "step_errors":errors,
+                        "replication_index":replication_index}}});
+                }
+                let mut results: Vec<Json> = Vec::new();
+                let mut errors = Vec::new();
+                for step in steps {
+                    let run = step["condition"].is_null() || match step["condition"]["type"].as_str().unwrap() {
+                        "ok" => results[step["condition"]["step"].as_u64().unwrap() as usize].is_object(),
+                        other => panic!("unsupported batch condition {other}"),
+                    };
+                    if !run { results.push(Json::Null); errors.push(Json::Null); continue; }
+                    match execute(&mut conn, &step["stmt"]) {
+                        Ok(result) => { results.push(result); errors.push(Json::Null); }
+                        Err(e) => { results.push(Json::Null); errors.push(json!({"code":"SQLITE_ERROR", "message":e.to_string()})); }
+                    }
+                }
+                Ok(json!({"type":"batch", "result":{"step_results":results, "step_errors":errors, "replication_index":replication_index}}))
+            },
             "sequence" => validate_cloud_sql(request["sql"].as_str().unwrap())
                 .and_then(|_| conn.execute_batch(request["sql"].as_str().unwrap())).map(|_| json!({"type":"sequence"})),
             "close" => { assert!(!closed); closed = true; Ok(json!({"type":"close"})) },
@@ -406,6 +463,8 @@ fn validate_cloud_sql(sql: &str) -> rusqlite::Result<()> {
         ]
         .iter()
         .any(|prefix| statement.starts_with(prefix))
+            || (statement.starts_with("pragma user_version")
+                && (statement.contains('=') || statement.contains('(')))
         {
             return Err(rusqlite::Error::ToSqlConversionFailure(
                 std::io::Error::other("unsupported cloud SQL statement").into(),
@@ -681,8 +740,10 @@ fn user_schema_migration_preserves_messages() {
     {
         let path = cloud.state.lock().unwrap().root.join(name);
         let conn = rusqlite::Connection::open(path).unwrap();
-        conn.execute_batch("DROP INDEX MessageTextIndex; PRAGMA user_version = 30;")
-            .unwrap();
+        conn.execute_batch(
+            "DROP INDEX MessageTextIndex; DROP TABLE SojuSchemaVersion; PRAGMA user_version = 30;",
+        )
+        .unwrap();
     }
     let db = cloud.database().unwrap();
     assert_eq!(
@@ -1082,4 +1143,687 @@ fn startup_and_recurring_expiry_never_send_file_maintenance_sql() {
     ] {
         assert!(!sql.iter().any(|s| s.contains(forbidden)), "{forbidden}");
     }
+}
+
+fn buffered_store(
+    cloud: &Cloud,
+    limit: usize,
+) -> (
+    Arc<crate::database::Database>,
+    User,
+    Network,
+    crate::msgstore::Store,
+) {
+    let db = Arc::new(cloud.database().unwrap());
+    let account = user(&db, "buffered");
+    let mut net = Network::new("ircs://buffered.example.org");
+    net.enabled = false;
+    db.store_network(account.id, &mut net).unwrap();
+    let store = crate::msgstore::Store::Db(crate::msgstore::DbStore::new_turso(
+        db.clone(),
+        account.id,
+        limit,
+    ));
+    store.prepare().unwrap();
+    (db, account, net, store)
+}
+
+fn timed_message(text: &str, seconds: i64) -> crate::irc::Message {
+    let mut message = msg!("PRIVMSG", "#buffered", text)
+        .with_prefix(crate::irc::Prefix::parse("alice!user@host"));
+    message.tags.set(
+        "time",
+        crate::xirc::format_server_time(Utc::now() + chrono::Duration::seconds(seconds)),
+    );
+    message
+}
+
+#[test]
+fn buffered_history_search_targets_and_shutdown_include_pending_lines() {
+    use crate::msgstore::{LoadMessageOptions, SearchMessageOptions};
+    let cloud = Cloud::new();
+    let (db, _, net, mut store) = buffered_store(&cloud, 100);
+    let zero = store.last_msg_id(&net, "#buffered").unwrap();
+    let first = timed_message("alpha one", -10);
+    let later = timed_message("alpha two", -5);
+    let first_id = store.append(&net, "#buffered", &first).unwrap();
+    let later_id = store.append(&net, "#buffered", &later).unwrap();
+    assert_eq!(store.last_msg_id(&net, "#buffered").unwrap(), later_id);
+    let opts = LoadMessageOptions {
+        network: &net,
+        entity: "#buffered",
+        limit: 100,
+        events: false,
+    };
+    assert_eq!(
+        store.load_latest_id(&zero, &opts).unwrap(),
+        vec![first.clone(), later.clone()]
+    );
+    assert_eq!(
+        store.load_latest_id(&first_id, &opts).unwrap(),
+        vec![later.clone()]
+    );
+    assert_eq!(
+        store
+            .search(
+                &net,
+                &SearchMessageOptions {
+                    r#in: "#buffered".into(),
+                    text: "alpha".into(),
+                    limit: 100,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+        vec![first.clone(), later.clone()]
+    );
+    let now = Utc::now();
+    assert_eq!(
+        store
+            .list_targets(&net, now - chrono::Duration::hours(1), now, 100, false)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        db.list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .is_empty()
+    );
+    store.close().unwrap();
+    assert_eq!(
+        db.list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        vec![first, later]
+    );
+}
+
+#[test]
+fn a_slow_commit_does_not_block_the_other_buffer_or_history_reads() {
+    use crate::msgstore::LoadMessageOptions;
+    let cloud = Cloud::new();
+    let (db, _, net, mut store) = buffered_store(&cloud, 3);
+    let zero = store.last_msg_id(&net, "#buffered").unwrap();
+    cloud.state.lock().unwrap().delay_before =
+        Some(("INSERT INTO Message(".into(), Duration::from_millis(500)));
+    let start = std::time::Instant::now();
+    for i in 0..6 {
+        store
+            .append(
+                &net,
+                "#buffered",
+                &timed_message(&format!("line {i}"), i - 10),
+            )
+            .unwrap();
+    }
+    assert!(start.elapsed() < Duration::from_millis(200));
+    assert!(!store.has_capacity());
+    assert_eq!(
+        store
+            .load_latest_id(
+                &zero,
+                &LoadMessageOptions {
+                    network: &net,
+                    entity: "#buffered",
+                    limit: 100,
+                    events: false
+                }
+            )
+            .unwrap()
+            .len(),
+        6
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(250),
+        "history waited for the writer connection"
+    );
+    store.close().unwrap();
+    let rows = db
+        .list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(rows.len(), 6);
+    let state = cloud.state.lock().unwrap();
+    let batches: Vec<_> = state
+        .requests
+        .iter()
+        .flat_map(|r| r["requests"].as_array().unwrap())
+        .filter(|r| r["type"] == "batch")
+        .collect();
+    assert_eq!(batches.len(), 2);
+    for batch in batches {
+        assert_eq!(
+            batch["batch"]["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|s| s["stmt"]["sql"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("INSERT INTO Message("))
+                .count(),
+            3
+        );
+    }
+}
+
+#[test]
+fn atomic_message_batches_rollback_and_reject_conflicting_reserved_ids() {
+    use crate::database::MessageInsert;
+    let cloud = Cloud::new();
+    let (db, account, net, mut store) = buffered_store(&cloud, 100);
+    store.close().unwrap();
+    let writer = db.message_writer(account.id).unwrap();
+    let mut ids = writer.reserve(3).unwrap();
+    let id = ids.next().unwrap();
+    let first = MessageInsert::new(id, net.id, "#buffered", &timed_message("original", 0)).unwrap();
+    let bad = MessageInsert::new(
+        id,
+        net.id,
+        "#buffered",
+        &timed_message("conflicting contents", 0),
+    )
+    .unwrap();
+    assert!(writer.write(&[first.clone(), bad]).is_err());
+    let opts = MessageOptions {
+        limit: 100,
+        ..Default::default()
+    };
+    assert!(
+        db.list_messages(net.id, "#buffered", &opts)
+            .unwrap()
+            .is_empty()
+    );
+    writer.write(std::slice::from_ref(&first)).unwrap();
+    writer.write(&[first]).unwrap();
+    let collision = MessageInsert::new(
+        id,
+        net.id,
+        "#buffered",
+        &timed_message("different contents", 0),
+    )
+    .unwrap();
+    assert!(writer.write(&[collision]).is_err());
+    let rows = db.list_messages(net.id, "#buffered", &opts).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].params[1], "original");
+}
+
+#[test]
+fn retry_lost_batch_commit_response_without_duplicate_lines() {
+    let cloud = Cloud::new();
+    let (db, _, net, mut store) = buffered_store(&cloud, 3);
+    cloud.state.lock().unwrap().fault = Some(("COMMIT".into(), Fault::HttpAfter));
+    for i in 0..3 {
+        store
+            .append(&net, "#buffered", &timed_message(&format!("retry {i}"), i))
+            .unwrap();
+    }
+    store.close().unwrap();
+    let rows = db
+        .list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(cloud.state.lock().unwrap().streams.len(), 0);
+}
+
+#[test]
+fn encoded_json_body_budget_splits_long_escaped_lines() {
+    let cloud = Cloud::new();
+    let (db, account, net, mut store) = buffered_store(&cloud, 100);
+    store.close().unwrap();
+    let writer = db.message_writer(account.id).unwrap();
+    let ids = writer.reserve(20).unwrap();
+    let text = "\"\\".repeat(10000);
+    let rows: Vec<_> = ids
+        .map(|id| {
+            crate::database::MessageInsert::new(id, net.id, "#buffered", &timed_message(&text, 0))
+                .unwrap()
+        })
+        .collect();
+    cloud.state.lock().unwrap().request_sizes.clear();
+    writer.write(&rows).unwrap();
+    let state = cloud.state.lock().unwrap();
+    assert!(state.request_sizes.len() > 1);
+    assert!(
+        state
+            .request_sizes
+            .iter()
+            .all(|size| *size <= crate::database::connection::MESSAGE_HTTP_BODY_BUDGET)
+    );
+    drop(state);
+    assert_eq!(
+        db.list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .len(),
+        20
+    );
+}
+
+#[test]
+fn split_and_retry_host_body_and_processing_limits() {
+    for processing in [false, true] {
+        let cloud = Cloud::new();
+        let (db, _, net, mut store) = buffered_store(&cloud, 10);
+        {
+            let mut state = cloud.state.lock().unwrap();
+            if processing {
+                state.max_batch_lines = Some(2);
+            } else {
+                state.max_body = Some(6000);
+            }
+        }
+        for i in 0..10 {
+            store
+                .append(
+                    &net,
+                    "#buffered",
+                    &timed_message(&format!("bounded {i}"), i),
+                )
+                .unwrap();
+        }
+        store.close().unwrap();
+        assert_eq!(
+            db.list_messages(
+                net.id,
+                "#buffered",
+                &MessageOptions {
+                    limit: 100,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .len(),
+            10
+        );
+    }
+}
+
+#[test]
+fn reserved_message_ids_are_not_reused_after_restart_or_expiry() {
+    let cloud = Cloud::new();
+    let (db, account, net, mut store) = buffered_store(&cloud, 100);
+    let first = store
+        .append(&net, "#buffered", &timed_message("old", -10))
+        .unwrap();
+    store.close().unwrap();
+    db.delete_messages_before(Utc::now(), 100).unwrap();
+    let mut next = crate::msgstore::Store::Db(crate::msgstore::DbStore::new_turso(
+        db.clone(),
+        account.id,
+        100,
+    ));
+    next.prepare().unwrap();
+    next.append(&net, "#buffered", &timed_message("new", 0))
+        .unwrap();
+    let history = next
+        .load_latest_id(
+            &first,
+            &crate::msgstore::LoadMessageOptions {
+                network: &net,
+                entity: "#buffered",
+                limit: 100,
+                events: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].params[1], "new");
+    next.close().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn background_commits_keep_the_same_user_event_loop_responsive() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    use crate::user::Event;
+    let cloud = Cloud::new();
+    let (db, _, net, mut unused) = buffered_store(&cloud, 100);
+    unused.close().unwrap();
+    drop(unused);
+    let db = Arc::try_unwrap(db)
+        .ok()
+        .unwrap_or_else(|| panic!("database still referenced"));
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    config.basic.chat_history_limit = 100;
+    srv.set_config(config);
+    srv.start().unwrap();
+    let handle = srv.get_user("buffered").unwrap();
+    let (ready, wait_ready) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |_| {
+        let _ = ready.send(());
+    })));
+    wait_ready.await.unwrap();
+    cloud.state.lock().unwrap().delay =
+        Some(("INSERT INTO Message(".into(), Duration::from_millis(700)));
+    let (sent, wait_sent) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |u| {
+        for i in 0..200 {
+            u.msg_store
+                .append(&net, "#buffered", &timed_message(&format!("live {i}"), i))
+                .unwrap();
+        }
+        assert!(!u.msg_store.has_capacity());
+        let _ = sent.send(());
+    })));
+    tokio::time::timeout(Duration::from_millis(350), wait_sent)
+        .await
+        .unwrap()
+        .unwrap();
+    let (reply, wait_reply) = tokio::sync::oneshot::channel();
+    handle.send(Event::HasNetwork {
+        name: "ircs://buffered.example.org".into(),
+        reply,
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), wait_reply)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn partial_message_batches_flush_on_the_timer() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    use crate::user::Event;
+    let cloud = Cloud::new();
+    let (db, _, net, mut unused) = buffered_store(&cloud, 100);
+    unused.close().unwrap();
+    drop(unused);
+    let db = Arc::try_unwrap(db)
+        .ok()
+        .unwrap_or_else(|| panic!("database still referenced"));
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    config.basic.chat_history_limit = 100;
+    srv.set_config(config);
+    srv.start().unwrap();
+    let handle = srv.get_user("buffered").unwrap();
+    let net_id = net.id;
+    let (sent, wait_sent) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |u| {
+        u.msg_store
+            .append(&net, "#buffered", &timed_message("quiet", 0))
+            .unwrap();
+        let _ = sent.send(());
+    })));
+    wait_sent.await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let rows = crate::database::run(&srv.db, move |db| {
+            db.list_messages(
+                net_id,
+                "#buffered",
+                &MessageOptions {
+                    limit: 100,
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+        if !rows.is_empty() {
+            assert_eq!(rows.len(), 1);
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    srv.shutdown().await;
+}
+
+#[test]
+fn a_deleted_network_is_not_resurrected_by_buffered_writes() {
+    let cloud = Cloud::new();
+    let (db, account, net, mut store) = buffered_store(&cloud, 100);
+    let mut other = Network::new("ircs://other.example.org");
+    db.store_network(account.id, &mut other).unwrap();
+    store
+        .append(&net, "#buffered", &timed_message("deleted", 0))
+        .unwrap();
+    store
+        .append(&other, "#buffered", &timed_message("kept", 0))
+        .unwrap();
+    db.delete_network(net.id).unwrap();
+    store.close().unwrap();
+    assert_eq!(db.list_networks(account.id).unwrap().len(), 1);
+    assert_eq!(
+        db.list_messages(
+            other.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_large_logical_multiline_message_fits_the_encoded_body_budget() {
+    let cloud = Cloud::new();
+    let (db, _, net, mut store) = buffered_store(&cloud, 1);
+    let text = "\u{1}".repeat(64 * 1024);
+    store
+        .append(&net, "#buffered", &timed_message(&text, 0))
+        .unwrap();
+    store.close().unwrap();
+    assert_eq!(
+        db.list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 1,
+                ..Default::default()
+            }
+        )
+        .unwrap()[0]
+            .params[1],
+        text
+    );
+    assert!(
+        cloud
+            .state
+            .lock()
+            .unwrap()
+            .request_sizes
+            .iter()
+            .all(|size| *size <= crate::database::connection::MESSAGE_HTTP_BODY_BUDGET)
+    );
+}
+
+#[test]
+fn pending_and_committed_history_merge_in_timestamp_and_id_order() {
+    use crate::msgstore::LoadMessageOptions;
+    let cloud = Cloud::new();
+    let (db, account, net, mut old) = buffered_store(&cloud, 100);
+    let zero = old.last_msg_id(&net, "#buffered").unwrap();
+    old.close().unwrap();
+    drop(old);
+    let at = |text: &str, time: &str| msg!("PRIVMSG", "#buffered", text).with_tag("time", time);
+    let first = at("first", "2026-10-28T00:00:10.000Z");
+    let second = at("second", "2026-10-28T00:00:20.000Z");
+    db.store_messages(net.id, "#buffered", &[first.clone(), second.clone()])
+        .unwrap();
+    let mut store = crate::msgstore::Store::Db(crate::msgstore::DbStore::new_turso(
+        db.clone(),
+        account.id,
+        100,
+    ));
+    store.prepare().unwrap();
+    let early = at("early", "2026-10-28T00:00:05.000Z");
+    let tie = at("tie", "2026-10-28T00:00:20.000Z");
+    store.append(&net, "#buffered", &early).unwrap();
+    store.append(&net, "#buffered", &tie).unwrap();
+    let opts = LoadMessageOptions {
+        network: &net,
+        entity: "#buffered",
+        limit: 2,
+        events: false,
+    };
+    assert_eq!(
+        store.load_latest_id(&zero, &opts).unwrap(),
+        vec![second, tie]
+    );
+    assert_eq!(
+        store.load_after_time(None, None, &opts).unwrap(),
+        vec![early, first]
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn failed_background_batches_retain_both_buffers_until_recovery() {
+    let cloud = Cloud::new();
+    let (db, account, net, mut store) = buffered_store(&cloud, 3);
+    let name: String = db
+        .account_conn_for_test()
+        .query_row(
+            "SELECT name FROM UserDatabase WHERE user=?",
+            [account.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    cloud.state.lock().unwrap().fail_sql = Some(name);
+    for i in 0..6 {
+        store
+            .append(
+                &net,
+                "#buffered",
+                &timed_message(&format!("preserved {i}"), i),
+            )
+            .unwrap();
+    }
+    assert!(!store.has_capacity());
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while store.poll().is_ok() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!store.has_capacity());
+    cloud.state.lock().unwrap().fail_sql = None;
+    store.close().unwrap();
+    assert_eq!(
+        db.list_messages(
+            net.id,
+            "#buffered",
+            &MessageOptions {
+                limit: 100,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .len(),
+        6
+    );
+}
+
+#[test]
+fn initialize_an_existing_empty_controller_with_read_only_user_version() {
+    let cloud = Cloud::new();
+    {
+        let mut state = cloud.state.lock().unwrap();
+        state
+            .databases
+            .insert("soju-controller".into(), "soju".into());
+        rusqlite::Connection::open(state.root.join("soju-controller")).unwrap();
+    }
+    let db = cloud.database().unwrap();
+    let version: i64 = db
+        .account_conn_for_test()
+        .query_row(
+            "SELECT version FROM SojuSchemaVersion WHERE id=0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 1);
+    let admin = user(&db, "alice");
+    assert!(db.get_user("alice").unwrap().unwrap().admin);
+    assert!(db.list_networks(admin.id).unwrap().is_empty());
+    assert!(
+        cloud
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .flat_map(|r| r["requests"].as_array().unwrap())
+            .all(|r| {
+                let sql = r["sql"]
+                    .as_str()
+                    .or_else(|| r["stmt"]["sql"].as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                !sql.contains("pragma user_version =")
+            })
+    );
+}
+
+#[test]
+fn existing_legacy_controller_imports_its_schema_version_and_keeps_accounts() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    user(&db, "alice");
+    drop(db);
+    let path = cloud.state.lock().unwrap().root.join("soju-controller");
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute_batch("DROP TABLE SojuSchemaVersion; PRAGMA user_version = 1;")
+        .unwrap();
+    let db = cloud.database().unwrap();
+    assert!(db.get_user("alice").unwrap().unwrap().admin);
+    assert_eq!(
+        db.account_conn_for_test()
+            .query_row(
+                "SELECT version FROM SojuSchemaVersion WHERE id=0",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
 }
