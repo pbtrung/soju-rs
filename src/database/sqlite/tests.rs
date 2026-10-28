@@ -581,7 +581,145 @@ fn migrations() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 30);
+    assert_eq!(SCHEMA_VERSION, 31);
+}
+
+#[test]
+fn message_text_index_migration() {
+    for manual_index in [false, true] {
+        // Build the previous schema using its original migrations.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SQLITE_V0_SCHEMA).unwrap();
+        for migration in &MIGRATIONS[1..30] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "PRAGMA user_version = 30;
+            INSERT INTO User(id, username) VALUES (1, 'alice');
+            INSERT INTO Network(id, user, addr) VALUES (1, 1, 'irc.example.org');
+            INSERT INTO MessageTarget(id, network, target) VALUES (1, 1, '#a');
+            INSERT INTO Message(target, raw, time, sender, text) VALUES
+                (1, 'PRIVMSG #a :hello', '2024-01-01T00:00:00.000Z', '', 'hello'),
+                (1, 'JOIN #a', '2024-01-01T00:00:01.000Z', '', NULL);",
+        )
+        .unwrap();
+        if manual_index {
+            conn.execute_batch(
+                "CREATE INDEX MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;",
+            )
+            .unwrap();
+        }
+
+        let db = Database::setup(conn).unwrap();
+        let opts = MessageOptions {
+            limit: 10,
+            take_last: true,
+            ..Default::default()
+        };
+        let messages = db.list_messages(1, "#a", &opts).unwrap();
+        assert_eq!(messages, vec![msg!("PRIVMSG", "#a", "hello")]);
+        let targets = db.list_message_last_per_target(1, &opts).unwrap();
+        assert_eq!(
+            targets[0].latest_message,
+            xirc::parse_server_time("2024-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            db.list_messages(
+                1,
+                "#a",
+                &MessageOptions {
+                    events: true,
+                    ..opts
+                }
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+
+        let conn = db.conn();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let stat: String = conn
+            .query_row(
+                "SELECT stat FROM sqlite_stat1 WHERE idx = 'MessageTextIndex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Only the text message is indexed, and the migration analyzed it.
+        assert_eq!(stat, "1 1 1");
+        drop(conn);
+        // Opening an already upgraded database is harmless.
+        db.upgrade().unwrap();
+    }
+}
+
+#[test]
+fn message_text_index_query_plans() {
+    let db = db();
+    let conn = db.conn();
+    conn.execute_batch(
+        "INSERT INTO User(id, username, created_at) VALUES (1, 'alice', '2024-01-01T00:00:00.000Z');
+        INSERT INTO Network(id, user, addr) VALUES (1, 1, 'irc.example.org');
+        WITH RECURSIVE targets(id) AS (
+            VALUES (1) UNION ALL SELECT id + 1 FROM targets WHERE id < 16
+        )
+        INSERT INTO MessageTarget(id, network, target)
+            SELECT id, 1, '#channel' || id FROM targets;
+        WITH RECURSIVE messages(id) AS (
+            VALUES (1) UNION ALL SELECT id + 1 FROM messages WHERE id < 100
+        )
+        INSERT INTO Message(target, raw, time, sender, text)
+            SELECT t.id, 'raw', printf('2024-01-01T00:%02d:%02d.000Z', m.id / 60, m.id % 60),
+                '', CASE WHEN m.id % 10 = 0 THEN 'hello' END
+            FROM MessageTarget t, messages m;",
+    )
+    .unwrap();
+
+    // Check both a fresh database without statistics and one with statistics.
+    for analyze in [false, true] {
+        if analyze {
+            conn.execute_batch("ANALYZE;").unwrap();
+        }
+        for events in [false, true] {
+            let filter = if events { "" } else { "AND text IS NOT NULL" };
+            let message_filter = if events { "" } else { "AND m.text IS NOT NULL" };
+            for query in [
+                format!(
+                    "SELECT target, (SELECT time FROM Message
+                        WHERE target = MessageTarget.id {filter}
+                        ORDER BY time DESC LIMIT 1) latest
+                    FROM MessageTarget WHERE network = 1 ORDER BY latest DESC LIMIT 10"
+                ),
+                format!(
+                    "SELECT m.raw FROM Message m, MessageTarget t
+                    WHERE m.target = t.id AND t.network = 1 AND t.target = '#channel1'
+                        {message_filter}
+                    ORDER BY m.time DESC, m.id DESC LIMIT 5"
+                ),
+            ] {
+                let plan = conn
+                    .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                    .unwrap()
+                    .query_map([], |r| r.get::<_, String>(3))
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                let expected_index = if events {
+                    "MessageIndex"
+                } else {
+                    "MessageTextIndex"
+                };
+                assert!(
+                    plan.iter().any(|detail| detail.contains(expected_index)),
+                    "expected {expected_index} (analyze={analyze}): {plan:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

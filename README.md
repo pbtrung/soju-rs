@@ -87,6 +87,9 @@ Behaviour changes:
   optimized after expired messages are deleted, and the SQLite database is
   vacuumed on startup and when a quarter of it or more is unused (upstream
   leaves it to the admin)
+- A partial index speeds up history queries that exclude events. This bumps
+  the database schema to version 31; older soju-rs releases and upstream soju
+  versions supporting only schema 30 cannot open the upgraded database
 
 ## Testing
 

@@ -1,4 +1,4 @@
-//! SQLite schema migrations, ported verbatim from upstream soju.
+//! SQLite schema migrations, including upstream soju's migrations.
 
 /// Migration #0 is reserved for schema initialization.
 pub const MIGRATIONS: &[&str] = &[
@@ -207,4 +207,10 @@ pub const MIGRATIONS: &[&str] = &[
 		);
 	"#,
     r#"ALTER TABLE DeviceCertificate ADD COLUMN last_ip TEXT NOT NULL DEFAULT ''"#,
+    // Skip event rows when loading history without draft/event-playback.
+    // IF NOT EXISTS also handles databases where this index was added manually.
+    r#"
+        CREATE INDEX IF NOT EXISTS MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
+        ANALYZE MessageTextIndex;
+    "#,
 ];

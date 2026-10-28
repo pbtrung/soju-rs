@@ -123,6 +123,7 @@ CREATE TABLE Message (
 );
 
 CREATE INDEX MessageIndex ON Message(target, time);
+CREATE INDEX MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
 CREATE INDEX Message_target_index ON Message(target);
 
 CREATE TABLE MessageTarget (

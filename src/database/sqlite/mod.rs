@@ -18,7 +18,7 @@ mod receipts;
 mod users;
 mod webpush;
 
-/// Current schema version, the same as upstream soju.
+/// Current schema version, including local migrations.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
 const SCHEMA: &str = include_str!("../sqlite_schema.sql");
