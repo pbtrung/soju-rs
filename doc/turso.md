@@ -31,7 +31,8 @@ turso-api-token "PLATFORM_API_TOKEN"
 `turso-controller` is optional and defaults to `soju-controller`. Use a
 different controller name and a separate group for each independent bouncer.
 Run one soju instance per controller. Storage and credential configuration
-changes require a restart.
+changes require a restart. Changing `turso-controller` selects a different
+account directory; it does not rename or migrate the existing databases.
 
 There are two different kinds of Turso credential:
 
@@ -46,9 +47,16 @@ There are two different kinds of Turso credential:
 Keep the configuration readable only by the account running soju; it contains
 both tokens. Tokens must remain valid for the bouncer to operate. Rotate them
 in the configuration and restart soju. SQL uses HTTPS and Turso's
-[SQL-over-HTTP protocol]; writes are not automatically replayed after network
-errors. Remote calls use the existing synchronous storage interface, so cloud
-round-trip latency affects command and message processing.
+[SQL-over-HTTP protocol]. The client tracks replication indexes so subsequent
+reads wait for its previous writes. Remote event handlers run on blocking
+workers and independent HTTP streams run concurrently, including when soju
+uses a single-threaded runtime. Cloud round-trip latency still affects the
+user issuing a command; place soju near the group's primary region.
+
+Writes are not automatically replayed after network errors. If the server
+commits a write but its response is lost, the operation reports failure and
+its outcome is uncertain. Check the saved state before repeating it. A failed
+transaction is discarded instead of continuing on a new auto-commit stream.
 
 ## Create an administrator
 
@@ -86,17 +94,36 @@ controller with a `provisioning` state. If database creation or schema setup
 fails, sign-in stays disabled for that account. Fix the credentials or cloud
 availability issue and restart soju to resume with the same database name.
 Startup fails if any linked database cannot be initialized. Existing database
-names must belong to the configured group.
+names must belong to the configured group. Once a database is marked `ready`,
+startup refuses to recreate it if it disappears; restore the database and
+restart. Only new accounts in `provisioning` state can create a missing user
+database. Each user database also records its controller and owner to reject
+links to another account's data.
+
+Back up the controller together with the user databases. The controller's
+links and password hashes are needed to recover the account directory; user
+database names cannot reconstruct it. If the controller itself is missing,
+startup creates an empty directory, as it does on the first run.
 
 Deleting a user through BouncerServ deletes their cloud database too. The
 controller records `deleting` first; interrupted deletions resume on startup
 without recreating the database. Turso delete protection must be disabled for
 user databases that should be removable through soju.
+Deletion validates the link and group again before calling the Platform API;
+it refuses to delete the controller or a database moved to another group.
 
 History, search, message expiry and receipt behavior match the `db` store.
-Expiry removes messages and optimizes each user's search index. Turso manages
-its own vacuuming and filesystem maintenance. Existing local SQLite data is
-not imported automatically when switching to Turso.
+Expiry removes messages and optimizes each user's FTS index. It never sends
+`VACUUM`, `PRAGMA wal_checkpoint`, `PRAGMA shrink_memory` or file-space probes
+to Turso, including after the startup expiry pass. These operations are for
+local SQLite; the hosted SQL interface rejects client-issued `VACUUM` and
+WAL checkpoints. Turso migrations also omit the local-only `ANALYZE` step.
+See the [server SQL allowlist] for these restrictions. Existing local SQLite
+data is not imported automatically when switching to Turso.
+
+The pre-release [Turso audit](turso-audit.md) records the fault cases covered
+by regression tests and the remaining verification limits.
 
 [Turso API authentication]: https://docs.turso.tech/api-reference/authentication
 [SQL-over-HTTP protocol]: https://docs.turso.tech/sdk/http/reference
+[server SQL allowlist]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/query_analysis.rs

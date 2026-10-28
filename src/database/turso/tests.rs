@@ -6,13 +6,22 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use rusqlite::types::ValueRef;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+use rusqlite::types::{Value, ValueRef};
 use serde_json::Value as Json;
 
 use super::*;
 use crate::database::{DeliveryReceipt, MessageOptions, Network, ReadReceipt};
 use crate::msg;
+
+#[derive(Clone, Copy)]
+enum Fault {
+    LostStream,
+    MissingResults,
+    WrongResponseType,
+    HttpAfter,
+    EmptyBody,
+}
 
 struct State {
     root: PathBuf,
@@ -23,6 +32,10 @@ struct State {
     fail_delete: bool,
     fail_sql: Option<String>,
     bad_group: bool,
+    fault: Option<(String, Fault)>,
+    delay: Option<(String, Duration)>,
+    requests: Vec<Json>,
+    replication_index: u64,
 }
 
 struct Cloud {
@@ -45,6 +58,10 @@ impl Cloud {
             fail_delete: false,
             fail_sql: None,
             bad_group: false,
+            fault: None,
+            delay: None,
+            requests: Vec::new(),
+            replication_index: 0,
         }));
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -53,14 +70,21 @@ impl Cloud {
         let thread_state = state.clone();
         let thread_stop = stop.clone();
         let thread = std::thread::spawn(move || {
+            let mut handlers = Vec::new();
             while !thread_stop.load(Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((stream, _)) => serve(stream, &mut thread_state.lock().unwrap()),
+                    Ok((stream, _)) => {
+                        let state = thread_state.clone();
+                        handlers.push(std::thread::spawn(move || serve(stream, &state)));
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(1))
                     }
                     Err(e) => panic!("mock accept: {e}"),
                 }
+            }
+            for handler in handlers {
+                handler.join().unwrap();
             }
         });
         Self {
@@ -105,7 +129,7 @@ impl Drop for Cloud {
     }
 }
 
-fn serve(mut stream: TcpStream, state: &mut State) {
+fn serve(mut stream: TcpStream, shared: &Arc<Mutex<State>>) {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -141,12 +165,37 @@ fn serve(mut stream: TcpStream, state: &mut State) {
     } else {
         serde_json::from_slice(&body).unwrap()
     };
+    let mut state = shared.lock().unwrap();
+    let contains_sql = |needle: &str| {
+        body["requests"].as_array().is_some_and(|requests| {
+            requests.iter().any(|r| {
+                r["sql"]
+                    .as_str()
+                    .or_else(|| r["stmt"]["sql"].as_str())
+                    .is_some_and(|sql| sql.contains(needle))
+            })
+        })
+    };
+    let delay = state
+        .delay
+        .as_ref()
+        .filter(|(sql, _)| contains_sql(sql))
+        .map(|(_, delay)| *delay);
+    let fault = if state
+        .fault
+        .as_ref()
+        .is_some_and(|(sql, _)| contains_sql(sql))
+    {
+        state.fault.take().map(|(_, fault)| fault)
+    } else {
+        None
+    };
     let expected_auth = if path.starts_with("/v1/") {
         "Bearer platform-secret"
     } else {
         "Bearer sql-secret"
     };
-    let (status, response) = if auth != expected_auth {
+    let (mut status, mut response) = if auth != expected_auth {
         (401, Json::Null)
     } else if path.starts_with("/v1/") {
         let collection = "/v1/organizations/example/databases";
@@ -191,13 +240,42 @@ fn serve(mut stream: TcpStream, state: &mut State) {
             .unwrap()
             .strip_suffix("/v2/pipeline")
             .unwrap();
-        if state.fail_sql.as_deref() == Some(name) {
+        if body["baton"]
+            .as_str()
+            .is_some_and(|b| !state.streams.contains_key(b))
+        {
+            (400, Json::Null)
+        } else if state.fail_sql.as_deref() == Some(name) {
             (503, Json::Null)
         } else {
-            (200, pipeline(state, name, &body))
+            state.requests.push(body.clone());
+            (200, pipeline(&mut state, name, &body))
         }
     };
-    let bytes = if status == 204 {
+    if let Some(fault) = fault {
+        match fault {
+            Fault::LostStream | Fault::HttpAfter | Fault::EmptyBody => {
+                if let Some(baton) = response["baton"].as_str() {
+                    state.streams.remove(baton);
+                }
+                response["baton"] = Json::Null;
+                if matches!(fault, Fault::HttpAfter) {
+                    status = 503;
+                }
+            }
+            Fault::MissingResults => {
+                response["results"].as_array_mut().unwrap().pop();
+            }
+            Fault::WrongResponseType => {
+                response["results"][0]["response"]["type"] = "unexpected".into();
+            }
+        }
+    }
+    drop(state);
+    if let Some(delay) = delay {
+        std::thread::sleep(delay);
+    }
+    let bytes = if matches!(fault, Some(Fault::EmptyBody)) || status == 204 {
         Vec::new()
     } else {
         serde_json::to_vec(&response).unwrap()
@@ -216,15 +294,21 @@ fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
         rusqlite::Connection::open(state.root.join(name)).unwrap()
     };
     let mut closed = false;
+    state.replication_index += 1;
+    let replication_index = state.replication_index.to_string();
     let results: Vec<_> = body["requests"].as_array().unwrap().iter().map(|request| {
         let result = match request["type"].as_str().unwrap() {
             "execute" => execute(&mut conn, &request["stmt"]).map(|r| json!({"type":"execute", "result":r})),
-            "sequence" => conn.execute_batch(request["sql"].as_str().unwrap()).map(|_| json!({"type":"sequence"})),
+            "sequence" => validate_cloud_sql(request["sql"].as_str().unwrap())
+                .and_then(|_| conn.execute_batch(request["sql"].as_str().unwrap())).map(|_| json!({"type":"sequence"})),
             "close" => { assert!(!closed); closed = true; Ok(json!({"type":"close"})) },
             other => panic!("unsupported mock operation {other}"),
         };
         match result {
-            Ok(response) => json!({"type":"ok", "response":response}),
+            Ok(mut response) => {
+                if response["type"] == "execute" { response["result"]["replication_index"] = replication_index.clone().into(); }
+                json!({"type":"ok", "response":response})
+            },
             Err(e) => json!({"type":"error", "error":{"code": match e {
                 rusqlite::Error::SqliteFailure(err, _) if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => "SQLITE_CONSTRAINT_UNIQUE",
                 _ => "SQLITE_ERROR",
@@ -242,19 +326,41 @@ fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
     json!({"baton":baton, "base_url":null, "results":results})
 }
 
+// Deliberately independent of the client's decoder: the mock must not hide
+// encoding mistakes by sharing the same implementation on both ends.
+fn decode_argument(arg: &Json) -> Value {
+    match arg["type"].as_str().unwrap() {
+        "null" => Value::Null,
+        "integer" => Value::Integer(arg["value"].as_str().unwrap().parse().unwrap()),
+        "float" => Value::Real(arg["value"].as_f64().unwrap()),
+        "text" => Value::Text(arg["value"].as_str().unwrap().into()),
+        "blob" => Value::Blob(
+            STANDARD_NO_PAD
+                .decode(arg["base64"].as_str().unwrap().trim_end_matches('='))
+                .unwrap(),
+        ),
+        other => panic!("invalid protocol argument {other}"),
+    }
+}
+
 fn execute(conn: &mut rusqlite::Connection, stmt: &Json) -> rusqlite::Result<Json> {
+    validate_cloud_sql(stmt["sql"].as_str().unwrap())?;
     let mut query = conn.prepare(stmt["sql"].as_str().unwrap())?;
     if let Some(args) = stmt["args"].as_array() {
         for (i, arg) in args.iter().enumerate() {
-            query.raw_bind_parameter(i + 1, super::super::connection::decode(arg)?)?;
+            query.raw_bind_parameter(i + 1, decode_argument(arg))?;
         }
     }
     if let Some(args) = stmt["named_args"].as_array() {
         for arg in args {
-            let index = query
-                .parameter_index(&format!(":{}", arg["name"].as_str().unwrap()))?
-                .unwrap();
-            query.raw_bind_parameter(index, super::super::connection::decode(&arg["value"])?)?;
+            let name = arg["name"].as_str().unwrap();
+            let name = if name.starts_with([':', '$', '@']) {
+                name.to_owned()
+            } else {
+                format!(":{name}")
+            };
+            let index = query.parameter_index(&name)?.unwrap();
+            query.raw_bind_parameter(index, decode_argument(&arg["value"]))?;
         }
     }
     let cols: Vec<_> = query
@@ -275,7 +381,7 @@ fn execute(conn: &mut rusqlite::Connection, stmt: &Json) -> rusqlite::Result<Jso
                     ValueRef::Integer(n) => json!({"type":"integer", "value":n.to_string()}),
                     ValueRef::Real(n) => json!({"type":"float", "value":n}),
                     ValueRef::Text(s) => json!({"type":"text", "value":String::from_utf8_lossy(s)}),
-                    ValueRef::Blob(b) => json!({"type":"blob", "base64":STANDARD.encode(b)}),
+                    ValueRef::Blob(b) => json!({"type":"blob", "base64":STANDARD_NO_PAD.encode(b)}),
                 })
                 .collect();
             result_rows.push(values);
@@ -285,6 +391,28 @@ fn execute(conn: &mut rusqlite::Connection, stmt: &Json) -> rusqlite::Result<Jso
         json!({"cols":cols, "rows":result_rows, "affected_row_count":conn.changes(),
         "last_insert_rowid":conn.last_insert_rowid().to_string()}),
     )
+}
+
+// SQLite accepts these statements, but the hosted SQL parser rejects them.
+// Model those known restrictions so the local engine cannot mask regressions.
+fn validate_cloud_sql(sql: &str) -> rusqlite::Result<()> {
+    for statement in sql.to_ascii_lowercase().split(';').map(str::trim) {
+        if [
+            "vacuum",
+            "analyze",
+            "pragma wal_checkpoint",
+            "pragma optimize",
+            "pragma shrink_memory",
+        ]
+        .iter()
+        .any(|prefix| statement.starts_with(prefix))
+        {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                std::io::Error::other("unsupported cloud SQL statement").into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn user(db: &crate::database::Database, name: &str) -> User {
@@ -569,4 +697,389 @@ fn user_schema_migration_preserves_messages() {
         .unwrap(),
         messages
     );
+}
+
+fn linked_name(db: &crate::database::Database, user: i64) -> String {
+    db.account_conn_for_test()
+        .query_row(
+            "SELECT name FROM UserDatabase WHERE user = ?",
+            [user],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn missing_ready_database_is_not_recreated_empty() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let alice = user(&db, "alice");
+    let name = linked_name(&db, alice.id);
+    drop(db);
+    cloud.state.lock().unwrap().databases.remove(&name);
+    let error = cloud.open().err().unwrap();
+    assert!(error.to_string().contains("refusing to recreate"));
+    assert!(!cloud.state.lock().unwrap().databases.contains_key(&name));
+}
+
+#[test]
+fn invalid_links_and_changed_groups_cannot_delete_other_databases() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let alice = user(&db, "alice");
+    let name = linked_name(&db, alice.id);
+    db.account_conn_for_test()
+        .execute(
+            "UPDATE UserDatabase SET name = 'soju-controller' WHERE user = ?",
+            [alice.id],
+        )
+        .unwrap();
+    assert!(
+        db.delete_user(alice.id)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid Turso database link")
+    );
+    assert!(
+        cloud
+            .state
+            .lock()
+            .unwrap()
+            .databases
+            .contains_key("soju-controller")
+    );
+    db.account_conn_for_test()
+        .execute(
+            "UPDATE UserDatabase SET name = ? WHERE user = ?",
+            params![name, alice.id],
+        )
+        .unwrap();
+    cloud
+        .state
+        .lock()
+        .unwrap()
+        .databases
+        .insert(name.clone(), "other-group".into());
+    assert!(
+        db.delete_user(alice.id)
+            .unwrap_err()
+            .to_string()
+            .contains("outside the configured group")
+    );
+    assert!(cloud.state.lock().unwrap().databases.contains_key(&name));
+    assert!(db.get_user("alice").unwrap().is_none());
+}
+
+#[test]
+fn tenant_owner_mismatch_stops_startup() {
+    for sql in [
+        "UPDATE User SET username = 'different-owner'",
+        "UPDATE TursoOwner SET controller = 'different-controller'",
+    ] {
+        let cloud = Cloud::new();
+        let db = cloud.database().unwrap();
+        let alice = user(&db, "alice");
+        let name = linked_name(&db, alice.id);
+        drop(db);
+        rusqlite::Connection::open(cloud.state.lock().unwrap().root.join(&name))
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+        assert!(cloud.open().is_err());
+        assert!(cloud.state.lock().unwrap().databases.contains_key(&name));
+    }
+}
+
+#[test]
+fn lost_or_malformed_stream_never_continues_a_transaction() {
+    for fault in [
+        Fault::LostStream,
+        Fault::MissingResults,
+        Fault::WrongResponseType,
+        Fault::HttpAfter,
+        Fault::EmptyBody,
+    ] {
+        let cloud = Cloud::new();
+        let db = cloud.database().unwrap();
+        let mut conn = db.account_conn_for_test();
+        conn.execute_batch("CREATE TABLE Audit(value INTEGER)")
+            .unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute("INSERT INTO Audit VALUES (1)", []).unwrap();
+        cloud.state.lock().unwrap().fault = Some(("SELECT count(*) FROM Audit".into(), fault));
+        assert!(
+            tx.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+                .is_err()
+        );
+        assert!(tx.execute("INSERT INTO Audit VALUES (2)", []).is_err());
+        drop(tx);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        conn.execute("INSERT INTO Audit VALUES (3)", []).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let mut conn = db.account_conn_for_test();
+    conn.execute_batch("CREATE TABLE Audit(value INTEGER)")
+        .unwrap();
+    cloud.state.lock().unwrap().fault = Some(("BEGIN IMMEDIATE".into(), Fault::MissingResults));
+    assert!(
+        conn.transaction_with_behavior(TransactionBehavior::Immediate)
+            .is_err()
+    );
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    tx.execute("INSERT INTO Audit VALUES (1)", []).unwrap();
+    cloud.state.lock().unwrap().fault = Some(("COMMIT".into(), Fault::HttpAfter));
+    assert!(tx.commit().is_err());
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let inserts = cloud
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .flat_map(|r| r["requests"].as_array().unwrap())
+        .filter(|r| r["stmt"]["sql"].as_str() == Some("INSERT INTO Audit VALUES (1)"))
+        .count();
+    assert_eq!(inserts, 1);
+}
+
+#[test]
+fn binary_values_named_parameters_and_replication_index() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let conn = db.account_conn_for_test();
+    conn.execute_batch("CREATE TABLE Audit(payload BLOB)")
+        .unwrap();
+    let blob = vec![0xff; 64]; // base64 requires padding unless using Hrana's unpadded encoding
+    conn.execute("INSERT INTO Audit(payload) VALUES (?)", [&blob])
+        .unwrap();
+    let expected_index = cloud.state.lock().unwrap().replication_index;
+    assert_eq!(
+        conn.query_row("SELECT payload FROM Audit", [], |r| r.get::<_, Vec<u8>>(0))
+            .unwrap(),
+        blob
+    );
+    let state = cloud.state.lock().unwrap();
+    let request = state.requests.last().unwrap();
+    assert_eq!(
+        request["requests"][1]["stmt"]["replication_index"],
+        expected_index.to_string()
+    );
+    drop(state);
+    let values = conn
+        .query_row(
+            "SELECT :value, @value, $value",
+            named_params! {":value":i64::MAX, "@value":i64::MIN, "$value":42},
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(values, (i64::MAX, i64::MIN, 42));
+}
+
+#[test]
+fn slow_http_request_does_not_block_an_independent_stream() {
+    let cloud = Cloud::new();
+    let turso = cloud.open().unwrap();
+    cloud.state.lock().unwrap().delay = Some(("SELECT 'slow'".into(), Duration::from_millis(400)));
+    let url = format!("{}/db/soju-controller/v2/pipeline", cloud.url);
+    let http = turso.http.clone();
+    let slow_url = url.clone();
+    let slow = std::thread::spawn(move || {
+        http.json(Method::POST, &slow_url, "sql-secret",
+        Some(json!({"requests":[{"type":"execute","stmt":{"sql":"SELECT 'slow'"}}, {"type":"close"}]}))).unwrap()
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !cloud
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .any(|r| r["requests"][0]["stmt"]["sql"] == "SELECT 'slow'")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let start = std::time::Instant::now();
+    turso.http.json(Method::POST, &url, "sql-secret",
+        Some(json!({"requests":[{"type":"execute","stmt":{"sql":"SELECT 'fast'"}}, {"type":"close"}]}))).unwrap();
+    assert!(start.elapsed() < Duration::from_millis(250));
+    slow.join().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn slow_storage_does_not_freeze_the_user_runtime_or_user_directory() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    use crate::user::Event;
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    user(&db, "alice");
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    srv.set_config(config);
+    srv.start().unwrap();
+    let handle = srv.get_user("alice").unwrap();
+    let (ready, wait_ready) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |_| {
+        let _ = ready.send(());
+    })));
+    wait_ready.await.unwrap();
+    cloud.state.lock().unwrap().delay = Some(("UPDATE User".into(), Duration::from_millis(400)));
+    let (started, wait_started) = tokio::sync::oneshot::channel();
+    let (done, wait_done) = tokio::sync::oneshot::channel();
+    let start = std::time::Instant::now();
+    handle.send(Event::Run(Box::new(move |user| {
+        let _ = started.send(());
+        let result = user.update_user(|record| {
+            record.nick = "updated".into();
+            Ok(())
+        });
+        let _ = done.send(result);
+    })));
+    wait_started.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(start.elapsed() < Duration::from_millis(250));
+    wait_done.await.unwrap().unwrap();
+    cloud.state.lock().unwrap().delay =
+        Some(("CREATE TABLE User".into(), Duration::from_millis(400)));
+    let creator = srv.clone();
+    let creating = tokio::task::spawn_blocking(move || creator.create_user(User::new("bob")));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let start = std::time::Instant::now();
+    assert!(srv.get_user("alice").is_some());
+    assert!(start.elapsed() < Duration::from_millis(250));
+    creating.await.unwrap().unwrap();
+    srv.shutdown().await;
+}
+
+#[test]
+fn cross_tenant_network_update_cannot_poison_routes_after_restart() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let alice = user(&db, "alice");
+    let bob = user(&db, "bob");
+    let mut net = Network::new("ircs://bob.example.org");
+    db.store_network(bob.id, &mut net).unwrap();
+    db.store_messages(
+        net.id,
+        "#private",
+        &[msg!("PRIVMSG", "#private", "bob's history")],
+    )
+    .unwrap();
+    drop(db);
+    let db = cloud.database().unwrap(); // ownership cache starts empty
+    net.addr = "ircs://wrong.example.org".into();
+    assert!(db.store_network(alice.id, &mut net).is_err());
+    assert_eq!(
+        db.list_networks(bob.id).unwrap()[0].addr,
+        "ircs://bob.example.org"
+    );
+    assert_eq!(
+        db.list_messages(
+            net.id,
+            "#private",
+            &MessageOptions {
+                limit: 10,
+                ..Default::default()
+            }
+        )
+        .unwrap()[0]
+            .trailing(),
+        "bob's history"
+    );
+}
+
+#[test]
+fn startup_and_recurring_expiry_never_send_file_maintenance_sql() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let alice = user(&db, "alice");
+    let mut net = Network::new("ircs://example.org");
+    db.store_network(alice.id, &mut net).unwrap();
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    config.basic.message_expiry = Duration::from_secs(86400);
+    srv.set_config(config);
+    for startup in [true, false] {
+        let mut old = msg!("PRIVMSG", "#a", "expired");
+        old.tags.set(
+            "time",
+            crate::xirc::format_server_time(chrono::Utc::now() - chrono::Duration::days(2)),
+        );
+        let fresh = msg!("PRIVMSG", "#a", "retained");
+        srv.db.store_messages(net.id, "#a", &[old, fresh]).unwrap();
+        srv.delete_expired_messages(startup).unwrap();
+        let messages = srv
+            .db
+            .list_messages(
+                net.id,
+                "#a",
+                &MessageOptions {
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(messages.iter().all(|m| m.trailing() == "retained"));
+        assert_eq!(messages.len(), if startup { 1 } else { 2 });
+    }
+    // These public no-ops also cannot leak SQLite maintenance into Turso.
+    srv.db.vacuum().unwrap();
+    srv.db.shrink_memory().unwrap();
+    assert_eq!(srv.db.free_page_ratio().unwrap(), 0.0);
+    let state = cloud.state.lock().unwrap();
+    let sql: Vec<_> = state
+        .requests
+        .iter()
+        .flat_map(|r| r["requests"].as_array().unwrap())
+        .filter_map(|r| r["sql"].as_str().or_else(|| r["stmt"]["sql"].as_str()))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    assert!(sql.iter().any(|s| s.contains("delete from message")));
+    assert!(
+        sql.iter()
+            .any(|s| s.contains("insert into messagefts(messagefts) values ('optimize')"))
+    );
+    for forbidden in [
+        "vacuum",
+        "wal_checkpoint",
+        "shrink_memory",
+        "freelist_count",
+        "page_count",
+        "analyze ",
+    ] {
+        assert!(!sql.iter().any(|s| s.contains(forbidden)), "{forbidden}");
+    }
 }

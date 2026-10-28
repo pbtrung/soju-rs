@@ -1,7 +1,7 @@
 //! A dedicated HTTP worker keeps the synchronous storage interface usable
 //! from both Tokio runtime flavors, including the single-threaded server.
 
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -17,11 +17,11 @@ struct Request {
 }
 
 #[derive(Clone)]
-pub(in crate::database) struct Http(Arc<mpsc::Sender<Request>>);
+pub(in crate::database) struct Http(tokio::sync::mpsc::UnboundedSender<Request>);
 
 impl Http {
     pub fn new() -> Result<Self> {
-        let (tx, rx) = mpsc::channel::<Request>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Request>();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("turso-http".into())
@@ -48,38 +48,47 @@ impl Http {
                         return;
                     }
                 };
-                while let Ok(request) = rx.recv() {
-                    let result = rt.block_on(async {
-                        let mut req = client
-                            .request(request.method, &request.url)
-                            .bearer_auth(&request.token);
-                        if let Some(body) = request.body {
-                            req = req.json(&body);
-                        }
-                        let response = req.send().await?;
-                        let status = response.status();
-                        // Do not include response bodies in HTTP errors: these may
-                        // contain SQL arguments or credentials returned by a proxy.
-                        if !status.is_success() {
-                            return Ok((status, Value::Null));
-                        }
-                        let bytes = response.bytes().await?;
-                        Ok((
-                            status,
-                            if bytes.is_empty() {
-                                Value::Null
-                            } else {
-                                serde_json::from_slice(&bytes)?
-                            },
-                        ))
-                    });
-                    let _ = request.reply.send(result);
-                }
+                rt.block_on(async {
+                    let mut tasks = tokio::task::JoinSet::new();
+                    while let Some(request) = rx.recv().await {
+                        let client = client.clone();
+                        tasks.spawn(async move {
+                            let result = async {
+                                let mut req = client
+                                    .request(request.method, &request.url)
+                                    .bearer_auth(&request.token);
+                                if let Some(body) = request.body {
+                                    req = req.json(&body);
+                                }
+                                let response = req.send().await?;
+                                let status = response.status();
+                                // Do not include response bodies in HTTP errors: these may
+                                // contain SQL arguments or credentials returned by a proxy.
+                                if !status.is_success() {
+                                    return Ok((status, Value::Null));
+                                }
+                                let bytes = response.bytes().await?;
+                                Ok((
+                                    status,
+                                    if bytes.is_empty() {
+                                        Value::Null
+                                    } else {
+                                        serde_json::from_slice(&bytes)?
+                                    },
+                                ))
+                            }
+                            .await;
+                            let _ = request.reply.send(result);
+                        });
+                        while tasks.try_join_next().is_some() {}
+                    }
+                    while tasks.join_next().await.is_some() {}
+                });
             })?;
         ready_rx
             .recv()
             .map_err(|_| anyhow!("Turso HTTP worker failed to start"))??;
-        Ok(Self(Arc::new(tx)))
+        Ok(Self(tx))
     }
 
     pub fn request(

@@ -75,9 +75,19 @@ impl User {
         }
 
         while let Some(ev) = rx.recv().await {
-            // Event handlers are synchronous and make blocking SQLite calls
-            // whose results they need
-            crate::server::blocking(|| self.handle_event(ev));
+            if self.srv.db.is_remote() {
+                // Cloud I/O must not stop the current-thread runtime's network
+                // and timer tasks. The blocking pool retains the Tokio context
+                // used by handlers to spawn upstream and deferred tasks.
+                self = tokio::task::spawn_blocking(move || {
+                    self.handle_event(ev);
+                    self
+                })
+                .await
+                .expect("user storage task failed");
+            } else {
+                crate::server::blocking(|| self.handle_event(ev));
+            }
             if self.stopped {
                 break;
             }

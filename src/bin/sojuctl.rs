@@ -12,6 +12,7 @@ const USAGE: &str = "usage: sojuctl [-config path] <command>\n       sojuctl -co
 /// Explicit offline bootstrap. The regular commands always use the running
 /// server, so they cannot leave its in-memory user directory out of sync.
 fn create_turso_admin(cfg: &config::Server, args: &[String]) -> anyhow::Result<()> {
+    check_words(args).map_err(anyhow::Error::msg)?;
     anyhow::ensure!(
         cfg.turso.is_some(),
         "turso create-admin requires message-store turso"
@@ -216,6 +217,18 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("-password")
+        );
+        let args = vec![
+            "-username".to_owned(),
+            "alice\r\nJOIN #channel".to_owned(),
+            "-password".to_owned(),
+            "secret".to_owned(),
+        ];
+        assert!(
+            create_turso_admin(&cfg, &args)
+                .unwrap_err()
+                .to_string()
+                .contains("CR, LF or NUL")
         );
     }
 

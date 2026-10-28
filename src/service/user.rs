@@ -117,7 +117,8 @@ pub(super) fn handle_user_create(
         if !disable_password {
             user.password = hash_password(password).await?;
         }
-        srv.create_user(user)
+        tokio::task::spawn_blocking(move || srv.create_user(user))
+            .await?
             .map_err(|e| anyhow!("could not create user: {e}"))?;
         print(format!("created user {username:?}"));
         Ok(())

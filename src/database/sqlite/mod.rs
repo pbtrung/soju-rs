@@ -171,7 +171,14 @@ impl Database {
                 .map_err(|e| anyhow!("failed to initialize schema: {e}"))?;
         } else {
             for (i, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-                tx.execute_batch(migration)
+                // Turso's hosted SQL allowlist rejects ANALYZE. The partial
+                // index itself is supported; local SQLite still analyzes it.
+                let migration = if tx.is_remote() {
+                    migration.replace("ANALYZE MessageTextIndex;", "")
+                } else {
+                    (*migration).to_owned()
+                };
+                tx.execute_batch(&migration)
                     .map_err(|e| anyhow!("failed to execute migration #{i}: {e}"))?;
             }
         }

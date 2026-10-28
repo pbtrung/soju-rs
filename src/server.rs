@@ -90,6 +90,7 @@ pub struct Server {
     identd: OnceLock<Arc<Identd>>,
     web_push: OnceLock<Arc<webpush::Sender>>,
     users: Mutex<HashMap<String, UserHandle>>,
+    user_creation: Mutex<()>,
     shutdown: AtomicBool,
     stop: CancellationToken,
     next_downstream_id: AtomicU64,
@@ -107,6 +108,7 @@ impl Server {
             identd: OnceLock::new(),
             web_push: OnceLock::new(),
             users: Mutex::new(HashMap::new()),
+            user_creation: Mutex::new(()),
             shutdown: AtomicBool::new(false),
             stop: CancellationToken::new(),
             next_downstream_id: AtomicU64::new(1),
@@ -191,8 +193,7 @@ impl Server {
         });
 
         // The first tick completes immediately: expired messages are deleted
-        // on startup, then daily. The database is always vacuumed on
-        // startup, when clients are reconnecting anyway.
+        // on startup, then daily. Only local SQLite is vacuumed on startup.
         let srv = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(24 * 3600));
@@ -305,14 +306,14 @@ impl Server {
 
     /// Creates a user in the database and starts it.
     pub fn create_user(self: &Arc<Self>, mut record: db::User) -> Result<UserHandle> {
-        let mut map = self.users.lock().unwrap();
-        if map.contains_key(&record.username) {
+        let _creating = self.user_creation.lock().unwrap();
+        if self.users.lock().unwrap().contains_key(&record.username) {
             bail!("user {:?} already exists", record.username);
         }
         self.db
             .store_user(&mut record)
             .map_err(|e| anyhow!("could not create user in db: {e}"))?;
-        Ok(self.add_user_locked(&mut map, record))
+        Ok(self.add_user_locked(&mut self.users.lock().unwrap(), record))
     }
 
     pub fn get_user(&self, name: &str) -> Option<UserHandle> {
@@ -346,7 +347,16 @@ impl Server {
             .is_some()
         {
             // Another connection may have just created it
-            if let Some(u) = self.get_user(username) {
+            let srv = self.clone();
+            let name = username.to_owned();
+            let loaded = tokio::task::spawn_blocking(move || {
+                // A concurrent creator may have committed its DB row while
+                // still provisioning the tenant or registering the handle.
+                let _creating = srv.user_creation.lock().unwrap();
+                srv.get_user(&name)
+            })
+            .await?;
+            if let Some(u) = loaded {
                 return Ok(u);
             }
             bail!(
@@ -439,9 +449,9 @@ impl Server {
         Ok(())
     }
 
-    /// Deletes expired messages. The database is vacuumed if force_vacuum is
-    /// set, or if enough of it is free, see VACUUM_FREE_RATIO.
-    fn delete_expired_messages(&self, force_vacuum: bool) -> Result<()> {
+    /// Deletes expired messages. Local SQLite is vacuumed if force_vacuum is
+    /// set, or enough pages are free. Turso never receives file maintenance SQL.
+    pub(crate) fn delete_expired_messages(&self, force_vacuum: bool) -> Result<()> {
         let cfg = self.config();
         let expiry = cfg.basic.message_expiry;
         if expiry.is_zero() {
@@ -456,13 +466,17 @@ impl Server {
         );
         match cfg.basic.msg_store.driver {
             MsgStoreDriver::Db | MsgStoreDriver::Turso => {
+                let local_sqlite = cfg.basic.msg_store.driver == MsgStoreDriver::Db;
                 // Measured before deleting: the space freed by the previous
                 // run has normally been reused since, what's still free is
                 // wasted
-                let free = self
-                    .db
-                    .free_page_ratio()
-                    .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
+                let free = if local_sqlite {
+                    self.db
+                        .free_page_ratio()
+                        .map_err(|e| anyhow!("failed to get db free space: {e}"))?
+                } else {
+                    0.0
+                };
                 let mut n = 0;
                 loop {
                     let deleted = self
@@ -491,9 +505,7 @@ impl Server {
                         start.elapsed().as_secs_f64()
                     );
                 }
-                if cfg.basic.msg_store.driver == MsgStoreDriver::Db
-                    && (force_vacuum || free >= VACUUM_FREE_RATIO)
-                {
+                if local_sqlite && (force_vacuum || free >= VACUUM_FREE_RATIO) {
                     let start = Instant::now();
                     self.db
                         .vacuum()
@@ -505,9 +517,11 @@ impl Server {
                         free * 100.0
                     );
                 }
-                self.db
-                    .shrink_memory()
-                    .map_err(|e| anyhow!("failed to shrink db memory: {e}"))?;
+                if local_sqlite {
+                    self.db
+                        .shrink_memory()
+                        .map_err(|e| anyhow!("failed to shrink db memory: {e}"))?;
+                }
             }
             MsgStoreDriver::Memory => {}
         }

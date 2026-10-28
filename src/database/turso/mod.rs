@@ -55,6 +55,7 @@ impl Turso {
             &api_base,
             sql_base.as_deref(),
             &config.controller,
+            true,
         )?;
         let controller = Arc::new(
             sqlite::Database::open_remote(
@@ -79,6 +80,7 @@ impl Turso {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<_>>()?;
         for (id, name, state) in links {
+            cloud.validate_link(id, &name)?;
             if state == "deleting" {
                 cloud.delete_user(id)?;
             } else {
@@ -94,11 +96,17 @@ impl Turso {
         api_base: &str,
         sql_base: Option<&str>,
         name: &str,
+        allow_create: bool,
     ) -> Result<String> {
         let collection = format!("{api_base}/organizations/{}/databases", cfg.organization);
         let url = format!("{collection}/{name}");
         let (status, mut value) = http.request(Method::GET, &url, &cfg.api_token, None)?;
         if status == StatusCode::NOT_FOUND {
+            if !allow_create {
+                bail!(
+                    "linked Turso database {name} is missing; restore it before restarting soju (refusing to recreate it empty)"
+                );
+            }
             let (created, _) = http.request(
                 Method::POST,
                 &collection,
@@ -145,18 +153,24 @@ impl Turso {
                 &endpoint,
                 &cfg.group_token,
                 Some(probe.clone()),
-            )?;
-            if response.0.is_success() && response.1["results"][0]["type"] == "ok" {
-                return Ok(endpoint);
-            }
-            if response.0 == StatusCode::UNAUTHORIZED || response.0 == StatusCode::FORBIDDEN {
-                bail!("Turso SQL authorization failed for database {name}");
-            }
-            if attempt == 5 {
-                bail!(
-                    "Turso database {name} did not become ready (HTTP {})",
-                    response.0
-                );
+            );
+            match response {
+                Ok((status, value))
+                    if status.is_success() && value["results"][0]["type"] == "ok" =>
+                {
+                    return Ok(endpoint);
+                }
+                Ok((StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN, _)) => {
+                    bail!("Turso SQL authorization failed for database {name}")
+                }
+                Ok((status, _)) if attempt == 5 => {
+                    bail!("Turso database {name} did not become ready (HTTP {status})")
+                }
+                Err(e) if attempt == 5 => {
+                    return Err(e)
+                        .with_context(|| format!("Turso database {name} did not become ready"));
+                }
+                _ => {}
             }
             std::thread::sleep(Duration::from_millis(100 * (1 << attempt)));
         }
@@ -170,6 +184,7 @@ impl Turso {
             &self.api_base,
             self.sql_base.as_deref(),
             name,
+            pending,
         )?;
         let db = Arc::new(
             sqlite::Database::open_remote(
@@ -180,14 +195,63 @@ impl Turso {
         );
         // User is only a foreign-key anchor here. Passwords stay exclusively
         // in the controller; all network and message data stays in this DB.
-        db.conn().execute("INSERT INTO User(id, username, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
-            params![id, format!("user-{id}"), crate::xirc::format_server_time(chrono::Utc::now())])?;
-        self.users.lock().unwrap().insert(id, db);
+        {
+            let mut conn = db.conn();
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let anchor = format!("user-{id}");
+            let other_users: i64 = tx.query_row(
+                "SELECT count(*) FROM User WHERE id != ? OR username != ? OR password IS NOT NULL",
+                params![id, anchor],
+                |r| r.get(0),
+            )?;
+            if other_users != 0 {
+                bail!("Turso user database {name} belongs to a different account");
+            }
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS TursoOwner (
+                id INTEGER PRIMARY KEY CHECK (id = 0), controller TEXT NOT NULL, user INTEGER NOT NULL
+            )")?;
+            let owner: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT controller, user FROM TursoOwner WHERE id = 0",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            if let Some((controller, user)) = owner {
+                if controller != self.config.controller || user != id {
+                    bail!("Turso user database {name} has a different controller or owner");
+                }
+            } else {
+                tx.execute(
+                    "INSERT INTO TursoOwner(id, controller, user) VALUES (0, ?, ?)",
+                    params![self.config.controller, id],
+                )?;
+            }
+            tx.execute("INSERT INTO User(id, username, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                params![id, anchor, crate::xirc::format_server_time(chrono::Utc::now())])?;
+            tx.commit()?;
+        }
         if pending {
             self.controller.conn().execute(
                 "UPDATE UserDatabase SET state = 'ready' WHERE user = ?",
                 [id],
             )?;
+        }
+        self.users.lock().unwrap().insert(id, db);
+        Ok(())
+    }
+
+    fn validate_link(&self, id: i64, name: &str) -> Result<()> {
+        if id <= 0
+            || name == self.config.controller
+            || name.len() != 25
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            || u128::from_str_radix(name, 36).is_err()
+            || self.controller.get_username_by_id(id)?.is_none()
+        {
+            bail!("invalid Turso database link for user {id}");
         }
         Ok(())
     }
@@ -286,12 +350,29 @@ impl Turso {
             [id],
             |r| r.get(0),
         )?;
+        self.validate_link(id, &name)?;
         // Persist the tombstone before deleting anything. Startup completes a
         // failed deletion instead of recreating the user's database.
         self.controller.conn().execute(
             "UPDATE UserDatabase SET state = 'deleting' WHERE user = ?",
             [id],
         )?;
+        // A broad Platform API token must never delete a database that has
+        // since moved outside the configured group.
+        let url = format!(
+            "{}/organizations/{}/databases/{name}",
+            self.api_base, self.config.organization
+        );
+        let (status, value) = self
+            .http
+            .request(Method::GET, &url, &self.config.api_token, None)?;
+        if status.is_success() {
+            if value["database"]["group"].as_str() != Some(self.config.group.as_str()) {
+                bail!("refusing to delete Turso database outside the configured group");
+            }
+        } else if status != StatusCode::NOT_FOUND {
+            bail!("retrieve Turso database before deletion: HTTP {status}");
+        }
         let (status, _) = self.http.request(
             Method::DELETE,
             &format!(

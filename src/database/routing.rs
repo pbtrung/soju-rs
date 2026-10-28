@@ -1,10 +1,9 @@
 //! Routes account operations to the controller and tenant operations to the
 //! owning user database. SQLite uses a single database for both.
 
-use std::ops::Deref;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 
 use super::*;
@@ -16,13 +15,6 @@ pub struct Database {
     cloud: Option<Box<turso::Turso>>,
 }
 
-impl Deref for Database {
-    type Target = sqlite::Database;
-    fn deref(&self) -> &Self::Target {
-        &self.account
-    }
-}
-
 macro_rules! tenant_methods {
     ($($selector:ident($key:ident): fn $name:ident($($arg:ident: $typ:ty),*) -> $result:ty;)*) => {
         impl Database { $(
@@ -31,6 +23,31 @@ macro_rules! tenant_methods {
             }
         )* }
     }
+}
+
+// Account operations are explicit. Dereferencing to the controller would let
+// new tenant operations accidentally bypass routing in future changes.
+macro_rules! account_methods {
+    ($(fn $name:ident($($arg:ident: $typ:ty),*) -> $result:ty;)*) => {
+        impl Database { $(
+            pub fn $name(&self, $($arg: $typ),*) -> Result<$result> {
+                self.account.$name($($arg),*)
+            }
+        )* }
+    }
+}
+
+account_methods! {
+    fn store_user_keep_password(user: &User) -> ();
+    fn upgrade_user_password(id: i64, old: &str, new: &str) -> ();
+    fn set_user_downstream_interacted_at(id: i64, time: DateTime<Utc>) -> ();
+    fn list_inactive_usernames(limit: DateTime<Utc>) -> Vec<String>;
+    fn get_username_by_id(id: i64) -> Option<String>;
+    fn list_device_certificates(user_id: i64) -> Vec<DeviceCertificate>;
+    fn store_device_certificate(user_id: i64, cert: &mut DeviceCertificate) -> ();
+    fn delete_device_certificate(user_id: i64, fingerprint: &[u8]) -> ();
+    fn list_web_push_configs() -> Vec<WebPushConfig>;
+    fn store_web_push_config(config: &mut WebPushConfig) -> ();
 }
 
 tenant_methods! {
@@ -56,6 +73,9 @@ tenant_methods! {
 }
 
 impl Database {
+    pub fn is_remote(&self) -> bool {
+        self.cloud.is_some()
+    }
     #[cfg(test)]
     pub(super) fn from_cloud(cloud: Box<turso::Turso>) -> Self {
         Self {
@@ -132,7 +152,14 @@ impl Database {
     }
 
     pub fn store_network(&self, user_id: i64, network: &mut Network) -> Result<()> {
-        self.user_db(user_id)?.store_network(user_id, network)?;
+        let db = self.user_db(user_id)?;
+        if self.cloud.is_some() && network.id != 0 {
+            ensure!(
+                Arc::ptr_eq(&db, &self.network_db(network.id)?),
+                "network belongs to a different Turso user"
+            );
+        }
+        db.store_network(user_id, network)?;
         if let Some(c) = &self.cloud {
             c.remember_network(user_id, network.id)?;
         }
