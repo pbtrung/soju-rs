@@ -197,7 +197,11 @@ pub(super) struct Remote {
 }
 
 impl Remote {
-    fn request(&self, mut request: Json) -> Result<Json> {
+    fn request(&self, request: Json) -> Result<Json> {
+        self.request_with_stream(request, self.transaction.get())
+    }
+
+    fn request_with_stream(&self, mut request: Json, keep_stream: bool) -> Result<Json> {
         if self.transaction_failed.get() {
             return Err(error(
                 "Turso transaction failed; discard it before issuing more SQL",
@@ -213,7 +217,7 @@ impl Remote {
             };
             target["replication_index"] = index.to_string().into();
         }
-        let result = self.pipeline(request);
+        let result = self.pipeline(request, keep_stream);
         if result.is_err() {
             if self.transaction.get() {
                 // A failed or malformed response invalidates this transaction.
@@ -226,8 +230,7 @@ impl Remote {
         result
     }
 
-    fn pipeline(&self, request: Json) -> Result<Json> {
-        let keep = self.transaction.get();
+    fn pipeline(&self, request: Json, keep: bool) -> Result<Json> {
         let sequence = request["type"] == "sequence";
         let expected = request["type"]
             .as_str()
@@ -568,7 +571,16 @@ impl Deref for Transaction<'_> {
 }
 impl Transaction<'_> {
     pub fn commit(mut self) -> Result<()> {
-        self.conn.execute_batch("COMMIT")?;
+        match self.conn {
+            Connection::Local(c) => c.execute_batch("COMMIT")?,
+            Connection::Remote(c) => {
+                // End the stream in the COMMIT pipeline. Hosted Turso can
+                // already release it once COMMIT succeeds, so a null baton
+                // here is expected. Keep transaction poisoning active until
+                // every response has been validated; never replay COMMIT.
+                c.request_with_stream(json!({"type":"sequence", "sql":"COMMIT"}), false)?;
+            }
+        }
         self.committed = true;
         self.close();
         Ok(())

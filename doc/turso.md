@@ -58,6 +58,12 @@ commits a write but its response is lost, the operation reports failure and
 its outcome is uncertain. Check the saved state before repeating it. A failed
 transaction is discarded instead of continuing on a new auto-commit stream.
 
+Use v0.99.21 or later with hosted Turso. It closes a transaction's stream in
+the same pipeline as COMMIT, accepting the null baton returned after a
+successful commit. v0.99.20 could incorrectly report `Turso closed the stream
+during a transaction` after creating the controller schema. Keep the same
+controller and group when upgrading; the committed schema can be reopened.
+
 ## Create an administrator
 
 Before starting soju, bootstrap an administrator and their database:

@@ -69,6 +69,26 @@ separation and ambiguous write outcomes.
 - Documented forwarding before persistence, crash-loss exposure, limited
   shutdown retries, cloud request budgets, and read-query latency.
 
+## Hosted stream lifecycle follow-up (v0.99.21)
+
+The hosted [SQL-over-HTTP stream rules] allow the server to release a
+stateless stream after COMMIT, returning a null baton without an explicit
+close. The previous client incorrectly required a baton after COMMIT, so
+controller schema creation succeeded but startup reported a transaction
+failure. The mock previously retained every stream until explicitly closed.
+
+COMMIT now sends the replication-index probe and explicit close in the same
+pipeline, validating every response before reporting success. Transaction
+poisoning remains active throughout: lost streams before COMMIT, incomplete
+or mistyped responses, and lost commit responses still fail without replay.
+The mock now closes idle streams by default. Regressions cover both hosted
+and legacy retention behavior, controller and tenant creation and restart,
+and malformed commit responses without duplicate writes. Existing schemas
+need no reset or migration for this fix.
+
+v0.99.21 validation: formatting and Clippy passed; all 193 tests passed
+(156 library, 3 sojuctl, and 34 bouncer integration tests).
+
 ## Validation and limits
 
 Run the required checks:
@@ -106,3 +126,4 @@ names, so recovery requires its backup as well as the user databases.
 [Hrana specification]: https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md
 [value codec]: https://github.com/tursodatabase/libsql/blob/main/libsql-hrana/src/proto.rs
 [Platform API authentication documentation]: https://docs.turso.tech/api-reference/authentication
+[SQL-over-HTTP stream rules]: https://github.com/tursodatabase/turso/blob/main/serverless/PROTOCOL.md#43-stream-retention

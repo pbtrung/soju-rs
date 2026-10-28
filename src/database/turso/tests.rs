@@ -41,6 +41,7 @@ struct State {
     request_sizes: Vec<usize>,
     requests: Vec<Json>,
     replication_index: u64,
+    close_idle_streams: bool,
 }
 
 struct Cloud {
@@ -71,6 +72,7 @@ impl Cloud {
             request_sizes: Vec::new(),
             requests: Vec::new(),
             replication_index: 0,
+            close_idle_streams: true,
         }));
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -372,7 +374,9 @@ fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
             }, "message":e.to_string()}}),
         }
     }).collect();
-    let baton = if closed {
+    // Hosted Turso may close a stateless stream after COMMIT without an
+    // explicit close request. Legacy libSQL keeps returning a baton instead.
+    let baton = if closed || (state.close_idle_streams && conn.is_autocommit()) {
         None
     } else {
         state.next_stream += 1;
@@ -891,6 +895,41 @@ fn lost_or_malformed_stream_never_continues_a_transaction() {
 }
 
 #[test]
+fn commit_closes_stream_on_hosted_and_legacy_servers() {
+    for close_idle_streams in [true, false] {
+        let cloud = Cloud::new();
+        cloud.state.lock().unwrap().close_idle_streams = close_idle_streams;
+        let db = cloud.database().unwrap();
+        let mut conn = db.account_conn_for_test();
+        conn.execute_batch("CREATE TABLE Audit(value INTEGER)")
+            .unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute("INSERT INTO Audit VALUES (1)", []).unwrap();
+        tx.commit().unwrap();
+        let state = cloud.state.lock().unwrap();
+        assert!(state.streams.is_empty());
+        let commit = state.requests.last().unwrap();
+        let requests = commit["requests"].as_array().unwrap();
+        assert_eq!(requests[0]["sql"], "COMMIT");
+        assert_eq!(requests.last().unwrap()["type"], "close");
+        drop(state);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(conn);
+        let admin = user(&db, "alice");
+        drop(db);
+        let db = cloud.database().unwrap();
+        assert_eq!(db.get_user("alice").unwrap().unwrap().id, admin.id);
+        assert!(db.list_networks(admin.id).unwrap().is_empty());
+    }
+}
+
+#[test]
 fn failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed() {
     let cloud = Cloud::new();
     let db = cloud.database().unwrap();
@@ -923,6 +962,43 @@ fn failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed() {
         .filter(|r| r["stmt"]["sql"].as_str() == Some("INSERT INTO Audit VALUES (1)"))
         .count();
     assert_eq!(inserts, 1);
+}
+
+#[test]
+fn malformed_commit_responses_fail_without_replaying_writes() {
+    for fault in [
+        Fault::MissingResults,
+        Fault::WrongResponseType,
+        Fault::EmptyBody,
+    ] {
+        let cloud = Cloud::new();
+        let db = cloud.database().unwrap();
+        let mut conn = db.account_conn_for_test();
+        conn.execute_batch("CREATE TABLE Audit(value INTEGER)")
+            .unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute("INSERT INTO Audit VALUES (1)", []).unwrap();
+        cloud.state.lock().unwrap().fault = Some(("COMMIT".into(), fault));
+        assert!(tx.commit().is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM Audit", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let state = cloud.state.lock().unwrap();
+        assert!(state.streams.is_empty());
+        assert_eq!(
+            state
+                .requests
+                .iter()
+                .flat_map(|r| r["requests"].as_array().unwrap())
+                .filter(|r| r["sql"] == "COMMIT")
+                .count(),
+            2 // Controller initialization and the explicit Audit transaction.
+        );
+    }
 }
 
 #[test]
