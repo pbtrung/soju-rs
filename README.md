@@ -90,9 +90,14 @@ Behaviour changes:
   optimized after expired messages are deleted, and the SQLite database is
   vacuumed on startup and when a quarter of it or more is unused (upstream
   leaves it to the admin)
-- A partial index speeds up history queries that exclude events. This bumps
-  the database schema to version 31; older soju-rs releases and upstream soju
-  versions supporting only schema 30 cannot open the upgraded database
+- Disjoint text/event indexes speed up history without duplicate timestamp
+  entries. Sparse FTS and guarded updates reduce unnecessary work. The
+  current database schema is version 32; earlier soju-rs and upstream
+  versions supporting older schemas cannot open the upgraded database
+- [Turso Cloud storage](doc/turso.md) uses a controller account directory
+  and a separate database per user, with asynchronous multi-row message
+  batches. See the [query-cost evidence](doc/turso-query-evidence.md) for
+  measured read/write reductions and migration requirements
 
 ## Testing
 
