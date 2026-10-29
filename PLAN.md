@@ -1,11 +1,16 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phase 0 complete; phases 1 and 2 code and tests complete**
-(`doc/spikes.md`, `tests/PORTED_TESTS.md`). Open items: phase 1's long
-fuzzing budget (≥ 8 CPU-hours per harness; so far minutes of
-`fuzz/diff_oracle.c`) and its remaining dedicated L5 harnesses; phase 2's
-migration check uses upstream's version 0 and 30 schemas with data rather
-than a database written by a Go soju v0.11 binary.
+Status: **phases 0–3 complete; phase 4 in progress**
+(`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 has the downstream
+connection up to registration: CAP 302, SASL (PLAIN with admin
+impersonation, EXTERNAL; OAUTHBEARER parsing, its validation is phase 9),
+PASS, labeled responses, batches, the send path, ISUPPORT, and internal
+authentication through the DB thread and CPU-job limiter. Still open in
+phase 4: welcome, sync and the user-level capability updates (they take
+the user's networks, so they land with the user structures of phases
+5–6), and `fuzz_downstream_session`. Other open items: phase 1's long
+fuzzing budget and dedicated L5 harnesses; phase 2's migration check uses
+upstream's version 0 and 30 schemas rather than a Go soju v0.11 database.
 Source of truth for behaviour: soju-rs `main` at v0.99.23 (`c350574`), ~33k
 lines of Rust in 90 files (plan first written against v0.99.15, `02acf7d`;
 section 8 lists what changed on `main` since then). This branch (`c-port`) starts empty; the Rust tree

@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 86 of 165 unit tests (phases 0–3); 0 of 17 scenarios.
+Ported so far: 90 of 165 unit tests (phases 0–4); 0 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -96,10 +96,10 @@ Also compared against the Rust code by the differential harness
 | `src/database/turso/tests.rs` | `existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `tenant_user_removal_and_sparse_search_resume_preserve_existing_data` | pending: phase 9b |
 | `src/database/utils.rs` | `strip` | `test_db_utils.c`: `test_strip` |
-| `src/downstream/mod.rs` | `usernames` | pending: phase 4 |
-| `src/downstream/mod.rs` | `nickserv` | pending: phase 4 |
-| `src/downstream/mod.rs` | `network_attrs_roundtrip` | pending: phase 4 |
-| `src/downstream/sasl.rs` | `sasl_mechanisms` | pending: phase 4 |
+| `src/downstream/mod.rs` | `usernames` | `test_downstream.c`: `test_usernames` |
+| `src/downstream/mod.rs` | `nickserv` | `test_downstream.c`: `test_nickserv` |
+| `src/downstream/mod.rs` | `network_attrs_roundtrip` | `test_downstream.c`: `test_network_attrs_roundtrip` |
+| `src/downstream/sasl.rs` | `sasl_mechanisms` | `test_downstream.c`: `test_sasl_mechanisms` |
 | `src/flags.rs` | `parse` | `test_config_flags.c`: `test_parse` |
 | `src/flags.rs` | `errors` | `test_config_flags.c`: `test_errors` |
 | `src/identd.rs` | `query` | `test_net_misc.c`: `test_query` |
