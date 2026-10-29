@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 125 of 165 unit tests (phases 0–9); 17 of 17 scenarios.
+Ported so far: 127 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -38,7 +38,7 @@ Also compared against the Rust code by the differential harness
 | `src/conn.rs` | `input_in_flight` | `test_net_conn.c`: `test_input_in_flight` |
 | `src/conn.rs` | `view` | `test_net_conn.c`: `test_view` |
 | `src/conn.rs` | `line_parsing` | `test_net_conn.c`: `test_line_parsing` |
-| `src/database/connection.rs` | `stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin` | pending: phase 2 |
+| `src/database/connection.rs` | `stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin` | `test_db_hrana.c`: `test_stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin` |
 | `src/database/mod.rs` | `network_url` | `test_net_url.c`: `test_network_url` |
 | `src/database/mod.rs` | `host_port` | `test_net_url.c`: `test_host_port` |
 | `src/database/mod.rs` | `password` | `test_db_sqlite.c`: `test_password` |
@@ -59,7 +59,7 @@ Also compared against the Rust code by the differential harness
 | `src/database/sqlite/tests.rs` | `newer_schema_rejected` | `test_db_sqlite.c`: `test_newer_schema_rejected` |
 | `src/database/sqlite/tests.rs` | `unchanged_records_and_receipts_do_not_write` | `test_db_sqlite.c`: `test_unchanged_records_and_receipts_do_not_write` |
 | `src/database/sqlite/tests.rs` | `sparse_fts_preserves_updates_and_event_history_ordering` | `test_db_sqlite.c`: `test_sparse_fts_preserves_updates_and_event_history_ordering` |
-| `src/database/turso/http.rs` | `usage_counts_execute_and_batch_results_once` | pending: phase 9b |
+| `src/database/turso/http.rs` | `usage_counts_execute_and_batch_results_once` | `test_db_hrana.c`: `test_usage_counts_execute_and_batch_results_once` |
 | `src/database/turso/tests.rs` | `provisioning_authentication_isolation_and_restart` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `creation_and_deletion_resume_after_failure` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `wrong_group_and_sql_failure_leave_no_partial_message` | pending: phase 9b |

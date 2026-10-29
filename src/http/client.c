@@ -254,11 +254,15 @@ static int timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 	return 0;
 }
 
+void http_client_global_init(void) {
+	pthread_once(&global_once, global_init);
+}
+
 static struct curl_loop *get_loop(uv_loop_t *loop) {
 	if (current != nullptr) {
 		return current;
 	}
-	pthread_once(&global_once, global_init);
+	http_client_global_init();
 	struct curl_loop *cl = xcalloc(1, sizeof(*cl));
 	REF_TRACK(&cl->ref, "curl_loop");
 	cl->loop = loop;

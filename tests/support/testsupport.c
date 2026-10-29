@@ -1,6 +1,7 @@
 #include "testsupport.h"
 
 #include <pthread.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,34 +11,89 @@
 #include "irc/message.h"
 
 #ifdef SOJU_MODE_DEBUG
-// cmocka's checked allocator keeps global lists: serialize it, since the
-// DB thread and thread pool jobs allocate too
+// cmocka's checked allocator keeps its list of blocks in thread-local
+// storage: a block allocated by a thread which then exits (a mock server's
+// connection thread) would leave the list dangling once freed elsewhere.
+// Only the main test thread uses it; other threads use the system
+// allocator. A tag before each block says where it came from. cmocka's
+// global lists are serialized anyway (the DB thread and thread pool jobs
+// allocate too).
 static pthread_mutex_t alloc_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t main_thread;
+
+enum : uint64_t {
+	TAG_CMOCKA = 0x636d6f636b61UL,
+	TAG_SYSTEM = 0x73797374656dUL,
+};
+static constexpr size_t TAG_SIZE = 16; // keeps the alignment
+
+static void *tagged(void *p, uint64_t tag) {
+	if (p == nullptr) {
+		return nullptr;
+	}
+	memcpy(p, &tag, sizeof(tag));
+	return (char *)p + TAG_SIZE;
+}
+
+static uint64_t tag_of(void *p, void **base) {
+	*base = (char *)p - TAG_SIZE;
+	uint64_t tag;
+	memcpy(&tag, *base, sizeof(tag));
+	return tag;
+}
 
 static void *t_malloc(size_t n) {
+	if (!pthread_equal(pthread_self(), main_thread)) {
+		return tagged(malloc(size_add(n, TAG_SIZE)), TAG_SYSTEM);
+	}
 	pthread_mutex_lock(&alloc_mu);
-	void *p = _test_malloc(n, __FILE__, __LINE__);
+	void *p = _test_malloc(size_add(n, TAG_SIZE), __FILE__, __LINE__);
 	pthread_mutex_unlock(&alloc_mu);
-	return p;
+	return tagged(p, TAG_CMOCKA);
 }
 
 static void *t_calloc(size_t count, size_t size) {
-	pthread_mutex_lock(&alloc_mu);
-	void *p = _test_calloc(count, size, __FILE__, __LINE__);
-	pthread_mutex_unlock(&alloc_mu);
+	size_t n = size_mul(count, size);
+	void *p = t_malloc(n);
+	if (p != nullptr) {
+		memset(p, 0, n);
+	}
 	return p;
 }
 
 static void *t_realloc(void *p, size_t n) {
+	if (p == nullptr) {
+		return t_malloc(n);
+	}
+	void *base;
+	uint64_t tag = tag_of(p, &base);
+	if (tag == TAG_SYSTEM) {
+		return tagged(realloc(base, size_add(n, TAG_SIZE)), TAG_SYSTEM);
+	}
+	if (tag != TAG_CMOCKA) {
+		abort();
+	}
 	pthread_mutex_lock(&alloc_mu);
-	void *q = _test_realloc(p, n, __FILE__, __LINE__);
+	void *q = _test_realloc(base, size_add(n, TAG_SIZE), __FILE__, __LINE__);
 	pthread_mutex_unlock(&alloc_mu);
-	return q;
+	return tagged(q, TAG_CMOCKA);
 }
 
 static void t_free(void *p) {
+	if (p == nullptr) {
+		return;
+	}
+	void *base;
+	uint64_t tag = tag_of(p, &base);
+	if (tag == TAG_SYSTEM) {
+		free(base);
+		return;
+	}
+	if (tag != TAG_CMOCKA) {
+		abort();
+	}
 	pthread_mutex_lock(&alloc_mu);
-	_test_free(p, __FILE__, __LINE__);
+	_test_free(base, __FILE__, __LINE__);
 	pthread_mutex_unlock(&alloc_mu);
 }
 
@@ -53,6 +109,7 @@ int t_run(const char *name, const struct CMUnitTest *tests, size_t n) {
 	// Like soju (src/main/soju.c): writes to closed peers fail with EPIPE
 	signal(SIGPIPE, SIG_IGN);
 #ifdef SOJU_MODE_DEBUG
+	main_thread = pthread_self();
 	alloc_set_hooks(&cmocka_hooks);
 #endif
 	int failed = _cmocka_run_group_tests(name, tests, n, nullptr, nullptr);

@@ -75,7 +75,7 @@ soju_test_env(hello)
 # is registered as its own CTest test, so every test runs in its own
 # process (CMOCKA_TEST_FILTER selects it).
 add_library(soju_testsupport STATIC tests/support/testsupport.c tests/support/server_fixture.c
-	tests/support/http_mock.c)
+	tests/support/http_mock.c tests/support/turso_mock.c)
 target_link_libraries(soju_testsupport PUBLIC soju_core soju::cmocka)
 target_include_directories(soju_testsupport PUBLIC tests/support)
 target_compile_options(soju_testsupport PRIVATE ${SOJU_WARNINGS})

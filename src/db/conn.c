@@ -16,6 +16,10 @@ void db_conn_init_local(struct db_conn *c, sqlite3 *handle) {
 	*c = (struct db_conn){.sqlite = handle};
 }
 
+void db_conn_init_remote(struct db_conn *c, struct hrana *h) {
+	*c = (struct db_conn){.remote = true, .hrana = h};
+}
+
 void db_conn_finish(struct db_conn *c) {
 	db_finalize(c->insert_target);
 	db_finalize(c->insert_message);

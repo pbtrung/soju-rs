@@ -43,6 +43,8 @@ http_client_request_header(struct http_client_request *r, const char *name, cons
 typedef void (*http_client_done_fn)(void *data, const struct http_response *resp,
 				    const struct err *err);
 
+// curl_global_init, once (cleaned up at exit)
+void http_client_global_init(void);
 // Sends the request (taken: req is reset) on the current loop
 void http_client_send(uv_loop_t *loop, struct http_client_request *req, http_client_done_fn done,
 		      void *data);

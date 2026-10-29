@@ -50,6 +50,7 @@ struct db_bind {
 };
 
 typedef VEC(struct db_value) db_row;
+typedef VEC(db_row) db_rows;
 
 struct db_stmt {
 	struct db_conn *conn;
@@ -58,13 +59,15 @@ struct db_stmt {
 	char *sql;
 	VEC(struct db_bind) binds;
 	strvec columns;
-	VEC(db_row) rows;
+	db_rows rows;
 	size_t next_row;
 	bool executed;
 };
 
 // A local connection over an open handle (taken)
 void db_conn_init_local(struct db_conn *c, sqlite3 *handle);
+// A remote connection (takes h)
+void db_conn_init_remote(struct db_conn *c, struct hrana *h);
 // Closes the connection; aborts if a local statement is left (PLAN.md 2.4)
 void db_conn_finish(struct db_conn *c);
 
