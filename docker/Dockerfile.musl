@@ -11,7 +11,7 @@ RUN apk upgrade --no-cache --available \
 		| sed -n 's/^clang\([0-9][0-9]*\)-[0-9].*/\1/p' | sort -n | tail -1) \
 	&& test -n "$llvm" \
 	&& apk add --no-cache \
-		gcc musl-dev linux-headers openssl-dev "clang$llvm" "llvm$llvm" "lld$llvm" \
+		gcc musl-dev linux-headers openssl-dev curl-dev "clang$llvm" "llvm$llvm" "lld$llvm" \
 		cmake samurai make perl pkgconf patch \
 		valgrind valgrind-dev \
 		bash coreutils diffutils file findutils grep sed tar gzip xz util-linux \

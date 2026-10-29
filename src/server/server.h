@@ -15,11 +15,13 @@
 #include "net/loops.h"
 #include "base/map.h"
 
+struct oauth2;
+
 enum plain_auth {
 	PLAIN_AUTH_NONE,
 	PLAIN_AUTH_INTERNAL,
-	PLAIN_AUTH_HTTP, // phase 9
-	PLAIN_AUTH_OAUTH2, // phase 9: PLAIN with an OAuth 2.0 token
+	PLAIN_AUTH_HTTP,
+	PLAIN_AUTH_OAUTH2, // PLAIN with an OAuth 2.0 token
 };
 
 // The run-time configuration, reloadable on SIGHUP: an immutable snapshot
@@ -32,7 +34,7 @@ struct server_config {
 	char *motd;
 	enum plain_auth plain_auth;
 	char *http_auth_url;
-	bool oauth_bearer; // phase 9
+	struct oauth2 *oauth2; // OAUTHBEARER (and PLAIN_AUTH_OAUTH2), or nullptr
 };
 
 // A snapshot with soju-rs's defaults (hostname "localhost", internal auth)

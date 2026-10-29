@@ -1,6 +1,6 @@
 # Builds the vendored dependencies (deps/) for this compiler and mode, once,
 # into a prefix shared by all build trees, then defines imported targets:
-#   soju::uv soju::ssl soju::crypto soju::lws soju::utf8proc soju::yyjson
+#   soju::uv soju::ssl soju::crypto soju::curl soju::utf8proc soju::yyjson
 #   soju::sqlite3 soju::cmocka soju::xcrypt soju::mimalloc_obj (if used)
 
 set(SOJU_DEPS_ROOT "${CMAKE_SOURCE_DIR}/build/deps" CACHE PATH
@@ -8,10 +8,10 @@ set(SOJU_DEPS_ROOT "${CMAKE_SOURCE_DIR}/build/deps" CACHE PATH
 set(SOJU_DOWNLOAD_DIR "${CMAKE_SOURCE_DIR}/build/download" CACHE PATH
 	"Dependency tarball cache")
 
-# The system OpenSSL (every mode but MSan): libwebsockets is compiled
-# against its headers, so its version is part of the key below
+# The system OpenSSL and libcurl (every mode but MSan, which builds both)
 if(NOT SOJU_BUNDLE_OPENSSL)
 	find_package(OpenSSL 3.0 REQUIRED)
+	find_package(CURL 8.0 REQUIRED)
 	set(soju_openssl_key "${OPENSSL_VERSION}")
 else()
 	set(soju_openssl_key bundled)
@@ -91,7 +91,14 @@ else()
 	add_library(soju::ssl INTERFACE IMPORTED GLOBAL)
 	set_target_properties(soju::ssl PROPERTIES INTERFACE_LINK_LIBRARIES OpenSSL::SSL)
 endif()
-soju_import(lws libwebsockets.a soju::ssl soju::uv)
+if(SOJU_BUNDLE_OPENSSL)
+	soju_import(curl libcurl.a soju::ssl Threads::Threads)
+	target_compile_definitions(soju::curl INTERFACE CURL_STATICLIB)
+else()
+	# Linked dynamically, like OpenSSL
+	add_library(soju::curl INTERFACE IMPORTED GLOBAL)
+	set_target_properties(soju::curl PROPERTIES INTERFACE_LINK_LIBRARIES CURL::libcurl)
+endif()
 soju_import(utf8proc libutf8proc.a)
 target_compile_definitions(soju::utf8proc INTERFACE UTF8PROC_STATIC)
 soju_import(yyjson libyyjson.a)

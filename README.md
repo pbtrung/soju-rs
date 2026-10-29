@@ -44,10 +44,10 @@ Requirements:
 - Linux (glibc or musl)
 - GCC or Clang with C23 support
 - CMake 3.29 or newer and Ninja
-- OpenSSL 3 and libxcrypt (development packages)
-- `patch`, plus network access during the first configure
+- OpenSSL 3, libcurl and libxcrypt (development packages)
+- Network access during the first configure
 
-Other dependencies (libuv, libwebsockets, SQLite, mimalloc, utf8proc,
+Other dependencies (libuv, SQLite, mimalloc, utf8proc,
 yyjson, cmocka) are downloaded at the versions pinned in `deps/VERSIONS`.
 Their checksums are verified, and they are built once per compiler and mode
 and linked statically.

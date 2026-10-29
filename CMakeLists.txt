@@ -49,7 +49,7 @@ target_compile_options(soju_core PRIVATE ${SOJU_WARNINGS})
 target_compile_definitions(soju_core PUBLIC _GNU_SOURCE
 	"SOJU_MODE_$<UPPER_CASE:$<MAKE_C_IDENTIFIER:${SOJU_MODE}>>=1")
 target_link_libraries(soju_core PUBLIC
-	soju::lws soju::ssl soju::crypto soju::uv soju::utf8proc soju::yyjson
+	soju::curl soju::ssl soju::crypto soju::uv soju::utf8proc soju::yyjson
 	soju::sqlite3 soju::xcrypt)
 configure_file(src/version.h.in "${CMAKE_BINARY_DIR}/gen/version.h" @ONLY)
 
@@ -74,7 +74,8 @@ soju_test_env(hello)
 # Unit tests: one executable per tests/unit/test_*.c; each cmocka test in it
 # is registered as its own CTest test, so every test runs in its own
 # process (CMOCKA_TEST_FILTER selects it).
-add_library(soju_testsupport STATIC tests/support/testsupport.c tests/support/server_fixture.c)
+add_library(soju_testsupport STATIC tests/support/testsupport.c tests/support/server_fixture.c
+	tests/support/http_mock.c)
 target_link_libraries(soju_testsupport PUBLIC soju_core soju::cmocka)
 target_include_directories(soju_testsupport PUBLIC tests/support)
 target_compile_options(soju_testsupport PRIVATE ${SOJU_WARNINGS})
@@ -159,7 +160,7 @@ set_tests_properties(soju.version PROPERTIES
 soju_test_env(soju.version)
 add_test(NAME soju.build-info COMMAND soju -build-info)
 set_tests_properties(soju.build-info PROPERTIES
-	PASS_REGULAR_EXPRESSION "libwebsockets" LABELS smoke)
+	PASS_REGULAR_EXPRESSION "libcurl" LABELS smoke)
 soju_test_env(soju.build-info)
 
 install(TARGETS soju sojuctl RUNTIME DESTINATION bin)

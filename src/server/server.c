@@ -1,6 +1,8 @@
 #include "server/server.h"
 
+#include "auth/auth.h"
 #include "base/alloc.h"
+#include "http/client.h"
 #include "user/user.h"
 
 struct server_config *server_config_default(void) {
@@ -26,6 +28,7 @@ void server_config_unref(struct server_config *c) {
 	xfree(c->icon_url);
 	xfree(c->motd);
 	xfree(c->http_auth_url);
+	oauth2_unref(c->oauth2);
 	xfree(c);
 }
 
@@ -55,9 +58,18 @@ bool server_start(struct server *srv, struct err **err) {
 	return user_server_start(srv, err);
 }
 
+static void cancel_http(void *data) {
+	(void)data;
+	http_client_cancel_all();
+}
+
 void server_stop(struct server *srv) {
 	atomic_store(&srv->shutting_down, true);
 	user_server_stop(srv);
+	// Authentication and Web Push requests in flight fail at once
+	for (unsigned i = 0; i < srv->loops->n; i++) {
+		loop_post(&srv->loops->loops[i], cancel_http, nullptr, nullptr);
+	}
 }
 
 bool server_is_idle(struct server *srv) {

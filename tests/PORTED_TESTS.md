@@ -7,17 +7,17 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 116 of 165 unit tests (phases 0–8); 17 of 17 scenarios.
+Ported so far: 120 of 165 unit tests (phases 0–9); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
 
 | Rust file | Rust test | C test |
 |---|---|---|
-| `src/auth.rs` | `internal` | pending: phase 9 |
-| `src/auth.rs` | `password_upgrade_kept` | pending: phase 9 |
-| `src/auth.rs` | `escape` | pending: phase 9 |
-| `src/auth.rs` | `http_auth` | pending: phase 9 |
+| `src/auth.rs` | `internal` | `test_auth.c`: `test_internal` |
+| `src/auth.rs` | `password_upgrade_kept` | `test_auth.c`: `test_password_upgrade_kept` |
+| `src/auth.rs` | `escape` | `test_auth.c`: `test_escape` |
+| `src/auth.rs` | `http_auth` | `test_auth.c`: `test_http_auth` |
 | `src/bin/sojuctl.rs` | `turso_bootstrap_validates_before_connecting` | pending: phase 10 |
 | `src/bin/sojuctl.rs` | `quoting` | pending: phase 10 |
 | `src/bin/sojuctl.rs` | `quoting_roundtrip` | pending: phase 10 |

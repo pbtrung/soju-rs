@@ -15,9 +15,13 @@ set(OPENSSL_VERSION 3.6.5)
 set(OPENSSL_URL https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz)
 set(OPENSSL_SHA256 a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98)
 
-set(LWS_VERSION 5.0.0)
-set(LWS_URL https://github.com/warmcat/libwebsockets/archive/refs/tags/v${LWS_VERSION}.tar.gz)
-set(LWS_SHA256 f853c6582101cfcee3a5a9e28ae92ab19d9735c5f31f0bb2e9794b5106123962)
+# Only built from source for MSan, against the OpenSSL above: every other
+# build links the system libcurl dynamically. Same version as Arch's
+# package (2026-10-29); the tarball's signature was checked with the curl
+# release key (27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2).
+set(CURL_VERSION 8.23.0)
+set(CURL_URL https://curl.se/download/curl-${CURL_VERSION}.tar.xz)
+set(CURL_SHA256 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5)
 
 set(MIMALLOC_VERSION 3.5.4)
 set(MIMALLOC_URL https://github.com/microsoft/mimalloc/archive/refs/tags/v${MIMALLOC_VERSION}.tar.gz)

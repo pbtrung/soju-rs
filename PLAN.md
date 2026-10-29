@@ -112,7 +112,7 @@ These are rules, not suggestions: code review rejects violations, and
 8. **libuv handle discipline.** A handle is freed only in its `uv_close`
    callback. Every connection has an explicit state machine
    (`OPEN → CLOSING → CLOSED`) and refcount held by: the handle, each
-   in-flight write request, each pending TLS/lws operation. The struct is
+   in-flight write request, each pending TLS operation. The struct is
    freed when the refcount reaches zero *and* the close callback has run.
 9. **Bounded queues, with the same limits as soju-rs.** Since v0.99.16 the
    Rust code bounds its queues too, and the C port uses the same numbers:
@@ -324,7 +324,7 @@ cppcheck. New findings fail CI; suppressions carry a justification comment.
 Clean shutdown frees every allocation (no "the OS will clean up"), so leak
 checkers produce zero noise and a single leaked byte is a failure:
 stop listeners → stop users (each closes downstreams and upstreams) → drain
-DB thread → `lws_context_destroy` → `uv_walk` closes stragglers (and, in test
+DB thread → cancel HTTP client requests → `uv_walk` closes stragglers (and, in test
 builds, reports them as bugs) → `uv_loop_close` must return 0 →
 `sqlite3_close` must return `SQLITE_OK` (no unfinalized statements) →
 `OPENSSL_cleanup()` → `ref_dump_live()`. Suppression files
@@ -365,8 +365,9 @@ Two kinds:
   then, recorded in `deps/VERSIONS`), vendored as tarballs with checksums,
   built static by CMake `ExternalProject` and linked into the (dynamic)
   binaries. This covers the **SQLite amalgamation** (like rusqlite's
-  `bundled` feature), libuv, libwebsockets (against the system OpenSSL), (built with `LWS_WITH_LIBUV`, which distro packages don't
-  always enable), mimalloc (3.x), utf8proc, yyjson and cmocka. Both targets
+  `bundled` feature), libuv, mimalloc (3.x), utf8proc, yyjson and cmocka.
+  libcurl is a system library like OpenSSL (dynamic; built from source with
+  MSan only, against the instrumented OpenSSL). Both targets
   get the same versions, and the MSan build can instrument them.
 
 Sanitizer builds and the system libraries: they are not instrumented, so
@@ -379,9 +380,9 @@ uninstrumented system library.
 |---------------|---------------|-------|
 | tokio (runtime, timers, signals, process) | **libuv** | one loop thread per CPU (one on a single CPU, like the `current_thread` flavor) + DB thread + threadpool |
 | tokio-rustls, rustls, aws-lc-rs, webpki-roots, rustls-native-certs | **OpenSSL 3** (system, dynamic) | our own TLS-over-libuv layer using memory BIOs; system trust store via `SSL_CTX_set_default_verify_paths` |
-| hyper, tokio-tungstenite | **libwebsockets** (`LWS_WITH_LIBUV`, foreign loop) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
-| reqwest | **libwebsockets** HTTP client | OAuth2, HTTP auth, Web Push; custom DNS check for internal IPs |
-| reqwest (blocking Turso worker), rusqlite overlay | **libwebsockets** HTTP client on the DB thread's own lws context, yyjson | Turso Hrana pipelines and Platform API; the DB thread blocks on its reply like the Rust HTTP worker; in-memory SQLite overlay for buffered messages |
+| hyper, tokio-tungstenite | in-tree `http/request.c`, `http/websocket.c`, `server/http.c` on `net/conn` (decision 11) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
+| reqwest | **libcurl** (system, dynamic) multi interface on libuv (decision 12) | OAuth2, HTTP auth, Web Push; internal IPs refused at every connect |
+| reqwest (blocking Turso worker), rusqlite overlay | **libcurl** easy interface on the DB thread (blocking, like the Rust worker), yyjson | Turso Hrana pipelines and Platform API; the DB thread blocks on its reply like the Rust HTTP worker; in-memory SQLite overlay for buffered messages |
 | mimalloc | **mimalloc** | `MI_SECURE` in release |
 | (Rust `str` UTF-8 handling) | **utf8proc** | validation, lossy decoding, char-boundary truncation, NFC where needed |
 | rusqlite (bundled) | **SQLite amalgamation** (vendored) | compiled into the binary with `SQLITE_ENABLE_FTS5`, `SQLITE_THREADSAFE=2` (one DB thread owns the connection), `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1` if soju-rs relies on it (checked in phase 2); WAL; the same options as rusqlite's bundled build so behaviour matches |
@@ -399,7 +400,7 @@ their own default standards; only our code is compiled as C23, and public
 headers we include from them must compile cleanly under `-std=c23`
 (checked in phase 0).
 
-Build system: CMake ≥ 3.29 with Ninja (libuv, libwebsockets, mimalloc,
+Build system: CMake ≥ 3.29 with Ninja (libuv, mimalloc,
 utf8proc, yyjson and cmocka are CMake projects). Each build mode of 2.2 is a
 preset in `CMakePresets.json` (configure, build and test presets, build tree
 in `build/<compiler>-<mode>`, e.g. `gcc-asan`, `clang-msan`). Formatting is defined
@@ -476,20 +477,11 @@ handoff uses only `stdatomic.h` acquire/release or libuv/pthread primitives,
 never plain flags, so TSan on gnu covers it for both targets.
 
 **Spike risks (resolved in phase 0 before committing to the design):**
-1. lws on a *foreign* libuv loop, with clean shutdown (`uv_loop_close() == 0`
-   after `lws_context_destroy`) under ASan. Known pain point; if lws leaks or
-   holds handles, fall back to running lws HTTP on fds we accept ourselves
-   (see 2).
-2. PROXY protocol on HTTP listeners: lws doesn't parse PROXY headers. Plan:
-   accept the socket ourselves, read the PROXY header, then hand the fd to lws
-   with `lws_adopt_descriptor_vhost_via_info` plus the already-read bytes.
-   The real client address is attached to the session.
-3. TLS for HTTPS listeners: client-certificate auth (accept any cert, check
-   certfp later), SNI-less cert reload on SIGHUP, ALPN `http/1.1` only.
-   Need to confirm lws lets us supply/replace the `SSL_CTX` (vhost
-   `ssl_ctx` callbacks) without recreating the vhost.
-4. lws HTTP client: per-request DNS resolution hook to refuse internal IPs
-   for Web Push (`is_internal_ip`), and timeouts.
+1.–4. libwebsockets on a foreign libuv loop, socket adoption after a PROXY
+   header, vhost TLS contexts, and its HTTP client's DNS hook and timeouts.
+   Resolved in phase 0, then made moot: phases 8 and 9 replaced
+   libwebsockets with the in-tree HTTP server (decision 11) and libcurl
+   (decision 12), and its spikes were removed.
 5. libxcrypt bcrypt compatibility: hashes created by Go soju and soju-rs
    verify, and new `$2b$` hashes verify in both; the static libxcrypt build
    links on Alpine without clashing with musl's own `crypt`.
@@ -501,7 +493,7 @@ never plain flags, so TSan on gnu covers it for both targets.
 ```
                          ┌───────────────── loop thread (libuv) ─────────────────┐
  listeners ──accept──►   │ net/listener ─► net/proxyproto ─► net/tls (OpenSSL)   │
- (tcp/unix)              │        │                 └──► http/lws (HTTP, WS)    │
+ (tcp/unix)              │        │                 └──► server/http (HTTP, WS) │
                          │        ▼                                             │
                          │ conn (line reader, write queue, rate limit)          │
                          │        ▼                                             │
@@ -550,7 +542,7 @@ src/
   db/turso/  turso.c hrana.c platform.c controller_schema.sql
              tenant_schema.sql tenant_user_migration.sql
   net/       listener.c conn.c tls.c proxyproto.c identd.c rate.c
-  http/      lws.c websocket.c httpclient.c
+  http/      request.c websocket.c client.c response.c
   downstream/ caps.c registration.c sasl.c send.c sync.c welcome.c multiplex.c
              cmds/*.c
   upstream/  upstream.c connect.c registration.c channels.c users.c messages.c
@@ -637,7 +629,7 @@ All service commands (`network`, `channel`, `certfp`, `sasl`, `user`,
 `server`, `help`), deferred commands, admin restrictions.
 Tests: port service tests; L3 admin races.
 
-**Phase 8 — HTTP and WebSocket (libwebsockets)**
+**Phase 8 — HTTP and WebSocket**
 `/socket`, `/icon`, origin checks, Forwarded/X-Forwarded-For with trusted
 proxies, Prometheus metrics, PROXY on HTTP listeners.
 Tests: port `listen.rs` tests (incl. large WebSocket lines); gamja
@@ -646,7 +638,7 @@ Playwright suite; L3 reload races during upgrades.
 **Phase 9 — Auth and Web Push**
 HTTP and OAuth2 authenticators, Web Push (VAPID JWT, RFC 8291 encryption,
 expired-subscription handling, internal-IP refusal, at most 25 subscriptions,
-per-user cache of networks with subscriptions) over the lws HTTP client.
+per-user cache of networks with subscriptions) over the libcurl HTTP client.
 Tests: port `auth.rs`, `webpush.rs` tests (decrypt round trip, VAPID, internal
 IPs); local mock HTTP servers.
 
@@ -722,6 +714,15 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
     can't take bytes already read and would need one context per loop for
     rule 1. Both parsers have fuzz harnesses (`fuzz_ws_frame`,
     `fuzz_http_request`).
+12. The HTTP client is **libcurl** (phase 9), the system library linked
+    dynamically like OpenSSL, through its multi interface on each loop
+    (`uv_poll` and a `uv_timer`), instead of libwebsockets' client: Web
+    Push endpoints are user-supplied URLs, so responses come from servers
+    that may be hostile, and libcurl's HTTP/1.1 parsing, redirect rules
+    (reqwest-like by default: POST becomes GET on 301/302/303, credentials
+    stay on the original host) and per-connect address checks
+    (`CURLOPT_OPENSOCKETFUNCTION` refuses internal IPs after DNS and on
+    redirects) are long proven. libwebsockets is no longer a dependency.
 
 ## 8. Changes on `main` since v0.99.15
 
@@ -784,3 +785,18 @@ ported, with C-only codec, parser, framing-switch and end-to-end HTTP tests
 (an IRC session over WebSocket against the server fixture, in all four
 integration configurations). GCC/Clang debug and ASan/UBSan/LSan suites,
 clang-tidy, and 60-second libFuzzer runs of both new harnesses pass.
+
+## Implementation validation: phase 9
+
+Part 1, authentication: the HTTP client is libcurl's multi interface on
+each loop (decision 12; libwebsockets and its phase 0 spikes are gone), with
+a timeout covering the whole exchange, reqwest-like redirects, internal
+addresses refused at every connect for Web Push, and cancellation of every
+request at shutdown. PLAIN goes to the internal database, an HTTP endpoint
+(Basic credentials, Forwarded/X-Forwarded-For) or OAuth 2.0 token
+introspection; OAUTHBEARER uses the same introspection, and OAuth 2.0
+servers are discovered (RFC 8414) when the auth directives are loaded. The
+four `auth.rs` tests are ported, with client tests against a threaded mock
+HTTP server and an OAUTHBEARER login end to end. GCC/Clang debug,
+ASan/UBSan/LSan, TSan and Clang MSan (libcurl built from source,
+instrumented) pass, and clang-tidy is clean.

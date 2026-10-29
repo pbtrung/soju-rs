@@ -305,6 +305,15 @@ SSL_CTX *tls_client_ctx(const char *certfp, struct str cert, struct str key, str
 	return ctx;
 }
 
+SSL_CTX *tls_http_client_ctx(struct err **err) {
+	SSL_CTX *ctx = tls_client_ctx("", STR_EMPTY, STR_EMPTY, err);
+	if (ctx != nullptr) {
+		static const unsigned char alpn[] = "\x08http/1.1";
+		SSL_CTX_set_alpn_protos(ctx, alpn, sizeof(alpn) - 1);
+	}
+	return ctx;
+}
+
 static bool session_init(struct tls_session *t, SSL_CTX *ctx) {
 	*t = (struct tls_session){0};
 	t->ssl = SSL_new(ctx);

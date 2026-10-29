@@ -38,6 +38,10 @@ void tls_cert_store_finish(struct tls_cert_store *s);
 [[nodiscard]] SSL_CTX *tls_client_ctx(const char *certfp, struct str cert, struct str key,
 				      struct err **err);
 
+// A client context for HTTP clients: the system trust store, ALPN
+// http/1.1
+[[nodiscard]] SSL_CTX *tls_http_client_ctx(struct err **err);
+
 enum tls_status {
 	TLS_OK, // progress made (or nothing to do)
 	TLS_WANT_INPUT, // more ciphertext needed

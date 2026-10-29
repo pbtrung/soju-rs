@@ -1,13 +1,12 @@
 # Builds the vendored dependencies as static libraries into
-# CMAKE_INSTALL_PREFIX (OpenSSL only for MSan: otherwise libwebsockets is
-# built against the system OpenSSL), with the compiler and flags of one build mode. The
+# CMAKE_INSTALL_PREFIX (OpenSSL and libcurl only for MSan: the other builds
+# link the system libraries), with the compiler and flags of one build mode. The
 # top-level project runs this once per (compiler, mode, versions) and
 # shares the result between build trees (cmake/SojuDeps.cmake).
 cmake_minimum_required(VERSION 3.29)
 project(soju_deps C)
 
 include(ExternalProject)
-find_program(SOJU_PATCH patch REQUIRED)
 include(${CMAKE_CURRENT_LIST_DIR}/versions.cmake)
 
 set(SOJU_MODE "debug" CACHE STRING "Build mode")
@@ -23,11 +22,12 @@ option(SOJU_BUNDLE_OPENSSL "Build OpenSSL from source (MSan, no-asm)" OFF)
 option(SOJU_MUSL "Target musl libc" OFF)
 
 include(${CMAKE_CURRENT_LIST_DIR}/fetch.cmake)
-foreach(dep LIBUV LWS UTF8PROC YYJSON SQLITE CMOCKA)
+foreach(dep LIBUV UTF8PROC YYJSON SQLITE CMOCKA)
 	soju_fetch(${dep})
 endforeach()
 if(SOJU_BUNDLE_OPENSSL)
 	soju_fetch(OPENSSL)
+	soju_fetch(CURL)
 endif()
 if(SOJU_WITH_MIMALLOC)
 	soju_fetch(MIMALLOC)
@@ -75,42 +75,22 @@ if(SOJU_BUNDLE_OPENSSL)
 		BUILD_COMMAND make -j${SOJU_BUILD_JOBS} build_libs
 		INSTALL_COMMAND make install_dev
 	)
-	set(lws_openssl_dep openssl)
-	set(lws_openssl_libs "${P}/lib/libssl.a|${P}/lib/libcrypto.a")
-	set(lws_openssl_include "${P}/include")
-else()
-	find_package(OpenSSL 3.0 REQUIRED)
-	set(lws_openssl_dep "")
-	set(lws_openssl_libs "${OPENSSL_SSL_LIBRARY}|${OPENSSL_CRYPTO_LIBRARY}")
-	set(lws_openssl_include "${OPENSSL_INCLUDE_DIR}")
+	# libcurl for its HTTP client, with the instrumented OpenSSL: HTTP(S)
+	# only, no compression or IDN libraries
+	ExternalProject_Add(curl
+		URL ${CURL_URL} URL_HASH SHA256=${CURL_SHA256} ${dl}
+		DEPENDS openssl
+		CMAKE_ARGS ${common_cmake_args}
+			-DBUILD_CURL_EXE=OFF -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF
+			-DENABLE_CURL_MANUAL=OFF -DBUILD_EXAMPLES=OFF
+			-DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR=${P} -DOPENSSL_USE_STATIC_LIBS=ON
+			-DHTTP_ONLY=ON -DCURL_DISABLE_LDAP=ON -DENABLE_THREADED_RESOLVER=ON
+			-DCURL_ZLIB=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF -DUSE_NGHTTP2=OFF
+			-DUSE_LIBIDN2=OFF -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF
+			-DCURL_USE_GSSAPI=OFF -DUSE_LIBRTMP=OFF
+			-DCURL_CA_BUNDLE=auto -DCURL_CA_PATH=auto
+	)
 endif()
-
-ExternalProject_Add(libwebsockets
-	URL ${LWS_URL} URL_HASH SHA256=${LWS_SHA256} ${dl}
-	DEPENDS libuv ${lws_openssl_dep}
-	PATCH_COMMAND ${SOJU_PATCH} -p1 -i ${CMAKE_CURRENT_LIST_DIR}/patches/lws-address-size.patch
-	LIST_SEPARATOR |
-	CMAKE_ARGS ${common_cmake_args}
-		-DDISABLE_WERROR=ON
-		-DLWS_WITH_STATIC=ON -DLWS_WITH_SHARED=OFF
-		-DLWS_WITH_LIBUV=ON -DLWS_WITH_EVLIB_PLUGINS=OFF
-		-DLWS_LIBUV_LIBRARIES=${P}/lib/libuv.a
-		-DLWS_LIBUV_INCLUDE_DIRS=${P}/include
-		-DLWS_WITH_SSL=ON
-		"-DLWS_OPENSSL_LIBRARIES=${lws_openssl_libs}"
-		-DLWS_OPENSSL_INCLUDE_DIRS=${lws_openssl_include}
-		-DLWS_WITH_HTTP2=OFF -DLWS_WITH_HTTP3=OFF
-		-DLWS_IPV6=ON -DLWS_UNIX_SOCK=ON
-		-DLWS_WITHOUT_TESTAPPS=ON -DLWS_WITH_MINIMAL_EXAMPLES=OFF
-		-DLWS_WITH_SECURE_STREAMS=OFF -DLWS_WITH_UPNG=OFF -DLWS_WITH_JPEG=OFF
-		-DLWS_WITH_LHP=OFF -DLWS_WITH_LEJP=OFF -DLWS_WITH_CONMON=OFF
-		-DLWS_WITH_NETLINK=OFF -DLWS_WITH_CACHE_NSCOOKIEJAR=OFF
-		-DLWS_WITH_UDP=OFF -DLWS_WITH_DIR=OFF -DLWS_WITH_LEJP_CONF=OFF
-		-DLWS_WITH_SYS_SMD=OFF -DLWS_WITH_SYS_STATE=OFF
-		-DLWS_WITH_LWSAC=ON -DLWS_WITH_LIBCAP=OFF
-		# Not our git repository's hash in lws_get_library_version()
-		-DCMAKE_DISABLE_FIND_PACKAGE_Git=ON -DLWS_REPRODUCIBLE=ON
-)
 
 if(SOJU_WITH_MIMALLOC)
 	set(mi_debug OFF)

@@ -1175,6 +1175,26 @@ static void plain_auth_done(void *data, const struct auth_error *err) {
 	sasl_finish(j, nullptr, nullptr);
 }
 
+// OAUTHBEARER: identity_username holds the username the client gave, if any
+static void bearer_auth_done(void *data, const char *username, const struct auth_error *err) {
+	struct sasl_job *j = data;
+	if (err != nullptr) {
+		sasl_finish(j, err->internal, err->external);
+		return;
+	}
+	if (j->identity_username[0] != '\0' && !cstr_eq(j->identity_username, username)) {
+		AUTOFREE char *a = utf8_debug_cstr(str_from(j->identity_username));
+		AUTOFREE char *b = utf8_debug_cstr(str_from(username));
+		AUTOFREE char *msg = xasprintf(
+			"username mismatch (client provided %s, but server returned %s)", a, b);
+		sasl_finish(j, msg, nullptr);
+		return;
+	}
+	xfree(j->username);
+	j->username = xstrdup(username);
+	sasl_finish(j, nullptr, nullptr);
+}
+
 static void run_external(struct db *db, void *data) {
 	struct sasl_job *j = data;
 	struct err *e = nullptr;
@@ -1222,7 +1242,7 @@ static void authenticate(struct downstream *dc, const struct downstream_sasl *s)
 	j->network = xstrdup("");
 	struct server_config *cfg = server_config_get(dc->srv);
 	enum plain_auth plain = cfg->plain_auth;
-	bool oauth = cfg->oauth_bearer;
+	bool oauth = cfg->oauth2 != nullptr;
 	bool client_cert_auth = cfg->cfg.basic.client_cert_auth;
 	server_config_unref(cfg);
 	dc->busy = true;
@@ -1245,10 +1265,13 @@ static void authenticate(struct downstream *dc, const struct downstream_sasl *s)
 		return;
 	}
 	if (s->kind == SASL_OAUTHBEARER) {
-		sasl_finish(j,
-			    oauth ? "OAuth 2.0 isn't supported yet"
-				  : "SASL OAUTHBEARER not supported",
-			    nullptr);
+		if (!oauth) {
+			sasl_finish(j, "SASL OAUTHBEARER not supported", nullptr);
+			return;
+		}
+		xfree(j->identity_username);
+		j->identity_username = xstrdup(s->oauth.username);
+		auth_oauth_bearer(dc->srv, s->oauth.token, dc->remote_addr, bearer_auth_done, j);
 		return;
 	}
 	if (s->kind == SASL_EXTERNAL) {
@@ -1914,7 +1937,7 @@ static struct downstream *downstream_new(struct server *srv, struct conn *c,
 	if (cfg->plain_auth != PLAIN_AUTH_NONE) {
 		strbuf_append_cstr(&mechs, "PLAIN");
 	}
-	if (cfg->oauth_bearer) {
+	if (cfg->oauth2 != nullptr) {
 		strbuf_printf(&mechs, "%sOAUTHBEARER", mechs.len > 0 ? "," : "");
 	}
 	if (cfg->cfg.basic.client_cert_auth && dc->has_peer_cert) {

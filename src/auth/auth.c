@@ -1,4 +1,5 @@
 #include "auth/auth.h"
+#include "auth/internal.h"
 
 #include <string.h>
 
@@ -121,16 +122,23 @@ static void done_get_user(void *data) {
 
 void auth_plain(struct server *srv, const char *username, const char *password,
 		const char *remote_addr, auth_done_fn done, void *data) {
-	(void)remote_addr;
 	struct server_config *cfg = server_config_get(srv);
 	enum plain_auth kind = cfg->plain_auth;
+	if (kind == PLAIN_AUTH_HTTP) {
+		auth_plain_http(srv, cfg->http_auth_url, username, password, remote_addr, done,
+				data);
+		server_config_unref(cfg);
+		return;
+	}
+	if (kind == PLAIN_AUTH_OAUTH2 && cfg->oauth2 != nullptr) {
+		auth_plain_oauth2(srv, cfg->oauth2, username, password, remote_addr, done, data);
+		server_config_unref(cfg);
+		return;
+	}
 	server_config_unref(cfg);
 	if (kind != PLAIN_AUTH_INTERNAL) {
 		struct auth_error e = {
-			.internal = xstrdup(kind == PLAIN_AUTH_NONE
-						    ? "SASL PLAIN not supported"
-						    : "HTTP and OAuth 2.0 authentication aren't "
-						      "supported yet"),
+			.internal = xstrdup("SASL PLAIN not supported"),
 			.external = xstrdup("Authentication failed"),
 		};
 		done(data, &e);

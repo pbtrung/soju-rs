@@ -13,6 +13,11 @@ compiles the same version from source, instrumented and without assembly.
 
 ## Executable experiments
 
+Phases 8 and 9 replaced libwebsockets with an in-tree HTTP server and
+libcurl (PLAN.md decisions 11 and 12): `spike_lws`, `spike_tls`,
+`spike_http_client` and `lws-address-size.patch` were removed then. Their
+findings are kept below for the record.
+
 - `hello` includes the public dependency headers as C23 and exercises the
   linked libraries, including cmocka and yyjson.
 - `spike_lws` consumes a known PROXY header from a socket pair, adopts the

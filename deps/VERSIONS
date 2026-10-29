@@ -2,7 +2,7 @@
 # deps/versions.cmake. Archives are verified before extraction.
 libuv        1.53.0
 OpenSSL      3.6.5  # system (dynamic); vendored for MSan only
-libwebsockets 5.0.0
+libcurl      8.23.0 # system (dynamic); vendored for MSan only
 mimalloc     3.5.4
 utf8proc     2.12.0
 yyjson       0.13.0

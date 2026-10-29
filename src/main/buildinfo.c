@@ -1,7 +1,7 @@
 #include "main/buildinfo.h"
 
 #include <crypt.h>
-#include <libwebsockets.h>
+#include <curl/curl.h>
 #include <openssl/crypto.h>
 #include <sqlite3.h>
 #include <stdlib.h>
@@ -19,7 +19,7 @@ void print_build_info(FILE *f) {
 	fprintf(f, "soju %s (%s build)\n", SOJU_VERSION, SOJU_BUILD_MODE);
 	fprintf(f, "libuv %s\n", uv_version_string());
 	fprintf(f, "%s\n", OpenSSL_version(OPENSSL_VERSION));
-	fprintf(f, "libwebsockets %s\n", lws_get_library_version());
+	fprintf(f, "libcurl %s\n", curl_version_info(CURLVERSION_NOW)->version);
 	fprintf(f, "utf8proc %s\n", utf8proc_version());
 	fprintf(f, "yyjson %s\n", YYJSON_VERSION_STRING);
 	yyjson_doc *json = yyjson_read("null", 4, 0);
