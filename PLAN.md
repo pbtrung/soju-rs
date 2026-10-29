@@ -1,9 +1,11 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **partial bootstrap implementation; phases 0 and 1 are not complete.**
-The C build scaffold, base helpers and IRC parser exist. Bootstrap spikes,
-dependency fixes and CI wiring are recorded in `doc/spikes.md`; the full
-phase exit criteria below have not yet been met.
+Status: **phase 0 complete; phase 1 code and tests complete**
+(`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 1's fuzzing exit
+criterion is not met yet: fuzzing so far is `fuzz/diff_oracle.c` (24
+parsers compared with soju-rs) for minutes, not ≥ 8 CPU-hours per
+harness, and the dedicated L5 harnesses other than `fuzz_irc_line` and
+`diff_oracle` are still to be written.
 Source of truth for behaviour: soju-rs `main` at v0.99.23 (`c350574`), ~33k
 lines of Rust in 90 files (plan first written against v0.99.15, `02acf7d`;
 section 8 lists what changed on `main` since then). This branch (`c-port`) starts empty; the Rust tree
