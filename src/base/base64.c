@@ -144,7 +144,8 @@ bool base64_decode(struct strbuf *out, enum base64_variant v, struct str s, stru
 		// {:#4x} ('{}') ... {:#010b}
 		char bits[9];
 		for (unsigned k = 0; k < 8; k++) {
-			bits[k] = (char)((((unsigned)last_value >> (7U - k)) & 1U) != 0 ? '1' : '0');
+			bits[k] =
+				(char)((((unsigned)last_value >> (7U - k)) & 1U) != 0 ? '1' : '0');
 		}
 		bits[8] = '\0';
 		return err_set(err, 0,

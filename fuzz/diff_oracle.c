@@ -34,6 +34,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	}
 	const char *op = oracle_ops[data[0] % n_ops];
 	struct str input = str_new((const char *)data + 1, size - 1);
+#ifdef SOJU_MODE_FUZZ
+	// dbmigrate runs its input as SQL: under libFuzzer, ATTACH could create
+	// files anywhere. Its seeds still run in every other mode.
+	if (cstr_eq(op, "dbmigrate")) {
+		return 0;
+	}
+#endif
 	// The C port works on NUL-terminated strings: text with NUL bytes
 	// isn't comparable (b64 ops take raw bytes and handle them)
 	if (memchr(input.p, '\0', input.len) != nullptr && !cstr_eq(op, "pathmatch") &&

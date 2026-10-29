@@ -37,6 +37,50 @@ fn scfg_dump(b: &[soju::scfg::Directive], out: &mut String, depth: usize) {
     }
 }
 
+/// Schema, user_version and every row (created_at masked: migrations set
+/// it to the current time), in a format fuzz/oracle_ops.c reproduces.
+fn db_dump(path: &str) -> String {
+    let c = rusqlite::Connection::open(path).unwrap();
+    let mut out = String::new();
+    let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    out.push_str(&format!("user_version {v}\n"));
+    let mut st = c
+        .prepare("SELECT type, name, tbl_name, coalesce(sql, 'NULL') FROM sqlite_schema ORDER BY type, name")
+        .unwrap();
+    let rows: Vec<(String, String, String, String)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (ty, name, tbl, sql) in &rows {
+        out.push_str(&format!("schema {ty} {name} {tbl} {sql}\n"));
+    }
+    for (ty, name, _, sql) in &rows {
+        if ty != "table" || sql.starts_with("CREATE VIRTUAL") {
+            continue;
+        }
+        let cols: Vec<String> = c
+            .prepare(&format!("PRAGMA table_info(\"{name}\")"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let exprs: Vec<String> = cols
+            .iter()
+            .map(|col| if col == "created_at" { "'<time>'".to_owned() } else { format!("quote(\"{col}\")") })
+            .collect();
+        let order = if sql.contains("WITHOUT ROWID") { "1" } else { "rowid" };
+        let q = format!("SELECT {} FROM \"{name}\" ORDER BY {order}", exprs.join("||'|'||"));
+        let mut st = c.prepare(&q).unwrap();
+        let vals: Vec<String> = st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        for v in vals {
+            out.push_str(&format!("row {name} {v}\n"));
+        }
+    }
+    out
+}
+
 fn run(op: &str, raw: &[u8]) -> String {
     let lossy = String::from_utf8_lossy(raw);
     let s: &str = &lossy;
@@ -155,6 +199,28 @@ fn run(op: &str, raw: &[u8]) -> String {
         "whox" => {
             let (f, t) = xirc::parse_whox_options(s);
             format!("{f:?} {t:?}")
+        }
+        "dbmigrate" => {
+            // The input initializes a database, which soju-rs then opens
+            let path = std::env::temp_dir().join(format!("soju-oracle-{}.db", std::process::id()));
+            let path = path.to_str().unwrap().to_owned();
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{path}{suffix}"));
+            }
+            if let Err(e) = rusqlite::Connection::open(&path).unwrap().execute_batch(s) {
+                return format!("init error:{e}");
+            }
+            let res = match soju::database::Database::open(&path) {
+                Ok(db) => {
+                    drop(db);
+                    format!("ok:\n{}", db_dump(&path))
+                }
+                Err(e) => format!("err:{e}"),
+            };
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{path}{suffix}"));
+            }
+            res
         }
         _ => panic!("unknown op {op}"),
     }

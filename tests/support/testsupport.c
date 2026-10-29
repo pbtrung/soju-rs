@@ -1,5 +1,6 @@
 #include "testsupport.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,20 +9,35 @@
 #include "irc/message.h"
 
 #ifdef SOJU_MODE_DEBUG
+// cmocka's checked allocator keeps global lists: serialize it, since the
+// DB thread and thread pool jobs allocate too
+static pthread_mutex_t alloc_mu = PTHREAD_MUTEX_INITIALIZER;
+
 static void *t_malloc(size_t n) {
-	return _test_malloc(n, __FILE__, __LINE__);
+	pthread_mutex_lock(&alloc_mu);
+	void *p = _test_malloc(n, __FILE__, __LINE__);
+	pthread_mutex_unlock(&alloc_mu);
+	return p;
 }
 
 static void *t_calloc(size_t count, size_t size) {
-	return _test_calloc(count, size, __FILE__, __LINE__);
+	pthread_mutex_lock(&alloc_mu);
+	void *p = _test_calloc(count, size, __FILE__, __LINE__);
+	pthread_mutex_unlock(&alloc_mu);
+	return p;
 }
 
 static void *t_realloc(void *p, size_t n) {
-	return _test_realloc(p, n, __FILE__, __LINE__);
+	pthread_mutex_lock(&alloc_mu);
+	void *q = _test_realloc(p, n, __FILE__, __LINE__);
+	pthread_mutex_unlock(&alloc_mu);
+	return q;
 }
 
 static void t_free(void *p) {
+	pthread_mutex_lock(&alloc_mu);
 	_test_free(p, __FILE__, __LINE__);
+	pthread_mutex_unlock(&alloc_mu);
 }
 
 static const struct alloc_hooks cmocka_hooks = {

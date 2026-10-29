@@ -1,6 +1,7 @@
 #include "oracle_ops.h"
 
 #include <signal.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -13,6 +14,7 @@
 #include "base/utf8.h"
 #include "config/config.h"
 #include "config/scfg.h"
+#include "db/db.h"
 #include "db/utils.h"
 #include "irc/casemapping.h"
 #include "irc/ircutil.h"
@@ -169,6 +171,107 @@ static void hex(struct strbuf *out, const struct strbuf *b) {
 static void err_out(struct strbuf *out, struct err *e) {
 	strbuf_printf(out, "err:%s", err_msg(e));
 	err_free(e);
+}
+
+// The same dump as db_dump in tests/oracle/src/main.rs
+static void db_dump(const char *path, struct strbuf *out) {
+	sqlite3 *c;
+	if (sqlite3_open(path, &c) != SQLITE_OK) {
+		abort();
+	}
+	sqlite3_stmt *st;
+	sqlite3_prepare_v2(c, "PRAGMA user_version", -1, &st, nullptr);
+	sqlite3_step(st);
+	strbuf_printf(out, "user_version %lld\n", (long long)sqlite3_column_int64(st, 0));
+	sqlite3_finalize(st);
+	sqlite3_prepare_v2(c,
+			   "SELECT type, name, tbl_name, coalesce(sql, 'NULL') FROM sqlite_schema "
+			   "ORDER BY type, name",
+			   -1, &st, nullptr);
+	strvec tables = {0}, sqls = {0};
+	while (sqlite3_step(st) == SQLITE_ROW) {
+		const char *type = (const char *)sqlite3_column_text(st, 0);
+		const char *name = (const char *)sqlite3_column_text(st, 1);
+		const char *sql = (const char *)sqlite3_column_text(st, 3);
+		strbuf_printf(out, "schema %s %s %s %s\n", type, name,
+			      (const char *)sqlite3_column_text(st, 2), sql);
+		if (cstr_eq(type, "table") && strncmp(sql, "CREATE VIRTUAL", 14) != 0) {
+			strvec_push(&tables, name);
+			strvec_push(&sqls, sql);
+		}
+	}
+	sqlite3_finalize(st);
+	for (size_t i = 0; i < tables.len; i++) {
+		struct strbuf q = STRBUF_INIT;
+		strbuf_printf(&q, "PRAGMA table_info(\"%s\")", tables.data[i]);
+		sqlite3_prepare_v2(c, strbuf_cstr(&q), -1, &st, nullptr);
+		strbuf_reset(&q);
+		strbuf_append_cstr(&q, "SELECT ");
+		bool first = true;
+		while (sqlite3_step(st) == SQLITE_ROW) {
+			const char *col = (const char *)sqlite3_column_text(st, 1);
+			if (!first) {
+				strbuf_append_cstr(&q, "||'|'||");
+			}
+			first = false;
+			if (cstr_eq(col, "created_at")) {
+				strbuf_append_cstr(&q, "'<time>'");
+			} else {
+				strbuf_printf(&q, "quote(\"%s\")", col);
+			}
+		}
+		sqlite3_finalize(st);
+		strbuf_printf(&q, " FROM \"%s\" ORDER BY %s", tables.data[i],
+			      strstr(sqls.data[i], "WITHOUT ROWID") != nullptr ? "1" : "rowid");
+		sqlite3_prepare_v2(c, strbuf_cstr(&q), -1, &st, nullptr);
+		while (sqlite3_step(st) == SQLITE_ROW) {
+			strbuf_printf(out, "row %s %s\n", tables.data[i],
+				      (const char *)sqlite3_column_text(st, 0));
+		}
+		sqlite3_finalize(st);
+		strbuf_free(&q);
+	}
+	strvec_free(&tables);
+	strvec_free(&sqls);
+	sqlite3_close(c);
+}
+
+static void remove_db(const char *path) {
+	static const char *const suffixes[] = {"", "-wal", "-shm"};
+	for (size_t i = 0; i < 3; i++) {
+		char p[256];
+		snprintf(p, sizeof(p), "%s%s", path, suffixes[i]);
+		unlink(p);
+	}
+}
+
+static void db_migrate_op(const char *init, struct strbuf *out) {
+	char path[128];
+	snprintf(path, sizeof(path), "/tmp/soju-c-oracle-%d.db", (int)getpid());
+	remove_db(path);
+	sqlite3 *c;
+	if (sqlite3_open(path, &c) != SQLITE_OK) {
+		abort();
+	}
+	char *msg = nullptr;
+	if (sqlite3_exec(c, init, nullptr, nullptr, &msg) != SQLITE_OK) {
+		strbuf_printf(out, "init error:%s", msg);
+		sqlite3_free(msg);
+		sqlite3_close(c);
+		remove_db(path);
+		return;
+	}
+	sqlite3_close(c);
+	struct db *db = nullptr;
+	struct err *e = nullptr;
+	if (db_open(path, &db, &e)) {
+		db_close(db);
+		strbuf_append_cstr(out, "ok:\n");
+		db_dump(path, out);
+	} else {
+		err_out(out, e);
+	}
+	remove_db(path);
 }
 
 void oracle_run_c(const char *op, struct str raw, struct strbuf *out) {
@@ -351,6 +454,8 @@ void oracle_run_c(const char *op, struct str raw, struct strbuf *out) {
 		dbg(out, t);
 		xfree(f);
 		xfree(t);
+	} else if (cstr_eq(op, "dbmigrate")) {
+		db_migrate_op(cs, out);
 	} else {
 		abort();
 	}

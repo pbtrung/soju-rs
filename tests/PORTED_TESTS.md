@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 54 of 165 unit tests (phases 0–1); 0 of 17 scenarios.
+Ported so far: 72 of 165 unit tests (phases 0–2); 0 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -41,24 +41,24 @@ Also compared against the Rust code by the differential harness
 | `src/database/connection.rs` | `stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin` | pending: phase 2 |
 | `src/database/mod.rs` | `network_url` | `test_net_url.c`: `test_network_url` |
 | `src/database/mod.rs` | `host_port` | `test_net_url.c`: `test_host_port` |
-| `src/database/mod.rs` | `password` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `users` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `networks_channels` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `messages` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `messages_same_time` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `message_ids_not_reused` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `delete_messages_in_chunks` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `message_last_id_insertion_order` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `delete_messages_vacuum` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `messages_invalid_utf8` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `receipts_targets_webpush_certs` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `fts_quote` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `migrations` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `message_text_index_migration` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `message_text_index_query_plans` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `newer_schema_rejected` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `unchanged_records_and_receipts_do_not_write` | pending: phase 2 |
-| `src/database/sqlite/tests.rs` | `sparse_fts_preserves_updates_and_event_history_ordering` | pending: phase 2 |
+| `src/database/mod.rs` | `password` | `test_db_sqlite.c`: `test_password` |
+| `src/database/sqlite/tests.rs` | `users` | `test_db_sqlite.c`: `test_users` |
+| `src/database/sqlite/tests.rs` | `networks_channels` | `test_db_sqlite.c`: `test_networks_channels` |
+| `src/database/sqlite/tests.rs` | `messages` | `test_db_sqlite.c`: `test_messages` |
+| `src/database/sqlite/tests.rs` | `messages_same_time` | `test_db_sqlite.c`: `test_messages_same_time` |
+| `src/database/sqlite/tests.rs` | `message_ids_not_reused` | `test_db_sqlite.c`: `test_message_ids_not_reused` |
+| `src/database/sqlite/tests.rs` | `delete_messages_in_chunks` | `test_db_sqlite.c`: `test_delete_messages_in_chunks` |
+| `src/database/sqlite/tests.rs` | `message_last_id_insertion_order` | `test_db_sqlite.c`: `test_message_last_id_insertion_order` |
+| `src/database/sqlite/tests.rs` | `delete_messages_vacuum` | `test_db_sqlite.c`: `test_delete_messages_vacuum` |
+| `src/database/sqlite/tests.rs` | `messages_invalid_utf8` | `test_db_sqlite.c`: `test_messages_invalid_utf8` |
+| `src/database/sqlite/tests.rs` | `receipts_targets_webpush_certs` | `test_db_sqlite.c`: `test_receipts_targets_webpush_certs` |
+| `src/database/sqlite/tests.rs` | `fts_quote` | `test_db_sqlite.c`: `test_fts_quote` |
+| `src/database/sqlite/tests.rs` | `migrations` | `test_db_sqlite.c`: `test_migrations` |
+| `src/database/sqlite/tests.rs` | `message_text_index_migration` | `test_db_sqlite.c`: `test_message_text_index_migration` |
+| `src/database/sqlite/tests.rs` | `message_text_index_query_plans` | `test_db_sqlite.c`: `test_message_text_index_query_plans` |
+| `src/database/sqlite/tests.rs` | `newer_schema_rejected` | `test_db_sqlite.c`: `test_newer_schema_rejected` |
+| `src/database/sqlite/tests.rs` | `unchanged_records_and_receipts_do_not_write` | `test_db_sqlite.c`: `test_unchanged_records_and_receipts_do_not_write` |
+| `src/database/sqlite/tests.rs` | `sparse_fts_preserves_updates_and_event_history_ordering` | `test_db_sqlite.c`: `test_sparse_fts_preserves_updates_and_event_history_ordering` |
 | `src/database/turso/http.rs` | `usage_counts_execute_and_batch_results_once` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `provisioning_authentication_isolation_and_restart` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `creation_and_deletion_resume_after_failure` | pending: phase 9b |
