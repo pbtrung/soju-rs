@@ -59,6 +59,7 @@ struct server {
 	atomic_bool shutting_down;
 	atomic_size_t pending_work;
 	pthread_mutex_t users_mu;
+	struct strmap deleted_users; // stopped IDs; reject stale authentication/start completions
 	struct strmap users; // username -> owned int64_t user ID; no actor pointers
 };
 
@@ -67,6 +68,9 @@ void server_stop(struct server *srv);
 // Thread-safe: stop has removed all actors/connections and their jobs are done.
 [[nodiscard]] bool server_is_idle(struct server *srv);
 [[nodiscard]] bool server_find_user(struct server *srv, const char *username, int64_t *id);
+
+[[nodiscard]] bool server_user_deleted(struct server *srv, int64_t id);
+void server_mark_user_deleted(struct server *srv, int64_t id);
 
 void server_init(struct server *srv, struct loop_pool *loops, struct db_thread *db);
 void server_finish(struct server *srv);

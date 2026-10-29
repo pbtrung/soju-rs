@@ -51,6 +51,8 @@ struct user {
 void user_start_take(struct server *srv, struct db_user *record);
 [[nodiscard]] bool user_server_start(struct server *srv, struct err **err);
 void user_server_stop(struct server *srv);
+// Stops and frees one actor on its owning loop.
+void user_stop(struct user *u);
 // Registration callback, and the registered message/disconnect callbacks.
 void user_downstream_registered(struct downstream *dc, void *data);
 void user_downstream_message(struct downstream *dc, struct irc_msg *msg, void *data);

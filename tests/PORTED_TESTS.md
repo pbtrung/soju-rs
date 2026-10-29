@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 110 of 165 unit tests (phases 0–6); 15 of 17 scenarios.
+Ported so far: 113 of 165 unit tests (phases 0–7); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -135,9 +135,9 @@ Also compared against the Rust code by the differential harness
 | `src/scfg.rs` | `errors` | `test_config_scfg.c`: `test_errors` |
 | `src/server.rs` | `create_user_on_auth_concurrently` | `../integration/test_server.c`: `test_create_user_on_auth_concurrently` |
 | `src/server.rs` | `msg_store_not_reloaded` | `../integration/test_server.c`: `test_msg_store_not_reloaded` |
-| `src/service/mod.rs` | `lookup` | pending: phase 7 |
-| `src/service/mod.rs` | `help_listing` | pending: phase 7 |
-| `src/service/mod.rs` | `durations` | pending: phase 7 |
+| `src/service/mod.rs` | `lookup` | `test_service.c`: `test_lookup` |
+| `src/service/mod.rs` | `help_listing` | `test_service.c`: `test_help_listing` |
+| `src/service/mod.rs` | `durations` | `test_service.c`: `test_durations` |
 | `src/tls.rs` | `pinned_cert` | `test_net_misc.c`: `test_pinned_cert` |
 | `src/upstream/mod.rs` | `errno_messages` | `test_upstream.c`: `test_errno_messages` |
 | `src/upstream/mod.rs` | `labels` | `test_upstream.c`: `test_labels` |
@@ -193,9 +193,9 @@ Also compared against the Rust code by the differential harness
 - `read_marker`: `tests/integration/test_server.c`: `test_read_marker` (1/4 loops × 0/20 ms DB delay)
 - `upstream_clock_skew`: `tests/integration/test_server.c`: `test_upstream_clock_skew` (1/4 loops × 0/20 ms DB delay)
 - `multiline`: `tests/integration/test_server.c`: `test_multiline` (1/4 loops × 0/20 ms DB delay)
-- `service_other_user`: pending
+- `service_other_user`: `tests/integration/test_server.c`: `test_service_other_user` (1/4 loops × 0/20 ms DB delay)
 - `chat_history_limit`: `tests/integration/test_server.c`: `test_chat_history_limit` (1/4 loops × 0/20 ms DB delay)
-- `service_blocking_work`: pending
+- `service_blocking_work`: `tests/integration/test_server.c`: `test_service_blocking_work` (1/4 loops × 0/20 ms DB delay)
 - `monitor_invalid_targets`: `tests/integration/test_server.c`: `test_monitor_invalid_targets` (1/4 loops × 0/20 ms DB delay)
 - `multiplex`: `tests/integration/test_server.c`: `test_multiplex` (1/4 loops × 0/20 ms DB delay)
 - `multiplex_unsupported`: `tests/integration/test_server.c`: `test_multiplex_unsupported` (1/4 loops × 0/20 ms DB delay)
@@ -215,3 +215,10 @@ Phase 6 also exercises memory backlog replay, concurrent account creation,
 immutable message-store configuration on reload, pending DB/authentication
 disconnects, and full loop/actor teardown. The two BouncerServ scenarios
 are completed with phase 7, which supplies their command handlers.
+
+Phase 7 C-only tests cover command permissions and abbreviated dispatch,
+network/channel configuration, secret redaction, SASL, device certificate
+creation/duplicate/deletion, callbacks on the originating loop, admin updates
+racing deletion, certificate work racing network deletion, stale user starts,
+and shutdown with pending CPU work. User/network ID deletion and recreation
+checks ensure old completions cannot target a new actor with a recycled ID.

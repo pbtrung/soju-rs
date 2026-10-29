@@ -3,10 +3,11 @@
 #pragma once
 
 #include <stdarg.h>
+#include <stdatomic.h>
 
 // The debug flag shared by every logger (soju -debug, "server debug")
 struct log_root {
-	bool debug;
+	atomic_bool debug;
 };
 
 // A logger with a prefix. Loggers are owned values: log_with_prefix

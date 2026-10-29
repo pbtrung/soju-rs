@@ -1121,9 +1121,37 @@ static void test_password(void **state) {
 	db_user_free(&u);
 }
 
-T_MAIN(cmocka_unit_test(test_users), cmocka_unit_test(test_networks_channels),
-       cmocka_unit_test(test_messages), cmocka_unit_test(test_messages_same_time),
-       cmocka_unit_test(test_message_ids_not_reused),
+static void test_actor_ids_not_reused(void **state) {
+	(void)state;
+	struct db *db = open_db();
+	struct db_user u;
+	db_user_init(&u, "alice");
+	T(db_store_user, db, &u);
+	int64_t old_user = u.id;
+	struct db_network net;
+	db_network_init(&net, "example.org");
+	T(db_store_network, db, u.id, &net);
+	int64_t old_network = net.id;
+	T(db_delete_network, db, net.id);
+	net.id = 0;
+	T(db_store_network, db, u.id, &net);
+	assert_true(net.id > old_network);
+	old_network = net.id;
+	T(db_delete_user, db, u.id);
+	u.id = 0;
+	T(db_store_user, db, &u);
+	assert_true(u.id > old_user);
+	net.id = 0;
+	T(db_store_network, db, u.id, &net);
+	assert_true(net.id > old_network);
+	db_network_free(&net);
+	db_user_free(&u);
+	db_close(db);
+}
+
+T_MAIN(cmocka_unit_test(test_actor_ids_not_reused), cmocka_unit_test(test_users),
+       cmocka_unit_test(test_networks_channels), cmocka_unit_test(test_messages),
+       cmocka_unit_test(test_messages_same_time), cmocka_unit_test(test_message_ids_not_reused),
        cmocka_unit_test(test_delete_messages_in_chunks),
        cmocka_unit_test(test_message_last_id_insertion_order),
        cmocka_unit_test(test_delete_messages_vacuum), cmocka_unit_test(test_messages_invalid_utf8),

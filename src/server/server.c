@@ -35,6 +35,7 @@ void server_init(struct server *srv, struct loop_pool *loops, struct db_thread *
 	pthread_mutex_init(&srv->config_mu, nullptr);
 	pthread_mutex_init(&srv->users_mu, nullptr);
 	strmap_init(&srv->users, xfree);
+	strmap_init(&srv->deleted_users, nullptr);
 	srv->config = server_config_default();
 	srv->cpu = cpu_work_pool_new(&loops->loops[0].uv, 0);
 	atomic_init(&srv->next_downstream_id, 1);
@@ -45,6 +46,7 @@ void server_finish(struct server *srv) {
 	server_config_unref(srv->config);
 	pthread_mutex_destroy(&srv->config_mu);
 	strmap_free(&srv->users);
+	strmap_free(&srv->deleted_users);
 	pthread_mutex_destroy(&srv->users_mu);
 	log_free(&srv->log);
 }
@@ -74,6 +76,20 @@ bool server_find_user(struct server *srv, const char *username, int64_t *id) {
 	}
 	pthread_mutex_unlock(&srv->users_mu);
 	return found != nullptr;
+}
+
+bool server_user_deleted(struct server *srv, int64_t id) {
+	AUTOFREE char *key = xasprintf("%lld", (long long)id);
+	pthread_mutex_lock(&srv->users_mu);
+	bool deleted = strmap_has(&srv->deleted_users, key);
+	pthread_mutex_unlock(&srv->users_mu);
+	return deleted;
+}
+void server_mark_user_deleted(struct server *srv, int64_t id) {
+	AUTOFREE char *key = xasprintf("%lld", (long long)id);
+	pthread_mutex_lock(&srv->users_mu);
+	strmap_set(&srv->deleted_users, key, nullptr);
+	pthread_mutex_unlock(&srv->users_mu);
 }
 
 struct server_config *server_config_get(struct server *srv) {

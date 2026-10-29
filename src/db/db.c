@@ -370,13 +370,23 @@ static bool setup(struct db *db, struct err **err) {
 	    !db_exec(db, "PRAGMA cache_size = -512", err) || !db_upgrade(db, err)) {
 		return false;
 	}
-	// Not part of upstream's schema, see record_message_id_high_water
-	return db_exec(db,
-		       "CREATE TABLE IF NOT EXISTS MessageIdHighWater (\n"
-		       "                id INTEGER PRIMARY KEY CHECK (id = 0),\n"
-		       "                last_id INTEGER NOT NULL\n"
-		       "            );",
-		       err);
+	// Local high-water marks keep asynchronous actor and message IDs from
+	// being reused after deletion. They do not change upstream user_version.
+	return db_exec(
+		db,
+		"CREATE TABLE IF NOT EXISTS MessageIdHighWater (\n"
+		"                id INTEGER PRIMARY KEY CHECK (id = 0),\n"
+		"                last_id INTEGER NOT NULL\n"
+		"            );"
+		"CREATE TABLE IF NOT EXISTS ActorIdHighWater (kind TEXT PRIMARY KEY, last_id "
+		"INTEGER NOT NULL);"
+		"CREATE TRIGGER IF NOT EXISTS actor_user_deleted BEFORE DELETE ON User BEGIN "
+		"INSERT INTO ActorIdHighWater VALUES ('user', OLD.id) ON CONFLICT(kind) DO UPDATE "
+		"SET last_id=max(last_id,excluded.last_id); END;"
+		"CREATE TRIGGER IF NOT EXISTS actor_network_deleted BEFORE DELETE ON Network BEGIN "
+		"INSERT INTO ActorIdHighWater VALUES ('network', OLD.id) ON CONFLICT(kind) DO "
+		"UPDATE SET last_id=max(last_id,excluded.last_id); END;",
+		err);
 }
 
 bool db_open_handle(sqlite3 *conn, struct db **out, struct err **err) {

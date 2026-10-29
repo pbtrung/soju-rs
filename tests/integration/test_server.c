@@ -1,6 +1,7 @@
 // Rust tests/server.rs scenarios through real client and upstream sockets.
 #include "server_fixture.h"
 #include "base/alloc.h"
+#include "service/service.h"
 #include <unistd.h>
 
 static void test_broadcast(void **state) {
@@ -647,7 +648,397 @@ static void test_memory_backlog(void **state) {
 	irc_msg_free(m);
 	fixture_finish(&e);
 }
-T_MAIN(cmocka_unit_test(test_memory_backlog),
+
+static char *service_reply(struct test_peer *dc) {
+	for (;;) {
+		struct irc_msg *m = peer_until(dc, "PRIVMSG");
+		if (m->prefix != nullptr && cstr_eq(m->prefix->name, "BouncerServ")) {
+			char *text = xstrdup(irc_msg_param(m, 1));
+			irc_msg_free(m);
+			return text;
+		}
+		irc_msg_free(m);
+	}
+}
+static void service_expect(struct test_peer *dc, const char *command, const char *expected) {
+	peer_send_take(dc, IRC_MSG("PRIVMSG", "BouncerServ", command));
+	AUTOFREE char *reply = service_reply(dc);
+	assert_string_equal(reply, expected);
+}
+struct store_record {
+	struct db_user record;
+	struct err *err;
+};
+static void store_record_db(struct db *db, void *data) {
+	struct store_record *j = data;
+	bool ok = db_store_user(db, &j->record, &j->err);
+	(void)ok;
+}
+static void make_admin(struct user *u, void *data) {
+	(void)data;
+	u->record.admin = true;
+	struct store_record j = {0};
+	db_user_copy(&j.record, &u->record);
+	db_thread_call(u->srv->db, store_record_db, &j);
+	assert_null(j.err);
+	db_user_free(&j.record);
+}
+static void add_other(struct user *u, void *data) {
+	(void)data;
+	struct store_record j = {0};
+	db_user_init(&j.record, "other");
+	db_thread_call(u->srv->db, store_record_db, &j);
+	assert_null(j.err);
+	struct db_user *record = xmalloc(sizeof(*record));
+	db_user_copy(record, &j.record);
+	user_start_take(u->srv, record);
+	db_user_free(&j.record);
+}
+static void test_service_other_user(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	fixture_run_user(&e, make_admin, nullptr);
+	fixture_run_user(&e, add_other, nullptr);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, true, "");
+	service_expect(dc, "user update other -max-networks 5", "updated user \"other\"");
+	service_expect(dc, "user run other user update -max-networks 3", "updated user \"other\"");
+	service_expect(dc, "user run other network status",
+		       "No network configured, add one with \"network create\".");
+	service_expect(dc, "user delete other d0941e", "deleted user \"other\"");
+	int64_t id = 0;
+	assert_false(server_find_user(&e.srv, "other", &id));
+	fixture_finish(&e);
+}
+struct check_password {
+	const char *username, *password;
+	bool found, ok;
+	struct err *err;
+};
+static void check_password_db(struct db *db, void *data) {
+	struct check_password *j = data;
+	struct db_user u;
+	bool upgraded = false;
+	j->ok = db_get_user(db, j->username, &u, &j->found, &j->err);
+	if (j->found) {
+		j->ok = j->ok && db_user_check_password(&u, j->password, &upgraded, &j->err);
+		db_user_free(&u);
+	}
+}
+static void check_cert(struct user *u, void *data) {
+	(void)data;
+	struct user_network *net = u->networks.data[0];
+	assert_string_equal(net->record.sasl.mechanism, "EXTERNAL");
+	assert_true(net->record.sasl.external_key.set);
+	assert_true(net->record.sasl.external_cert.set);
+}
+static void test_service_blocking_work(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	fixture_run_user(&e, make_admin, nullptr);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, true, "");
+	service_expect(dc, "certfp generate -key-type ed25519", "certificate generated");
+	const char *const labels[] = {
+		"SHA-1 fingerprint: ", "SHA-256 fingerprint: ", "SHA-512 fingerprint: "};
+	for (size_t i = 0; i < 3; i++) {
+		AUTOFREE char *line = service_reply(dc);
+		assert_true(str_starts_with(str_from(line), str_from(labels[i])));
+	}
+	fixture_run_user(&e, check_cert, nullptr);
+	service_expect(dc, "user update -password newpass", "updated user \"test\"");
+	struct check_password j = {.username = "test", .password = "newpass"};
+	db_thread_call(e.db, check_password_db, &j);
+	assert_true(j.ok);
+	assert_null(j.err);
+	service_expect(dc, "user create -username created -password pw",
+		       "created user \"created\"");
+	int64_t id = 0;
+	assert_true(server_find_user(&e.srv, "created", &id));
+	j = (struct check_password){.username = "created", .password = "pw"};
+	db_thread_call(e.db, check_password_db, &j);
+	assert_true(j.ok);
+	assert_null(j.err);
+	fixture_finish(&e);
+}
+static void test_service_commands(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, true);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, true, "");
+	service_expect(dc, "s",
+		       "error: command \"s\" is ambiguous (type \"help\" for a list of commands)");
+	service_expect(dc, "server status", "error: you must be an admin to use this command");
+	service_expect(dc, "network create -addr irc+insecure://example -ignore-limit",
+		       "error: you must be an admin to use the flag -ignore-limit");
+	service_expect(dc, "user update -admin true", "error: cannot update -admin of own user");
+	service_expect(dc, "user update -max-networks 2",
+		       "error: cannot update -max-networks of own user");
+	service_expect(dc, "user update somebody -password x",
+		       "error: you must be an admin to update other users");
+	service_expect(dc, "user delete somebody", "error: only admins may delete other users");
+	service_expect(dc,
+		       "channel create #saved -detached true -detach-after 1h30m -relay-detached "
+		       "highlight",
+		       "created channel \"#saved\"");
+	struct irc_msg *m = peer_until(up, "JOIN");
+	assert_string_equal(irc_msg_param(m, 0), "#saved");
+	irc_msg_free(m);
+	service_expect(dc, "channel status",
+		       "#saved [parted, detached]: relay-detached: highlight, reattach-on: "
+		       "default, detach-after: 1h30m0s, detach-on: default");
+	service_expect(
+		dc, "channel update #saved -reattach-on message -detach-on none -detach-after 1.5s",
+		"updated channel \"#saved\"");
+	service_expect(dc, "channel update #saved -detach-after 9223372036854775807h",
+		       "error: unknown duration for -detach-after \"9223372036854775807h\" "
+		       "(duration format: 0, 300s, 22h30m, ...)");
+	service_expect(dc, "channel delete #saved", "deleted channel \"#saved\"");
+	service_expect(dc, "sasl set-plain account secret", "credentials saved");
+	service_expect(dc, "sasl status", "SASL PLAIN enabled with username \"account\"");
+	AUTOFREE char *line = service_reply(dc);
+	assert_string_equal(line, "Unauthenticated on upstream network");
+	service_expect(dc, "sasl reset", "credentials reset");
+	service_expect(dc,
+		       "net crea -addr irc+insecure://example -name example -enabled false "
+		       "-connect-command 'PRIVMSG NickServ :IDENTIFY password'",
+		       "created network \"example\"");
+	service_expect(dc, "network update example -name renamed -certfp 1234",
+		       "error: the certificate fingerprint must be a SHA256 or SHA512 hash");
+	service_expect(dc, "network update example -name renamed", "updated network \"renamed\"");
+	peer_send(dc, "PRIVMSG BouncerServ :network info renamed");
+	bool redacted = false;
+	for (size_t i = 0; i < 9; i++) {
+		AUTOFREE char *reply = service_reply(dc);
+		assert_null(strstr(reply, "password"));
+		if (cstr_eq(reply, "connect-command: PRIVMSG NickServ (parameters hidden)")) {
+			redacted = true;
+		}
+	}
+	assert_true(redacted);
+	service_expect(dc, "network delete renamed", "deleted network \"renamed\"");
+	service_expect(dc, "net quote 'WHO test'", "sent command to \"testnet\"");
+	m = peer_until(up, "WHO");
+	assert_string_equal(irc_msg_param(m, 0), "test");
+	irc_msg_free(m);
+	service_expect(dc, "device-certificate create -label phone",
+		       "error: client certification authentication is disabled");
+	fixture_finish(&e);
+}
+static void enable_cert_auth(struct user *u, void *data) {
+	(void)data;
+	struct server_config *cfg = server_config_default();
+	cfg->cfg.basic.client_cert_auth = true;
+	server_config_reload(u->srv, cfg);
+}
+static void test_service_device_certificates(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	fixture_run_user(&e, enable_cert_auth, nullptr);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, false, "");
+	const char *fp = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	AUTOFREE char *command =
+		xasprintf("device-certificate create -fingerprint %s -label phone", fp);
+	AUTOFREE char *reply = xasprintf("created device certificate \"%s\"", fp);
+	service_expect(dc, command, reply);
+	service_expect(dc, command, "error: this device certificate fingerprint already exists");
+	service_expect(dc, "device-certificate delete aaaaaaaaaaaa",
+		       "deleted device certificate \"aaaaaaaaaaaa\"");
+	service_expect(dc, "device-certificate status", "No device certificate configured.");
+	fixture_finish(&e);
+}
+static void test_service_admin_races(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	fixture_run_user(&e, make_admin, nullptr);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, false, "");
+	service_expect(dc, "user create -username other -disable-password",
+		       "created user \"other\"");
+	// The expensive command completes after its target has been removed.
+	peer_send(dc, "PRIVMSG BouncerServ :user update other -password latepass");
+	peer_send(dc, "PRIVMSG BouncerServ :user delete other d0941e");
+	bool deleted = false, stopped = false;
+	for (size_t i = 0; i < 2; i++) {
+		AUTOFREE char *line = service_reply(dc);
+		if (cstr_eq(line, "deleted user \"other\"")) {
+			deleted = true;
+		} else if (cstr_eq(line, "error: user stopped")) {
+			stopped = true;
+		} else {
+			assert_string_equal(line, "updated user \"other\"");
+		}
+	}
+	assert_true(deleted);
+	(void)stopped;
+	// Shutdown must drain deferred key/password work without retaining clients.
+	peer_send(dc, "PRIVMSG BouncerServ :user update -password shutdownpass");
+	peer_send(dc, "PRIVMSG BouncerServ :certfp generate -network testnet -key-type ed25519");
+	peer_sync(dc);
+	close(dc->fd);
+	dc->fd = -1;
+	fixture_finish(&e);
+}
+
+struct global_result {
+	atomic_bool done;
+	struct sloop *origin;
+	strvec lines;
+	const char *command;
+};
+static void global_print(void *data, const char *line) {
+	struct global_result *r = data;
+	assert_ptr_equal(loop_current(), r->origin);
+	strvec_push(&r->lines, line);
+}
+static void global_done(void *data) {
+	struct global_result *r = data;
+	assert_ptr_equal(loop_current(), r->origin);
+	atomic_store(&r->done, true);
+}
+static void global_start(struct user *u, void *data) {
+	struct global_result *r = data;
+	r->origin = loop_current();
+	service_global(u->srv, true, r->command, global_print, global_done, r);
+}
+static void wait_global(struct server_fixture *e, struct global_result *r, const char *command) {
+	r->command = command;
+	atomic_store(&r->done, false);
+	fixture_run_user(e, global_start, r);
+	uint64_t until = uv_hrtime() + 10000000000ULL;
+	while (!atomic_load(&r->done) && uv_hrtime() < until) {
+		usleep(1000);
+	}
+	assert_true(atomic_load(&r->done));
+}
+static void test_service_global(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	struct global_result r = {0};
+	wait_global(&e, &r, "user create -username other -disable-password");
+	assert_int_equal(r.lines.len, 1);
+	assert_string_equal(r.lines.data[0], "created user \"other\"");
+	strvec_free(&r.lines);
+	wait_global(&e, &r, "user run other user update -max-networks 3");
+	assert_int_equal(r.lines.len, 1);
+	assert_string_equal(r.lines.data[0], "updated user \"other\"");
+	strvec_free(&r.lines);
+	wait_global(&e, &r, "network status");
+	assert_int_equal(r.lines.len, 1);
+	assert_non_null(strstr(r.lines.data[0], "this command must be run as a user"));
+	strvec_free(&r.lines);
+	wait_global(&e, &r, "server debug true");
+	assert_int_equal(r.lines.len, 0);
+	assert_true(log_debug_enabled(&e.srv.log));
+	wait_global(&e, &r, "server debug false");
+	assert_false(log_debug_enabled(&e.srv.log));
+	wait_global(&e, &r, "server status");
+	assert_int_equal(r.lines.len, 1);
+	assert_non_null(strstr(r.lines.data[0], "2/2 users"));
+	strvec_free(&r.lines);
+	wait_global(&e, &r, "user delete other d0941e");
+	assert_int_equal(r.lines.len, 1);
+	assert_string_equal(r.lines.data[0], "deleted user \"other\"");
+	strvec_free(&r.lines);
+	fixture_finish(&e);
+}
+
+static void stale_start(struct user *u, void *data) {
+	struct db_user *record = data;
+	struct db_user *copy = xmalloc(sizeof(*copy));
+	db_user_copy(copy, record);
+	user_start_take(u->srv, copy);
+}
+static void test_service_deleted_identity(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	fixture_run_user(&e, make_admin, nullptr);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, false, "");
+	service_expect(dc, "user create -username other -disable-password",
+		       "created user \"other\"");
+	int64_t old = 0;
+	assert_true(server_find_user(&e.srv, "other", &old));
+	struct db_user stale;
+	db_user_init(&stale, "other");
+	stale.id = old;
+	service_expect(dc, "user delete other d0941e", "deleted user \"other\"");
+	fixture_run_user(&e, stale_start, &stale);
+	peer_sync(dc);
+	int64_t id = 0;
+	assert_false(server_find_user(&e.srv, "other", &id));
+	service_expect(dc, "user create -username other -disable-password",
+		       "created user \"other\"");
+	assert_true(server_find_user(&e.srv, "other", &id));
+	assert_true(id > old);
+	fixture_run_user(&e, stale_start, &stale);
+	peer_sync(dc);
+	assert_true(server_find_user(&e.srv, "other", &id));
+	assert_true(id > old);
+	db_user_free(&stale);
+	fixture_finish(&e);
+}
+static void test_service_cert_network_race(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, false, "");
+	service_expect(dc, "network create -addr example -name temporary -enabled false",
+		       "created network \"temporary\"");
+	peer_send(dc, "PRIVMSG BouncerServ :certfp generate -network temporary -key-type ed25519");
+	peer_send(dc, "PRIVMSG BouncerServ :network delete temporary");
+	bool deleted = false, generated = false, missing = false;
+	while (!deleted || (!generated && !missing)) {
+		AUTOFREE char *line = service_reply(dc);
+		if (cstr_eq(line, "deleted network \"temporary\"")) {
+			deleted = true;
+		} else if (cstr_eq(line, "certificate generated")) {
+			generated = true;
+			for (size_t i = 0; i < 3; i++) {
+				AUTOFREE char *fp = service_reply(dc);
+				assert_non_null(strstr(fp, "fingerprint: "));
+			}
+		} else {
+			assert_string_equal(line, "error: network was deleted");
+			missing = true;
+		}
+	}
+	service_expect(dc, "network create -addr example -name temporary -enabled false",
+		       "created network \"temporary\"");
+	service_expect(dc, "certfp fingerprint -network temporary", "error: CertFP not set up");
+	fixture_finish(&e);
+}
+
+T_MAIN(cmocka_unit_test(test_service_deleted_identity),
+       cmocka_unit_test(test_service_cert_network_race), cmocka_unit_test(test_service_global),
+       cmocka_unit_test(test_service_other_user), cmocka_unit_test(test_service_blocking_work),
+       cmocka_unit_test(test_service_commands), cmocka_unit_test(test_service_device_certificates),
+       cmocka_unit_test(test_service_admin_races), cmocka_unit_test(test_memory_backlog),
        cmocka_unit_test(test_create_user_on_auth_concurrently),
        cmocka_unit_test(test_msg_store_not_reloaded),
        cmocka_unit_test(test_pending_job_disconnects), cmocka_unit_test(test_broadcast),

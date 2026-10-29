@@ -246,9 +246,11 @@ bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
 	st = db_prepare(
 		db,
 		"INSERT INTO\n"
-		"                User(username, password, admin, nick, realname, created_at,\n"
+		"                User(id, username, password, admin, nick, realname, created_at,\n"
 		"                    enabled, downstream_interacted_at, max_networks)\n"
-		"                VALUES (:username, :password, :admin, :nick, :realname, :now,\n"
+		"                VALUES ((SELECT max(coalesce((SELECT max(id) FROM "
+		"User),0),coalesce((SELECT last_id FROM ActorIdHighWater WHERE "
+		"kind='user'),0))+1), :username, :password, :admin, :nick, :realname, :now,\n"
 		"                    :enabled, :downstream_interacted_at, :max_networks)",
 		err);
 	if (st == nullptr) {

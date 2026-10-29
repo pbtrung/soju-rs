@@ -1,4 +1,5 @@
 #include "user/internal.h"
+#include "service/service.h"
 
 #include "base/alloc.h"
 #include "irc/genmsg.h"
@@ -330,8 +331,7 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		AUTOFREE char *canonical = casemap_cstr(CASEMAPPING_ASCII, irc_msg_param(msg, 0));
 		if (cstr_eq(canonical, SERVICE_NICK_CM)) {
 			if (cstr_eq(cmd, "PRIVMSG")) {
-				user_service_reply(u, dc->id,
-						   "Unknown command. Use 'help' for help.");
+				service_privmsg(u, dc, irc_msg_param(msg, 1));
 			}
 			goto out;
 		}

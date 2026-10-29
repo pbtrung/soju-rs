@@ -136,7 +136,9 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 			"sasl_plain_username,\n"
 			"                    sasl_plain_password, sasl_external_cert, "
 			"sasl_external_key, auto_away, enabled)\n"
-			"                VALUES (:id, :user, :name, :addr, :nick, :username, "
+			"                VALUES ((SELECT max(coalesce((SELECT max(id) FROM "
+			"Network),0),coalesce((SELECT last_id FROM ActorIdHighWater WHERE "
+			"kind='network'),0))+1), :user, :name, :addr, :nick, :username, "
 			":realname, :certfp, :pass,\n"
 			"                    :connect_commands, :sasl_mechanism, "
 			":sasl_plain_username,\n"
@@ -146,7 +148,6 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 		if (st == nullptr) {
 			return false;
 		}
-		bind_null(st, ":id");
 		bind_i64(st, ":user", user_id);
 	}
 	bind_text_or_null(st, ":name", n->name);

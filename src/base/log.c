@@ -28,13 +28,11 @@ void log_free(struct logger *l) {
 }
 
 bool log_debug_enabled(const struct logger *l) {
-	return l->root->debug;
+	return atomic_load(&l->root->debug);
 }
 
 bool log_set_debug(const struct logger *l, bool debug) {
-	bool prev = l->root->debug;
-	l->root->debug = debug;
-	return prev;
+	return atomic_exchange(&l->root->debug, debug);
 }
 
 void log_vprintf(const struct logger *l, const char *fmt, va_list ap) {

@@ -38,7 +38,8 @@ struct user_network *user_get_network(struct user *u, int64_t id) {
 
 struct user_network *user_find_network(struct user *u, const char *name) {
 	for (size_t i = 0; i < u->networks.len; i++) {
-		if (cstr_eq(db_network_get_name(&u->networks.data[i]->record), name)) {
+		if (cstr_eq(db_network_get_name(&u->networks.data[i]->record), name) ||
+		    cstr_eq(u->networks.data[i]->record.addr, name)) {
 			return u->networks.data[i];
 		}
 	}
@@ -218,7 +219,8 @@ static void start_run(void *data) {
 	struct start_event *ev = data;
 	struct server *srv = ev->srv;
 	struct db_user *record = ev->record;
-	if (atomic_load(&srv->shutting_down) || user_lookup(srv, record->id) != nullptr) {
+	if (atomic_load(&srv->shutting_down) || user_lookup(srv, record->id) != nullptr ||
+	    server_user_deleted(srv, record->id)) {
 		start_drop(ev);
 		return;
 	}
@@ -368,6 +370,11 @@ static void stop_user(struct user *u, void *data) {
 	xfree(u);
 }
 
+void user_stop(struct user *u) {
+	server_mark_user_deleted(u->srv, u->record.id);
+	stop_user(u, nullptr);
+}
+
 struct stop_loop {
 	struct server *srv;
 };
@@ -420,6 +427,17 @@ static void attach_drop(void *data) {
 	user_client_free(ev->client);
 	xfree(ev->network_name);
 	xfree(ev);
+}
+
+static void attach_cancel(void *data) {
+	struct attach_event *ev = data;
+	if (ev->client != nullptr) {
+		struct user_packet *p = user_packet_new(ev->client, nullptr);
+		user_packet_add_take(p, IRC_MSG("ERROR", "User stopped"));
+		p->close = true;
+		user_packet_send_take(p);
+	}
+	attach_drop(ev);
 }
 
 static void attach_run(struct user *u, void *data) {
@@ -525,7 +543,7 @@ static void attach_downstream(struct downstream *dc) {
 	ev->client = client_snapshot(dc);
 	ev->network_name = xstrdup(dc->reg != nullptr ? dc->reg->network_name : "");
 	ev->server_checked = dc->reg != nullptr && dc->reg->server_checked;
-	user_post(dc->srv, dc->user_id, attach_run, attach_drop, ev);
+	user_post(dc->srv, dc->user_id, attach_run, attach_cancel, ev);
 }
 
 struct register_job {
@@ -556,7 +574,8 @@ static void register_done(void *data) {
 	struct register_job *j = data;
 	struct downstream *dc = downstream_lookup(j->dc_id);
 	if (dc != nullptr) {
-		if (j->err != nullptr || !j->found || atomic_load(&j->srv->shutting_down)) {
+		if (j->err != nullptr || !j->found || server_user_deleted(j->srv, j->record.id) ||
+		    atomic_load(&j->srv->shutting_down)) {
 			downstream_send(dc, IRC_MSG("ERROR", "Internal server error"));
 			downstream_close(dc);
 		} else {

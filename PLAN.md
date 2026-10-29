@@ -1,6 +1,6 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–6 implemented; phases 7–8 next**
+Status: **phases 0–7 implemented; phase 8 next**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
 and the stateful downstream session fuzzer. The user actor integrates network selection,
@@ -726,7 +726,7 @@ starts from `c350574` (v0.99.23).
 | `e3a3349` | `MessageTextIndex` (schema 31) | phase 2 |
 | `d478f60`…`c350574` | Turso Cloud storage, write batching, schemas 32–33, clustered tenant `Message`, SASL NAK and registration-timer fixes | goals, deps, layout, phase 9b, L4 |
 
-## Implementation validation: phases 4–6
+## Implementation validation: phases 4–7
 
 Phase 4: welcome/sync and multiplex lifecycle socket tests, downstream
 session seed replay, GCC/Clang debug and ASan/UBSan/LSan suites, clang-tidy,
@@ -741,7 +741,18 @@ MSan. Valgrind could not configure because the executable is not installed.
 Phase 6: 15 of 17 Rust server scenarios run through real sockets in four
 configurations (1/4 loops × normal/delayed DB jobs), plus lifecycle and
 memory-backlog checks. GCC/Clang debug, ASan/UBSan/LSan and TSan pass.
-The two BouncerServ scenarios require the phase 7 handlers. Local SQLite
+The two BouncerServ scenarios are covered by the phase 7 handlers below. Local SQLite
 message append/history, receipt and network/channel updates use blocking
 DB-thread calls with copied inputs, matching Rust's synchronous local
 storage sections; authentication and account creation use continuations.
+
+Phase 7: the complete BouncerServ command tree, abbreviated lookup and help,
+network/channel persistence, SASL and device certificates, user administration
+and server commands. Password hashing and certificate generation use the CPU
+limiter; cross-user commands and replies use owned events and IDs. Commands
+retain their initiating authority across `user run`, bound nesting and waiting,
+and tolerate disconnect, deletion and shutdown. User/network IDs retain local
+high-water marks across deletes so deferred work cannot reach a replacement
+account or network. All three Rust service unit tests and both remaining server
+scenarios are ported, alongside command, global-callback and admin race tests.
+GCC/Clang debug, ASan/UBSan/LSan and TSan suites and clang-tidy pass.
