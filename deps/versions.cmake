@@ -8,9 +8,12 @@ set(LIBUV_VERSION 1.53.0)
 set(LIBUV_URL https://dist.libuv.org/dist/v${LIBUV_VERSION}/libuv-v${LIBUV_VERSION}.tar.gz)
 set(LIBUV_SHA256 cb0d6dd2128d5a95bd242c6cc982a24fe608fa93da57b6b4ec763b0018c53e64)
 
-set(OPENSSL_VERSION 4.0.3)
+# Only built from source for MSan (the system library isn't instrumented):
+# every other build links the system OpenSSL dynamically. Same version as
+# Arch's package (2026-10-29).
+set(OPENSSL_VERSION 3.6.5)
 set(OPENSSL_URL https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz)
-set(OPENSSL_SHA256 325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9)
+set(OPENSSL_SHA256 a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98)
 
 set(LWS_VERSION 5.0.0)
 set(LWS_URL https://github.com/warmcat/libwebsockets/archive/refs/tags/v${LWS_VERSION}.tar.gz)

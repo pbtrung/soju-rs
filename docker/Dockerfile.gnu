@@ -8,7 +8,7 @@ FROM docker.io/library/archlinux:latest
 RUN pacman -Syu --noconfirm --needed \
 		gcc clang compiler-rt llvm lld clang-tools-extra \
 		cmake ninja make perl pkgconf patch \
-		libxcrypt valgrind shellcheck ripgrep \
+		openssl libxcrypt valgrind shellcheck ripgrep \
 		bash coreutils diffutils file findutils grep sed tar gzip xz util-linux \
 	&& pacman -Scc --noconfirm \
 	&& rm -rf /var/cache/pacman/pkg/* \

@@ -4,10 +4,10 @@ Phase 0 is in progress. Phase 1 has not been completed. The full target,
 compiler and sanitizer matrix, Valgrind runs, differential oracle and
 extended fuzzing gates in PLAN.md remain outstanding.
 
-The dependency versions inherited from the bootstrap are listed in
-`deps/VERSIONS`, with URLs and SHA-256 hashes in `deps/versions.cmake`.
-In particular, the existing pin is OpenSSL 4.0.3, although the original
-plan describes OpenSSL 3.
+The dependency versions are listed in `deps/VERSIONS`, with URLs and
+SHA-256 hashes in `deps/versions.cmake`. OpenSSL is the system library,
+linked dynamically (3.6.5 on Arch, 2026-10-29); only the MSan build
+compiles the same version from source, instrumented and without assembly.
 
 ## Executable experiments
 
@@ -48,21 +48,16 @@ dependency cache key. Sanitizer checks remain enabled.
   interface overwrote the stack. Parse into a full union, check the address
   family and destination size, then copy only the matching sockaddr.
 - OpenSSL calls its stack, hash and sparse-array callbacks through
-  function pointers cast to generic types, by design and throughout the
-  library. Clang's UBSan `function` check rejects every such call (first
-  seen as `ossl_decoder_instance_dup` called through
-  `void *(*)(const void *)` in `OPENSSL_sk_deep_copy`). Patching each call
-  site was not bounded, so the dependencies are built with
-  `-fno-sanitize=function` in the Clang `asan` and `fuzz` modes
-  (`cmake/SojuMode.cmake`). Our own code keeps the check; only calls made
-  from inside dependency code are unchecked. The earlier
-  `openssl-callback-types.patch` is removed. The dependency cache key now
-  hashes every file in `deps/patches/`.
+  function pointers cast to generic types, which Clang's UBSan `function`
+  check rejects. While OpenSSL was vendored and built with the sanitizers,
+  the dependencies were built with `-fno-sanitize=function`. The system
+  OpenSSL isn't instrumented, so that exception is gone: every dependency
+  we build keeps the full UBSan checks.
 
 ## Validation at this checkpoint
 
 `tools/ci.sh gcc-debug gcc-asan clang-debug clang-asan`: all 26 tests pass
-in each preset (2026-10-23).
+in each preset with the system OpenSSL (2026-10-29).
 
 ## Reproduction
 

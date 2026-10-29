@@ -8,7 +8,17 @@ set(SOJU_DEPS_ROOT "${CMAKE_SOURCE_DIR}/build/deps" CACHE PATH
 set(SOJU_DOWNLOAD_DIR "${CMAKE_SOURCE_DIR}/build/download" CACHE PATH
 	"Dependency tarball cache")
 
-# The key changes when the compiler, mode or any dependency recipe changes
+# The system OpenSSL (every mode but MSan): libwebsockets is compiled
+# against its headers, so its version is part of the key below
+if(NOT SOJU_BUNDLE_OPENSSL)
+	find_package(OpenSSL 3.0 REQUIRED)
+	set(soju_openssl_key "${OPENSSL_VERSION}")
+else()
+	set(soju_openssl_key bundled)
+endif()
+
+# The key changes when the compiler, mode, system OpenSSL or any dependency
+# recipe changes
 file(SHA256 "${CMAKE_SOURCE_DIR}/deps/versions.cmake" h1)
 file(SHA256 "${CMAKE_SOURCE_DIR}/deps/CMakeLists.txt" h2)
 file(SHA256 "${CMAKE_SOURCE_DIR}/deps/sqlite/CMakeLists.txt" h3)
@@ -20,7 +30,7 @@ foreach(f IN LISTS patches)
 	file(SHA256 "${f}" h)
 	string(APPEND hp "${h}")
 endforeach()
-string(SHA256 recipe "${h1}${h2}${h3}${h4}${h5}${hp}${CMAKE_C_COMPILER}${SOJU_TRIPLE}")
+string(SHA256 recipe "${h1}${h2}${h3}${h4}${h5}${hp}${CMAKE_C_COMPILER}${SOJU_TRIPLE}${soju_openssl_key}")
 string(SUBSTRING "${recipe}" 0 12 recipe)
 string(TOLOWER "${CMAKE_C_COMPILER_ID}" cc_id)
 set(key "${cc_id}-${CMAKE_C_COMPILER_VERSION}-${SOJU_MODE}-${recipe}")
@@ -44,7 +54,7 @@ if(NOT EXISTS "${SOJU_DEPS_PREFIX}/.done")
 			-DSOJU_MIMALLOC_DEBUG=${SOJU_MIMALLOC_DEBUG}
 			-DSOJU_MIMALLOC_SECURE=${SOJU_MIMALLOC_SECURE}
 			-DSOJU_MIMALLOC_TRACK=${SOJU_MIMALLOC_TRACK}
-			-DSOJU_OPENSSL_NO_ASM=${SOJU_OPENSSL_NO_ASM}
+			-DSOJU_BUNDLE_OPENSSL=${SOJU_BUNDLE_OPENSSL}
 			-DSOJU_BUNDLE_LIBXCRYPT=${SOJU_BUNDLE_LIBXCRYPT}
 			-DSOJU_MUSL=${SOJU_MUSL}
 		RESULT_VARIABLE res)
@@ -71,8 +81,16 @@ endfunction()
 
 find_package(Threads REQUIRED)
 soju_import(uv libuv.a Threads::Threads dl)
-soju_import(crypto libcrypto.a Threads::Threads)
-soju_import(ssl libssl.a soju::crypto)
+if(SOJU_BUNDLE_OPENSSL)
+	soju_import(crypto libcrypto.a Threads::Threads)
+	soju_import(ssl libssl.a soju::crypto)
+else()
+	# Linked dynamically (PLAN.md section 3)
+	add_library(soju::crypto INTERFACE IMPORTED GLOBAL)
+	set_target_properties(soju::crypto PROPERTIES INTERFACE_LINK_LIBRARIES OpenSSL::Crypto)
+	add_library(soju::ssl INTERFACE IMPORTED GLOBAL)
+	set_target_properties(soju::ssl PROPERTIES INTERFACE_LINK_LIBRARIES OpenSSL::SSL)
+endif()
 soju_import(lws libwebsockets.a soju::ssl soju::uv)
 soju_import(utf8proc libutf8proc.a)
 target_compile_definitions(soju::utf8proc INTERFACE UTF8PROC_STATIC)

@@ -1,5 +1,6 @@
 # Builds the vendored dependencies as static libraries into
-# CMAKE_INSTALL_PREFIX, with the compiler and flags of one build mode. The
+# CMAKE_INSTALL_PREFIX (OpenSSL only for MSan: otherwise libwebsockets is
+# built against the system OpenSSL), with the compiler and flags of one build mode. The
 # top-level project runs this once per (compiler, mode, versions) and
 # shares the result between build trees (cmake/SojuDeps.cmake).
 cmake_minimum_required(VERSION 3.29)
@@ -18,13 +19,16 @@ set(SOJU_MIMALLOC_TRACK "OFF" CACHE STRING "mimalloc MI_TRACK")
 option(SOJU_MIMALLOC_DEBUG "mimalloc debug checks" OFF)
 option(SOJU_MIMALLOC_SECURE "mimalloc secure mode" OFF)
 option(SOJU_BUNDLE_LIBXCRYPT "Build libxcrypt from source" OFF)
-option(SOJU_OPENSSL_NO_ASM "Build OpenSSL without assembly (MSan)" OFF)
+option(SOJU_BUNDLE_OPENSSL "Build OpenSSL from source (MSan, no-asm)" OFF)
 option(SOJU_MUSL "Target musl libc" OFF)
 
 include(${CMAKE_CURRENT_LIST_DIR}/fetch.cmake)
-foreach(dep LIBUV OPENSSL LWS UTF8PROC YYJSON SQLITE CMOCKA)
+foreach(dep LIBUV LWS UTF8PROC YYJSON SQLITE CMOCKA)
 	soju_fetch(${dep})
 endforeach()
+if(SOJU_BUNDLE_OPENSSL)
+	soju_fetch(OPENSSL)
+endif()
 if(SOJU_WITH_MIMALLOC)
 	soju_fetch(MIMALLOC)
 endif()
@@ -57,25 +61,33 @@ ExternalProject_Add(libuv
 		-DLIBUV_BUILD_SHARED=OFF -DLIBUV_BUILD_TESTS=OFF -DLIBUV_BUILD_BENCH=OFF
 )
 
-# OpenSSL's own build system. Only libcrypto and libssl are installed.
-set(openssl_opts no-shared no-tests no-docs no-apps no-module no-dso)
-if(SOJU_OPENSSL_NO_ASM)
-	list(APPEND openssl_opts no-asm)
+if(SOJU_BUNDLE_OPENSSL)
+	# OpenSSL's own build system, instrumented by MSan (no-asm: MSan can't
+	# see stores made by assembly). Only libcrypto and libssl are installed.
+	ExternalProject_Add(openssl
+		URL ${OPENSSL_URL} URL_HASH SHA256=${OPENSSL_SHA256} ${dl}
+		BUILD_IN_SOURCE ON
+		CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
+			"CFLAGS=${cflags}" "LDFLAGS=${SOJU_DEP_LDFLAGS}"
+			perl ./Configure linux-x86_64 --prefix=${P} --libdir=lib
+			--openssldir=/etc/ssl no-asm
+			no-shared no-tests no-docs no-apps no-module no-dso
+		BUILD_COMMAND make -j${SOJU_BUILD_JOBS} build_libs
+		INSTALL_COMMAND make install_dev
+	)
+	set(lws_openssl_dep openssl)
+	set(lws_openssl_libs "${P}/lib/libssl.a|${P}/lib/libcrypto.a")
+	set(lws_openssl_include "${P}/include")
+else()
+	find_package(OpenSSL 3.0 REQUIRED)
+	set(lws_openssl_dep "")
+	set(lws_openssl_libs "${OPENSSL_SSL_LIBRARY}|${OPENSSL_CRYPTO_LIBRARY}")
+	set(lws_openssl_include "${OPENSSL_INCLUDE_DIR}")
 endif()
-ExternalProject_Add(openssl
-	URL ${OPENSSL_URL} URL_HASH SHA256=${OPENSSL_SHA256} ${dl}
-	BUILD_IN_SOURCE ON
-	CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
-		"CFLAGS=${cflags}" "LDFLAGS=${SOJU_DEP_LDFLAGS}"
-		perl ./Configure linux-x86_64 --prefix=${P} --libdir=lib
-		--openssldir=/etc/ssl ${openssl_opts}
-	BUILD_COMMAND make -j${SOJU_BUILD_JOBS} build_libs
-	INSTALL_COMMAND make install_dev
-)
 
 ExternalProject_Add(libwebsockets
 	URL ${LWS_URL} URL_HASH SHA256=${LWS_SHA256} ${dl}
-	DEPENDS libuv openssl
+	DEPENDS libuv ${lws_openssl_dep}
 	PATCH_COMMAND ${SOJU_PATCH} -p1 -i ${CMAKE_CURRENT_LIST_DIR}/patches/lws-address-size.patch
 	LIST_SEPARATOR |
 	CMAKE_ARGS ${common_cmake_args}
@@ -85,8 +97,8 @@ ExternalProject_Add(libwebsockets
 		-DLWS_LIBUV_LIBRARIES=${P}/lib/libuv.a
 		-DLWS_LIBUV_INCLUDE_DIRS=${P}/include
 		-DLWS_WITH_SSL=ON
-		"-DLWS_OPENSSL_LIBRARIES=${P}/lib/libssl.a|${P}/lib/libcrypto.a"
-		-DLWS_OPENSSL_INCLUDE_DIRS=${P}/include
+		"-DLWS_OPENSSL_LIBRARIES=${lws_openssl_libs}"
+		-DLWS_OPENSSL_INCLUDE_DIRS=${lws_openssl_include}
 		-DLWS_WITH_HTTP2=OFF -DLWS_WITH_HTTP3=OFF
 		-DLWS_IPV6=ON -DLWS_UNIX_SOCK=ON
 		-DLWS_WITHOUT_TESTAPPS=ON -DLWS_WITH_MINIMAL_EXAMPLES=OFF

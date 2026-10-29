@@ -3,7 +3,7 @@
 #   SOJU_DEP_CFLAGS / SOJU_DEP_LDFLAGS  vendored dependencies
 #   SOJU_USE_MIMALLOC                   link mimalloc as the malloc override
 #   SOJU_MIMALLOC_DEBUG / _SECURE / _TRACK
-#   SOJU_OPENSSL_NO_ASM, SOJU_BUNDLE_LIBXCRYPT, SOJU_MUSL, SOJU_STATIC
+#   SOJU_BUNDLE_OPENSSL, SOJU_BUNDLE_LIBXCRYPT, SOJU_MUSL
 
 set(SOJU_MODES debug asan msan tsan valgrind release ubsan-trap fuzz)
 if(NOT SOJU_MODE IN_LIST SOJU_MODES)
@@ -33,21 +33,12 @@ else()
 endif()
 
 set(san_common "-fno-omit-frame-pointer -fno-sanitize-recover=all")
-# Clang's UBSan "function" check rejects calls through a function pointer
-# cast to another type. OpenSSL does that by design throughout (stack and
-# hash callbacks), so the dependencies are built without that one check;
-# our code keeps it.
-set(dep_san_extra "")
-if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-	set(dep_san_extra "-fno-sanitize=function")
-endif()
 set(SOJU_USE_MIMALLOC OFF)
 set(SOJU_MIMALLOC_DEBUG OFF)
 set(SOJU_MIMALLOC_SECURE OFF)
 set(SOJU_MIMALLOC_TRACK OFF)
-set(SOJU_OPENSSL_NO_ASM OFF)
+set(SOJU_BUNDLE_OPENSSL OFF)
 set(SOJU_BUNDLE_LIBXCRYPT ${SOJU_MUSL})
-set(SOJU_STATIC ${SOJU_MUSL})
 set(SOJU_LDFLAGS "")
 set(SOJU_DEP_LDFLAGS "")
 
@@ -59,7 +50,7 @@ if(SOJU_MODE STREQUAL "debug")
 elseif(SOJU_MODE STREQUAL "asan")
 	set(san "-fsanitize=address,undefined ${san_common}")
 	set(SOJU_CFLAGS "-O1 -g ${san}")
-	set(SOJU_DEP_CFLAGS "-O1 -g ${san} ${dep_san_extra}")
+	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
 	set(SOJU_LDFLAGS "-fsanitize=address,undefined")
 	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
 elseif(SOJU_MODE STREQUAL "msan")
@@ -68,7 +59,7 @@ elseif(SOJU_MODE STREQUAL "msan")
 	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
 	set(SOJU_LDFLAGS "-fsanitize=memory")
 	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
-	set(SOJU_OPENSSL_NO_ASM ON)
+	set(SOJU_BUNDLE_OPENSSL ON)
 	set(SOJU_BUNDLE_LIBXCRYPT ON)
 elseif(SOJU_MODE STREQUAL "tsan")
 	set(SOJU_CFLAGS "-O1 -g -fsanitize=thread ${san_common}")
@@ -99,17 +90,15 @@ elseif(SOJU_MODE STREQUAL "ubsan-trap")
 elseif(SOJU_MODE STREQUAL "fuzz")
 	set(san "-fsanitize=address,undefined ${san_common}")
 	set(SOJU_CFLAGS "-O1 -g ${san} -fsanitize=fuzzer-no-link")
-	set(SOJU_DEP_CFLAGS "-O1 -g ${san} ${dep_san_extra}")
+	set(SOJU_DEP_CFLAGS "-O1 -g ${san}")
 	set(SOJU_LDFLAGS "-fsanitize=address,undefined")
 	set(SOJU_DEP_LDFLAGS "${SOJU_LDFLAGS}")
 endif()
 
-if(SOJU_STATIC)
-	string(APPEND SOJU_LDFLAGS " -static")
-else()
-	string(APPEND SOJU_LDFLAGS " -pie")
-	string(APPEND SOJU_CFLAGS " -fPIE")
-endif()
+# Dynamically linked on both targets: the system OpenSSL is a shared
+# library (PLAN.md section 3)
+string(APPEND SOJU_LDFLAGS " -pie")
+string(APPEND SOJU_CFLAGS " -fPIE")
 
 # Warnings (PLAN.md 2.2), errors in every mode
 set(SOJU_WARNINGS
