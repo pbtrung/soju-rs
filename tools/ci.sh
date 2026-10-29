@@ -24,7 +24,8 @@ if [[ ${#presets[@]} -eq 0 ]]; then
 		echo "valgrind not installed: skipping valgrind presets" >&2
 		mapfile -t presets < <(printf '%s\n' "${presets[@]}" | grep -v valgrind)
 	fi
-	if ldd --version 2>&1 | grep -qi musl; then
+	# musl's ldd --version exits with 1: don't let pipefail hide its output
+	if [[ "$(ldd --version 2>&1 || true)" == *musl* ]]; then
 		mapfile -t presets < <(printf '%s\n' "${presets[@]}" | grep -Ev 'asan|msan|tsan|fuzz')
 	fi
 fi
