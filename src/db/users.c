@@ -4,7 +4,7 @@
 
 // Columns: id, [username], password, admin, nick, realname, enabled,
 // downstream_interacted_at, max_networks
-static bool user_from_row(sqlite3_stmt *st, const char *username, struct db_user *u,
+static bool user_from_row(struct db_stmt *st, const char *username, struct db_user *u,
 			  struct err **err) {
 	int off = username != nullptr ? 0 : 1;
 	*u = (struct db_user){.id = col_i64(st, 0)};
@@ -34,8 +34,9 @@ static bool user_from_row(sqlite3_stmt *st, const char *username, struct db_user
 }
 
 bool db_list_users(struct db *db, db_user_vec *out, struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "SELECT id, username, password, admin, nick, realname, enabled,\n"
 			   "                downstream_interacted_at, max_networks\n"
 			   "            FROM User",
@@ -45,7 +46,7 @@ bool db_list_users(struct db *db, db_user_vec *out, struct err **err) {
 	}
 	int rc;
 	db_user_vec v = {0};
-	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while ((rc = db_step(st)) == SQLITE_ROW) {
 		struct db_user u;
 		if (!user_from_row(st, nullptr, &u, err)) {
 			goto fail;
@@ -53,80 +54,84 @@ bool db_list_users(struct db *db, db_user_vec *out, struct err **err) {
 		vec_push(&v, u);
 	}
 	if (rc != SQLITE_DONE) {
-		db_sql_err(db, err);
+		db_sql_err(dbc, err);
 		goto fail;
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	for (size_t i = 0; i < v.len; i++) {
 		vec_push(out, v.data[i]);
 	}
 	vec_free(&v);
 	return true;
 fail:
-	sqlite3_finalize(st);
+	db_finalize(st);
 	db_user_vec_free(&v);
 	return false;
 }
 
 bool db_get_user(struct db *db, const char *username, struct db_user *out, bool *found,
 		 struct err **err) {
+	struct db_conn *dbc = &db->account;
 	*found = false;
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT id, password, admin, nick, realname, enabled,\n"
-				      "                    downstream_interacted_at, max_networks\n"
-				      "                FROM User\n"
-				      "                WHERE username = ?",
-				      err);
+	struct db_stmt *st =
+		db_prepare(dbc,
+			   "SELECT id, password, admin, nick, realname, enabled,\n"
+			   "                    downstream_interacted_at, max_networks\n"
+			   "                FROM User\n"
+			   "                WHERE username = ?",
+			   err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_text(st, 1, username, -1, SQLITE_TRANSIENT);
-	int rc = sqlite3_step(st);
+	bind_pos_text(st, 1, username);
+	int rc = db_step(st);
 	bool ok = true;
 	if (rc == SQLITE_ROW) {
 		ok = user_from_row(st, username, out, err);
 		*found = ok;
 	} else if (rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_get_username_by_id(struct db *db, int64_t id, char **out, struct err **err) {
+	struct db_conn *dbc = &db->account;
 	*out = nullptr;
-	sqlite3_stmt *st = db_prepare(db, "SELECT username FROM User WHERE id = ?", err);
+	struct db_stmt *st = db_prepare(dbc, "SELECT username FROM User WHERE id = ?", err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, id);
-	int rc = sqlite3_step(st);
+	bind_pos_i64(st, 1, id);
+	int rc = db_step(st);
 	bool ok = true;
 	if (rc == SQLITE_ROW) {
 		ok = col_text(st, 0, out, err);
 	} else if (rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_list_inactive_usernames(struct db *db, struct timestamp limit, strvec *out,
 				struct err **err) {
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT username FROM User\n"
-				      "            WHERE coalesce(downstream_interacted_at, "
-				      "created_at) < ? AND enabled = 1",
-				      err);
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st = db_prepare(dbc,
+					"SELECT username FROM User\n"
+					"            WHERE coalesce(downstream_interacted_at, "
+					"created_at) < ? AND enabled = 1",
+					err);
 	if (st == nullptr) {
 		return false;
 	}
 	AUTOFREE char *t = format_server_time_cstr(limit);
-	sqlite3_bind_text(st, 1, t, -1, SQLITE_TRANSIENT);
+	bind_pos_text(st, 1, t);
 	int rc;
 	strvec v = {0};
 	bool ok = true;
-	while (ok && (rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		char *name;
 		ok = col_text(st, 0, &name, err);
 		if (ok) {
@@ -134,9 +139,9 @@ bool db_list_inactive_usernames(struct db *db, struct timestamp limit, strvec *o
 		}
 	}
 	if (ok && rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	if (ok) {
 		for (size_t i = 0; i < v.len; i++) {
 			strvec_push_take(out, v.data[i]);
@@ -148,7 +153,7 @@ bool db_list_inactive_usernames(struct db *db, struct timestamp limit, strvec *o
 	return ok;
 }
 
-static void bind_user_fields(sqlite3_stmt *st, const struct db_user *u, bool password) {
+static void bind_user_fields(struct db_stmt *st, const struct db_user *u, bool password) {
 	bind_text(st, ":username", u->username);
 	if (password) {
 		bind_text_or_null(st, ":password", u->password);
@@ -161,15 +166,16 @@ static void bind_user_fields(sqlite3_stmt *st, const struct db_user *u, bool pas
 	bind_i64(st, ":max_networks", u->max_networks);
 }
 
-static bool run(struct db *db, sqlite3_stmt *st, struct err **err) {
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+static bool run(struct db_stmt *st, struct err **err) {
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_store_user_keep_password(struct db *db, const struct db_user *u, struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "UPDATE User\n"
 			   "            SET admin = :admin, nick = :nick, realname = :realname,\n"
 			   "                enabled = :enabled, downstream_interacted_at = "
@@ -185,13 +191,14 @@ bool db_store_user_keep_password(struct db *db, const struct db_user *u, struct 
 		return false;
 	}
 	bind_user_fields(st, u, false);
-	return run(db, st, err);
+	return run(st, err);
 }
 
 bool db_upgrade_user_password(struct db *db, int64_t id, const char *old, const char *new_hash,
 			      struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "UPDATE User SET password = :new WHERE id = :id AND password = "
 			   ":old AND (password IS NOT :new)",
 			   err);
@@ -201,13 +208,14 @@ bool db_upgrade_user_password(struct db *db, int64_t id, const char *old, const 
 	bind_i64(st, ":id", id);
 	bind_text(st, ":old", old);
 	bind_text(st, ":new", new_hash);
-	return run(db, st, err);
+	return run(st, err);
 }
 
 bool db_set_user_downstream_interacted_at(struct db *db, int64_t id, struct timestamp t,
 					  struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND "
 			   "downstream_interacted_at IS NOT ?1",
 			   err);
@@ -215,16 +223,17 @@ bool db_set_user_downstream_interacted_at(struct db *db, int64_t id, struct time
 		return false;
 	}
 	AUTOFREE char *s = format_server_time_cstr(t);
-	sqlite3_bind_text(st, 1, s, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int64(st, 2, id);
-	return run(db, st, err);
+	bind_pos_text(st, 1, s);
+	bind_pos_i64(st, 2, id);
+	return run(st, err);
 }
 
 bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
-	sqlite3_stmt *st;
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st;
 	if (u->id != 0) {
 		st = db_prepare(
-			db,
+			dbc,
 			"UPDATE User\n"
 			"                SET password = :password, admin = :admin, nick = :nick,\n"
 			"                    realname = :realname, enabled = :enabled,\n"
@@ -241,10 +250,10 @@ bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
 			return false;
 		}
 		bind_user_fields(st, u, true);
-		return run(db, st, err);
+		return run(st, err);
 	}
 	st = db_prepare(
-		db,
+		dbc,
 		"INSERT INTO\n"
 		"                User(id, username, password, admin, nick, realname, created_at,\n"
 		"                    enabled, downstream_interacted_at, max_networks)\n"
@@ -259,14 +268,15 @@ bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
 	bind_user_fields(st, u, true);
 	AUTOFREE char *now = format_server_time_cstr(timestamp_now());
 	bind_text(st, ":now", now);
-	if (!run(db, st, err)) {
+	if (!run(st, err)) {
 		return false;
 	}
-	u->id = sqlite3_last_insert_rowid(db->conn);
+	u->id = db_last_insert_rowid(dbc);
 	return true;
 }
 
 bool db_delete_user(struct db *db, int64_t id, struct err **err) {
+	struct db_conn *dbc = &db->account;
 	static const char *const deletes[] = {
 		("DELETE FROM DeliveryReceipt\n"
 		 "            WHERE id IN (\n"
@@ -310,25 +320,25 @@ bool db_delete_user(struct db *db, int64_t id, struct err **err) {
 		"DELETE FROM Network WHERE user = ?",
 		"DELETE FROM User WHERE id = ?",
 	};
-	if (!db_begin(db, err)) {
+	if (!db_begin(dbc, err)) {
 		return false;
 	}
 	for (size_t i = 0; i < sizeof(deletes) / sizeof(deletes[0]); i++) {
-		bool ok = deletes[i] != nullptr ? db_exec_i64(db, deletes[i], id, err)
-						: record_message_id_high_water(db, err);
+		bool ok = deletes[i] != nullptr ? db_exec_i64(dbc, deletes[i], id, err)
+						: record_message_id_high_water(dbc, err);
 		if (!ok) {
-			db_rollback(db);
+			db_rollback(dbc);
 			return false;
 		}
 	}
-	if (!db_commit(db, err)) {
-		db_rollback(db);
+	if (!db_commit(dbc, err)) {
+		db_rollback(dbc);
 		return false;
 	}
 	return true;
 }
 
-static bool cert_from_row(sqlite3_stmt *st, int first, struct db_device_certificate *c,
+static bool cert_from_row(struct db_stmt *st, int first, struct db_device_certificate *c,
 			  struct err **err) {
 	// id, label, [fingerprint,] last_used, last_ip
 	*c = (struct db_device_certificate){.id = col_i64(st, first)};
@@ -338,18 +348,18 @@ static bool cert_from_row(sqlite3_stmt *st, int first, struct db_device_certific
 
 bool db_get_device_certificate(struct db *db, struct str fingerprint, int64_t *user,
 			       struct db_device_certificate *out, bool *found, struct err **err) {
+	struct db_conn *dbc = &db->account;
 	*found = false;
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT user, id, label, last_used, last_ip\n"
-				      "                FROM DeviceCertificate\n"
-				      "                WHERE fingerprint = ?",
-				      err);
+	struct db_stmt *st = db_prepare(dbc,
+					"SELECT user, id, label, last_used, last_ip\n"
+					"                FROM DeviceCertificate\n"
+					"                WHERE fingerprint = ?",
+					err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_blob64(st, 1, fingerprint.len > 0 ? fingerprint.p : "", fingerprint.len,
-			    SQLITE_TRANSIENT);
-	int rc = sqlite3_step(st);
+	bind_pos_blob(st, 1, fingerprint.p, fingerprint.len);
+	int rc = db_step(st);
 	bool ok = true;
 	if (rc == SQLITE_ROW) {
 		struct db_device_certificate c;
@@ -366,33 +376,32 @@ bool db_get_device_certificate(struct db *db, struct str fingerprint, int64_t *u
 			db_device_certificate_free(&c);
 		}
 	} else if (rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_list_device_certificates(struct db *db, int64_t user_id, db_cert_vec *out,
 				 struct err **err) {
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT id, label, fingerprint, last_used, last_ip\n"
-				      "            FROM DeviceCertificate\n"
-				      "            WHERE user = ?",
-				      err);
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st = db_prepare(dbc,
+					"SELECT id, label, fingerprint, last_used, last_ip\n"
+					"            FROM DeviceCertificate\n"
+					"            WHERE user = ?",
+					err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, user_id);
+	bind_pos_i64(st, 1, user_id);
 	int rc;
 	bool ok = true;
 	db_cert_vec v = {0};
-	while (ok && (rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		struct db_device_certificate c;
 		ok = cert_from_row(st, 0, &c, err);
 		if (ok) {
-			const void *p = sqlite3_column_blob(st, 2);
-			strbuf_append(&c.fingerprint, p != nullptr ? p : "",
-				      (size_t)sqlite3_column_bytes(st, 2));
+			strbuf_append_str(&c.fingerprint, col_bytes(st, 2));
 			strbuf_append(&c.fingerprint, "", 0);
 			ok = col_time(st, 3, &c.last_used, err) && col_text(st, 4, &c.last_ip, err);
 		}
@@ -403,9 +412,9 @@ bool db_list_device_certificates(struct db *db, int64_t user_id, db_cert_vec *ou
 		}
 	}
 	if (ok && rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	if (!ok) {
 		db_cert_vec_free(&v);
 		return false;
@@ -419,10 +428,11 @@ bool db_list_device_certificates(struct db *db, int64_t user_id, db_cert_vec *ou
 
 bool db_store_device_certificate(struct db *db, int64_t user_id, struct db_device_certificate *c,
 				 struct err **err) {
-	sqlite3_stmt *st;
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st;
 	if (c->id != 0) {
 		st = db_prepare(
-			db,
+			dbc,
 			"UPDATE DeviceCertificate\n"
 			"                SET label = :label, fingerprint = :fingerprint, "
 			"last_used = :last_used, last_ip = :last_ip\n"
@@ -436,7 +446,7 @@ bool db_store_device_certificate(struct db *db, int64_t user_id, struct db_devic
 		bind_i64(st, ":id", c->id);
 	} else {
 		st = db_prepare(
-			db,
+			dbc,
 			"INSERT INTO DeviceCertificate(user, label, fingerprint, last_used, "
 			"last_ip)\n"
 			"                VALUES (:user, :label, :fingerprint, :last_used, "
@@ -448,36 +458,34 @@ bool db_store_device_certificate(struct db *db, int64_t user_id, struct db_devic
 		bind_i64(st, ":user", user_id);
 	}
 	bind_text(st, ":label", c->label);
-	sqlite3_bind_blob64(st, sqlite3_bind_parameter_index(st, ":fingerprint"),
-			    c->fingerprint.len > 0 ? c->fingerprint.buf : "", c->fingerprint.len,
-			    SQLITE_TRANSIENT);
+	bind_bytes(st, ":fingerprint", c->fingerprint.buf, c->fingerprint.len);
 	bind_time(st, ":last_used", &c->last_used);
 	bind_text(st, ":last_ip", c->last_ip);
-	int rc = sqlite3_step(st);
+	int rc = db_step(st);
 	bool ok = rc == SQLITE_DONE;
 	if (!ok) {
-		if (sqlite3_extended_errcode(db->conn) == SQLITE_CONSTRAINT_UNIQUE) {
+		if (db_errcode(dbc) == SQLITE_CONSTRAINT_UNIQUE) {
 			err_set(err, DB_ERR_DUPLICATE_DEVICE_CERTIFICATE,
 				"duplicate device certificate");
 		} else {
-			db_sql_err(db, err);
+			db_sql_err(dbc, err);
 		}
 	} else if (c->id == 0) {
-		c->id = sqlite3_last_insert_rowid(db->conn);
+		c->id = db_last_insert_rowid(dbc);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_delete_device_certificate(struct db *db, int64_t user_id, struct str fingerprint,
 				  struct err **err) {
-	sqlite3_stmt *st = db_prepare(
-		db, "DELETE FROM DeviceCertificate WHERE user = ? AND fingerprint = ?", err);
+	struct db_conn *dbc = &db->account;
+	struct db_stmt *st = db_prepare(
+		dbc, "DELETE FROM DeviceCertificate WHERE user = ? AND fingerprint = ?", err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, user_id);
-	sqlite3_bind_blob64(st, 2, fingerprint.len > 0 ? fingerprint.p : "", fingerprint.len,
-			    SQLITE_TRANSIENT);
-	return run(db, st, err);
+	bind_pos_i64(st, 1, user_id);
+	bind_pos_blob(st, 2, fingerprint.p, fingerprint.len);
+	return run(st, err);
 }

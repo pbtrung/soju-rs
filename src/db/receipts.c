@@ -3,27 +3,31 @@
 #include "base/map.h"
 #include "db/internal.h"
 
-static void bind_client(sqlite3_stmt *st, int i, const char *client) {
+static void bind_client(struct db_stmt *st, int i, const char *client) {
 	if (client[0] == '\0') {
-		sqlite3_bind_null(st, i);
+		bind_pos_null(st, i);
 	} else {
-		sqlite3_bind_text(st, i, client, -1, SQLITE_TRANSIENT);
+		bind_pos_text(st, i, client);
 	}
 }
 
 bool db_list_delivery_receipts(struct db *db, int64_t network_id, db_receipt_vec *out,
 			       struct err **err) {
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT id, target, client, internal_msgid\n"
-				      "            FROM DeliveryReceipt\n"
-				      "            WHERE network = ?",
-				      err);
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st = db_prepare(dbc,
+					"SELECT id, target, client, internal_msgid\n"
+					"            FROM DeliveryReceipt\n"
+					"            WHERE network = ?",
+					err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, network_id);
+	bind_pos_i64(st, 1, network_id);
 	int rc;
-	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while ((rc = db_step(st)) == SQLITE_ROW) {
 		vec_push(out, (struct db_delivery_receipt){
 				      .id = col_i64(st, 0),
 				      .target = col_lossy(st, 1),
@@ -31,8 +35,8 @@ bool db_list_delivery_receipts(struct db *db, int64_t network_id, db_receipt_vec
 				      .internal_msg_id = col_lossy(st, 3),
 			      });
 	}
-	bool ok = rc == SQLITE_DONE || db_sql_err(db, err);
-	sqlite3_finalize(st);
+	bool ok = rc == SQLITE_DONE || db_sql_err(dbc, err);
+	db_finalize(st);
 	return ok;
 }
 
@@ -63,16 +67,17 @@ static void saved_free(void *p) {
 
 // Writes only what changed: deletes duplicates and receipts of targets no
 // longer listed, updates changed message IDs, inserts new targets
-static bool store_changes(struct db *db, int64_t network_id, const char *client,
+static bool store_changes(struct db_conn *dbc, int64_t network_id, const char *client,
 			  struct db_delivery_receipt *receipts, size_t n, struct err **err) {
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT id,target,internal_msgid FROM DeliveryReceipt WHERE "
-				      "network=? AND client IS ? ORDER BY id",
-				      err);
+	struct db_stmt *st =
+		db_prepare(dbc,
+			   "SELECT id,target,internal_msgid FROM DeliveryReceipt WHERE "
+			   "network=? AND client IS ? ORDER BY id",
+			   err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, network_id);
+	bind_pos_i64(st, 1, network_id);
 	bind_client(st, 2, client);
 	struct strmap existing;
 	strmap_init(&existing, saved_free);
@@ -80,7 +85,7 @@ static bool store_changes(struct db *db, int64_t network_id, const char *client,
 	int64_t *ids = xcalloc(n > 0 ? n : 1, sizeof(*ids));
 	bool ok = true;
 	int rc;
-	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while ((rc = db_step(st)) == SQLITE_ROW) {
 		AUTOFREE char *target = col_lossy(st, 1);
 		struct saved *s = xmalloc(sizeof(*s));
 		*s = (struct saved){.id = col_i64(st, 0), .message = col_lossy(st, 2)};
@@ -91,9 +96,9 @@ static bool store_changes(struct db *db, int64_t network_id, const char *client,
 		strmap_set(&existing, target, s);
 	}
 	if (rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	for (size_t i = 0; ok && i < n; i++) {
 		struct saved *s = strmap_take(&existing, receipts[i].target);
 		if (s != nullptr) {
@@ -120,35 +125,35 @@ static bool store_changes(struct db *db, int64_t network_id, const char *client,
 		struct db_delivery_receipt *r = &receipts[ch.i];
 		switch (ch.kind) {
 		case CHANGE_DELETE:
-			ok = db_exec_i64(db, "DELETE FROM DeliveryReceipt WHERE id=?", ch.id, err);
+			ok = db_exec_i64(dbc, "DELETE FROM DeliveryReceipt WHERE id=?", ch.id, err);
 			break;
 		case CHANGE_UPDATE:
 			st = db_prepare(
-				db, "UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?", err);
+				dbc, "UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?", err);
 			ok = st != nullptr;
 			if (ok) {
-				sqlite3_bind_text(st, 1, r->internal_msg_id, -1, SQLITE_TRANSIENT);
-				sqlite3_bind_int64(st, 2, ch.id);
-				ok = db_step_done(db, st, err);
-				sqlite3_finalize(st);
+				bind_pos_text(st, 1, r->internal_msg_id);
+				bind_pos_i64(st, 2, ch.id);
+				ok = db_step_done(st, err);
+				db_finalize(st);
 			}
 			break;
 		case CHANGE_INSERT:
-			st = db_prepare(db,
+			st = db_prepare(dbc,
 					"INSERT INTO "
 					"DeliveryReceipt(id,network,target,client,internal_msgid) "
 					"VALUES(?,?,?,?,?)",
 					err);
 			ok = st != nullptr;
 			if (ok) {
-				sqlite3_bind_null(st, 1);
-				sqlite3_bind_int64(st, 2, network_id);
-				sqlite3_bind_text(st, 3, r->target, -1, SQLITE_TRANSIENT);
+				bind_pos_null(st, 1);
+				bind_pos_i64(st, 2, network_id);
+				bind_pos_text(st, 3, r->target);
 				bind_client(st, 4, client);
-				sqlite3_bind_text(st, 5, r->internal_msg_id, -1, SQLITE_TRANSIENT);
-				ok = db_step_done(db, st, err);
-				sqlite3_finalize(st);
-				ids[ch.i] = sqlite3_last_insert_rowid(db->conn);
+				bind_pos_text(st, 5, r->internal_msg_id);
+				ok = db_step_done(st, err);
+				db_finalize(st);
+				ids[ch.i] = db_last_insert_rowid(dbc);
 			}
 			break;
 		}
@@ -164,20 +169,20 @@ static bool store_changes(struct db *db, int64_t network_id, const char *client,
 }
 
 // Preserves the old NULL-client duplicate semantics for unusual callers
-static bool replace_duplicates(struct db *db, int64_t network_id, const char *client,
+static bool replace_duplicates(struct db_conn *dbc, int64_t network_id, const char *client,
 			       struct db_delivery_receipt *receipts, size_t n, struct err **err) {
-	sqlite3_stmt *st = db_prepare(
-		db, "DELETE FROM DeliveryReceipt WHERE network = ? AND client IS ?", err);
+	struct db_stmt *st = db_prepare(
+		dbc, "DELETE FROM DeliveryReceipt WHERE network = ? AND client IS ?", err);
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, network_id);
+	bind_pos_i64(st, 1, network_id);
 	bind_client(st, 2, client);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	for (size_t i = 0; ok && i < n; i++) {
 		st = db_prepare(
-			db,
+			dbc,
 			"INSERT INTO DeliveryReceipt(network, target, client, "
 			"internal_msgid)\n"
 			"                VALUES (:network, :target, :client, :internal_msgid)",
@@ -189,9 +194,9 @@ static bool replace_duplicates(struct db *db, int64_t network_id, const char *cl
 		bind_text(st, ":target", receipts[i].target);
 		bind_text_or_null(st, ":client", client);
 		bind_text(st, ":internal_msgid", receipts[i].internal_msg_id);
-		ok = db_step_done(db, st, err);
-		sqlite3_finalize(st);
-		receipts[i].id = sqlite3_last_insert_rowid(db->conn);
+		ok = db_step_done(st, err);
+		db_finalize(st);
+		receipts[i].id = db_last_insert_rowid(dbc);
 	}
 	return ok;
 }
@@ -199,6 +204,10 @@ static bool replace_duplicates(struct db *db, int64_t network_id, const char *cl
 bool db_store_client_delivery_receipts(struct db *db, int64_t network_id, const char *client,
 				       struct db_delivery_receipt *receipts, size_t n,
 				       struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	struct strmap unique;
 	strmap_init(&unique, nullptr);
 	for (size_t i = 0; i < n; i++) {
@@ -206,13 +215,13 @@ bool db_store_client_delivery_receipts(struct db *db, int64_t network_id, const 
 	}
 	bool dup = strmap_len(&unique) != n;
 	strmap_free(&unique);
-	if (!db_begin(db, err)) {
+	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	bool ok = dup ? replace_duplicates(db, network_id, client, receipts, n, err)
-		      : store_changes(db, network_id, client, receipts, n, err);
-	if (!ok || !db_commit(db, err)) {
-		db_rollback(db);
+	bool ok = dup ? replace_duplicates(dbc, network_id, client, receipts, n, err)
+		      : store_changes(dbc, network_id, client, receipts, n, err);
+	if (!ok || !db_commit(dbc, err)) {
+		db_rollback(dbc);
 		return false;
 	}
 	return true;
@@ -220,9 +229,13 @@ bool db_store_client_delivery_receipts(struct db *db, int64_t network_id, const 
 
 bool db_get_read_receipt(struct db *db, int64_t network_id, const char *name,
 			 struct db_read_receipt *out, bool *found, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	*found = false;
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "SELECT id, timestamp FROM ReadReceipt WHERE network = :network "
 			   "AND target = :target",
 			   err);
@@ -231,7 +244,7 @@ bool db_get_read_receipt(struct db *db, int64_t network_id, const char *name,
 	}
 	bind_i64(st, ":network", network_id);
 	bind_text(st, ":target", name);
-	int rc = sqlite3_step(st);
+	int rc = db_step(st);
 	bool ok = true;
 	if (rc == SQLITE_ROW) {
 		struct db_read_receipt r = {.id = col_i64(st, 0)};
@@ -242,17 +255,21 @@ bool db_get_read_receipt(struct db *db, int64_t network_id, const char *name,
 			*found = true;
 		}
 	} else if (rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_store_read_receipt(struct db *db, int64_t network_id, struct db_read_receipt *r,
 			   struct err **err) {
-	sqlite3_stmt *st;
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st;
 	if (r->id != 0) {
-		st = db_prepare(db,
+		st = db_prepare(dbc,
 				"UPDATE ReadReceipt SET timestamp = :timestamp WHERE id = :id AND "
 				"(timestamp IS NOT :timestamp)",
 				err);
@@ -261,7 +278,7 @@ bool db_store_read_receipt(struct db *db, int64_t network_id, struct db_read_rec
 		}
 		bind_i64(st, ":id", r->id);
 	} else {
-		st = db_prepare(db,
+		st = db_prepare(dbc,
 				"INSERT INTO ReadReceipt(network, target, timestamp)\n"
 				"                VALUES (:network, :target, :timestamp)",
 				err);
@@ -272,10 +289,10 @@ bool db_store_read_receipt(struct db *db, int64_t network_id, struct db_read_rec
 		bind_text(st, ":target", r->target);
 	}
 	bind_time(st, ":timestamp", &r->timestamp);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	if (ok && r->id == 0) {
-		r->id = sqlite3_last_insert_rowid(db->conn);
+		r->id = db_last_insert_rowid(dbc);
 	}
 	return ok;
 }

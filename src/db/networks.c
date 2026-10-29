@@ -6,8 +6,12 @@
 #include "db/internal.h"
 
 bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struct err **err) {
-	sqlite3_stmt *st = db_prepare(
-		db,
+	struct db_conn *dbc = db_user_conn(db, user_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st = db_prepare(
+		dbc,
 		"SELECT id, name, addr, nick, username, realname, certfp, pass,\n"
 		"                connect_commands, sasl_mechanism, sasl_plain_username, "
 		"sasl_plain_password,\n"
@@ -18,11 +22,11 @@ bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struc
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, user_id);
+	bind_pos_i64(st, 1, user_id);
 	db_network_vec v = {0};
 	int rc;
 	bool ok = true;
-	while (ok && (rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		struct db_network n = {.id = col_i64(st, 0)};
 		ok = col_text(st, 2, &n.addr, err);
 		n.name = col_lossy(st, 1);
@@ -54,9 +58,9 @@ bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struc
 		}
 	}
 	if (ok && rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	if (!ok) {
 		db_network_vec_free(&v);
 		return false;
@@ -69,6 +73,10 @@ bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struc
 }
 
 bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, struct err **err) {
+	struct db_conn *dbc = db_user_conn(db, user_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	const char *mech = nullptr, *plain_user = nullptr, *plain_pass = nullptr;
 	if (n->sasl.mechanism[0] != '\0') {
 		mech = n->sasl.mechanism;
@@ -94,10 +102,10 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 		strbuf_append_cstr(&cc, n->connect_commands.data[i]);
 	}
 
-	sqlite3_stmt *st;
+	struct db_stmt *st;
 	if (n->id != 0) {
 		st = db_prepare(
-			db,
+			dbc,
 			"UPDATE Network\n"
 			"                SET name = :name, addr = :addr, nick = :nick, username = "
 			":username,\n"
@@ -128,7 +136,7 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 		bind_i64(st, ":id", n->id);
 	} else {
 		st = db_prepare(
-			db,
+			dbc,
 			"INSERT INTO Network(id, user, name, addr, nick, username, realname, "
 			"certfp, "
 			"pass,\n"
@@ -174,15 +182,19 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 	bind_blob(st, ":sasl_external_key", &n->sasl.external_key);
 	bind_i64(st, ":auto_away", n->auto_away);
 	bind_i64(st, ":enabled", n->enabled);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	if (ok && n->id == 0) {
-		n->id = sqlite3_last_insert_rowid(db->conn);
+		n->id = db_last_insert_rowid(dbc);
 	}
 	return ok;
 }
 
 bool db_delete_network(struct db *db, int64_t id, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	static const char *const deletes[] = {
 		("DELETE FROM Message WHERE target IN (SELECT id FROM MessageTarget WHERE network "
 		 "= "
@@ -194,23 +206,27 @@ bool db_delete_network(struct db *db, int64_t id, struct err **err) {
 		"DELETE FROM Channel WHERE network = ?",
 		"DELETE FROM Network WHERE id = ?",
 	};
-	if (!db_begin(db, err)) {
+	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	bool ok = record_message_id_high_water(db, err);
+	bool ok = record_message_id_high_water(dbc, err);
 	for (size_t i = 0; ok && i < sizeof(deletes) / sizeof(deletes[0]); i++) {
-		ok = db_exec_i64(db, deletes[i], id, err);
+		ok = db_exec_i64(dbc, deletes[i], id, err);
 	}
-	if (!ok || !db_commit(db, err)) {
-		db_rollback(db);
+	if (!ok || !db_commit(dbc, err)) {
+		db_rollback(dbc);
 		return false;
 	}
 	return true;
 }
 
 bool db_list_channels(struct db *db, int64_t network_id, db_channel_vec *out, struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "SELECT\n"
 			   "                id, name, key, detached, detached_internal_msgid,\n"
 			   "                relay_detached, reattach_on, detach_after, "
@@ -221,9 +237,9 @@ bool db_list_channels(struct db *db, int64_t network_id, db_channel_vec *out, st
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, network_id);
+	bind_pos_i64(st, 1, network_id);
 	int rc;
-	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while ((rc = db_step(st)) == SQLITE_ROW) {
 		int64_t detach_after = col_i64(st, 7);
 		uint64_t secs = detach_after > 0 ? (uint64_t)detach_after : 0;
 		struct db_channel c = {
@@ -240,18 +256,22 @@ bool db_list_channels(struct db *db, int64_t network_id, db_channel_vec *out, st
 		};
 		vec_push(out, c);
 	}
-	bool ok = rc == SQLITE_DONE || db_sql_err(db, err);
-	sqlite3_finalize(st);
+	bool ok = rc == SQLITE_DONE || db_sql_err(dbc, err);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_store_channel(struct db *db, int64_t network_id, struct db_channel *c, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	// as_secs_f64().ceil()
 	int64_t detach_after = (int64_t)ceil((double)c->detach_after_ns / 1e9);
-	sqlite3_stmt *st;
+	struct db_stmt *st;
 	if (c->id != 0) {
 		st = db_prepare(
-			db,
+			dbc,
 			"UPDATE Channel\n"
 			"                SET network = :network, name = :name, key = :key, "
 			"detached = "
@@ -276,7 +296,7 @@ bool db_store_channel(struct db *db, int64_t network_id, struct db_channel *c, s
 		bind_i64(st, ":id", c->id);
 	} else {
 		st = db_prepare(
-			db,
+			dbc,
 			"INSERT INTO Channel(id, network, name, key, detached, "
 			"detached_internal_msgid, relay_detached, reattach_on, detach_after, "
 			"detach_on)\n"
@@ -298,14 +318,18 @@ bool db_store_channel(struct db *db, int64_t network_id, struct db_channel *c, s
 	bind_i64(st, ":reattach_on", c->reattach_on);
 	bind_i64(st, ":detach_after", detach_after);
 	bind_i64(st, ":detach_on", c->detach_on);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	if (ok && c->id == 0) {
-		c->id = sqlite3_last_insert_rowid(db->conn);
+		c->id = db_last_insert_rowid(dbc);
 	}
 	return ok;
 }
 
 bool db_delete_channel(struct db *db, int64_t id, struct err **err) {
-	return db_exec_i64(db, "DELETE FROM Channel WHERE id = ?", id, err);
+	struct db_conn *dbc = db_channel_conn(db, id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	return db_exec_i64(dbc, "DELETE FROM Channel WHERE id = ?", id, err);
 }

@@ -7,8 +7,12 @@
 
 bool db_get_message_last_id(struct db *db, int64_t network_id, const char *name, int64_t *out,
 			    struct err **err) {
-	sqlite3_stmt *st = db_prepare(
-		db,
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st = db_prepare(
+		dbc,
 		"SELECT id FROM Message\n"
 		"                WHERE target = (SELECT id FROM MessageTarget WHERE network "
 		"= :network AND target = :target)\n"
@@ -19,25 +23,30 @@ bool db_get_message_last_id(struct db *db, int64_t network_id, const char *name,
 	}
 	bind_i64(st, ":network", network_id);
 	bind_text(st, ":target", name);
-	int rc = sqlite3_step(st);
+	int rc = db_step(st);
 	*out = rc == SQLITE_ROW ? col_i64(st, 0) : 0;
-	bool ok = rc == SQLITE_ROW || rc == SQLITE_DONE || db_sql_err(db, err);
-	sqlite3_finalize(st);
+	bool ok = rc == SQLITE_ROW || rc == SQLITE_DONE || db_sql_err(dbc, err);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_get_message_target(struct db *db, int64_t network_id, const char *target,
 			   struct db_message_target *out, struct err **err) {
-	sqlite3_stmt *st = db_prepare(db,
-				      "SELECT id, pinned, muted, blocked FROM MessageTarget WHERE "
-				      "network = :network AND target = :target",
-				      err);
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st =
+		db_prepare(dbc,
+			   "SELECT id, pinned, muted, blocked FROM MessageTarget WHERE "
+			   "network = :network AND target = :target",
+			   err);
 	if (st == nullptr) {
 		return false;
 	}
 	bind_i64(st, ":network", network_id);
 	bind_text(st, ":target", target);
-	int rc = sqlite3_step(st);
+	int rc = db_step(st);
 	struct db_message_target mt = {.target = xstrdup(target)};
 	if (rc == SQLITE_ROW) {
 		mt.id = col_i64(st, 0);
@@ -45,8 +54,8 @@ bool db_get_message_target(struct db *db, int64_t network_id, const char *target
 		mt.muted = col_bool(st, 2);
 		mt.blocked = col_bool(st, 3);
 	}
-	bool ok = rc == SQLITE_ROW || rc == SQLITE_DONE || db_sql_err(db, err);
-	sqlite3_finalize(st);
+	bool ok = rc == SQLITE_ROW || rc == SQLITE_DONE || db_sql_err(dbc, err);
+	db_finalize(st);
 	if (ok) {
 		*out = mt;
 	} else {
@@ -57,8 +66,12 @@ bool db_get_message_target(struct db *db, int64_t network_id, const char *target
 
 bool db_list_message_targets(struct db *db, int64_t network_id, db_message_target_vec *out,
 			     struct err **err) {
-	sqlite3_stmt *st =
-		db_prepare(db,
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st =
+		db_prepare(dbc,
 			   "SELECT id, target, pinned, muted, blocked\n"
 			   "            FROM MessageTarget\n"
 			   "            WHERE network = ? AND (pinned OR muted OR blocked)",
@@ -66,9 +79,9 @@ bool db_list_message_targets(struct db *db, int64_t network_id, db_message_targe
 	if (st == nullptr) {
 		return false;
 	}
-	sqlite3_bind_int64(st, 1, network_id);
+	bind_pos_i64(st, 1, network_id);
 	int rc;
-	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while ((rc = db_step(st)) == SQLITE_ROW) {
 		vec_push(out, (struct db_message_target){
 				      .id = col_i64(st, 0),
 				      .target = col_lossy(st, 1),
@@ -77,17 +90,21 @@ bool db_list_message_targets(struct db *db, int64_t network_id, db_message_targe
 				      .blocked = col_bool(st, 4),
 			      });
 	}
-	bool ok = rc == SQLITE_DONE || db_sql_err(db, err);
-	sqlite3_finalize(st);
+	bool ok = rc == SQLITE_DONE || db_sql_err(dbc, err);
+	db_finalize(st);
 	return ok;
 }
 
 bool db_store_message_target(struct db *db, int64_t network_id, struct db_message_target *t,
 			     struct err **err) {
-	sqlite3_stmt *st;
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st;
 	if (t->id != 0) {
 		st = db_prepare(
-			db,
+			dbc,
 			"UPDATE MessageTarget SET pinned = :pinned, muted = :muted, blocked = "
 			":blocked WHERE id = :id AND (pinned IS NOT :pinned OR muted IS NOT "
 			":muted OR blocked IS NOT :blocked)",
@@ -98,7 +115,7 @@ bool db_store_message_target(struct db *db, int64_t network_id, struct db_messag
 		bind_i64(st, ":id", t->id);
 	} else {
 		st = db_prepare(
-			db,
+			dbc,
 			"INSERT INTO\n"
 			"                MessageTarget(network, target, pinned, muted, blocked)\n"
 			"                VALUES (:network, :target, :pinned, :muted, :blocked)",
@@ -112,10 +129,10 @@ bool db_store_message_target(struct db *db, int64_t network_id, struct db_messag
 	bind_i64(st, ":pinned", t->pinned);
 	bind_i64(st, ":muted", t->muted);
 	bind_i64(st, ":blocked", t->blocked);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_finalize(st);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
 	if (ok && t->id == 0) {
-		t->id = sqlite3_last_insert_rowid(db->conn);
+		t->id = db_last_insert_rowid(dbc);
 	}
 	return ok;
 }
@@ -147,24 +164,28 @@ static bool message_time_text(const struct irc_msg *msg, char **time, char **tex
 
 bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 		       struct irc_msg *const *msgs, size_t n, i64vec *ids, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	if (n == 0) {
 		return true;
 	}
-	if (db->insert_target == nullptr) {
-		db->insert_target = db_prepare(db,
-					       "INSERT INTO MessageTarget(network, target)\n"
-					       "            VALUES (:network, :target)\n"
-					       "            ON CONFLICT DO NOTHING",
-					       err);
-		if (db->insert_target == nullptr) {
+	if (dbc->insert_target == nullptr) {
+		dbc->insert_target = db_prepare(dbc,
+						"INSERT INTO MessageTarget(network, target)\n"
+						"            VALUES (:network, :target)\n"
+						"            ON CONFLICT DO NOTHING",
+						err);
+		if (dbc->insert_target == nullptr) {
 			return false;
 		}
 	}
-	if (db->insert_message == nullptr) {
+	if (dbc->insert_message == nullptr) {
 		// Message IDs are delivery receipt cursors: never reuse the IDs of
 		// deleted messages, see record_message_id_high_water
-		db->insert_message = db_prepare(
-			db,
+		dbc->insert_message = db_prepare(
+			dbc,
 			"INSERT INTO Message(id, target, raw, time, sender, text)\n"
 			"                SELECT max(\n"
 			"                        coalesce((SELECT max(id) FROM Message), 0),\n"
@@ -175,20 +196,20 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 			"                FROM MessageTarget as t\n"
 			"                WHERE network = :network AND target = :target",
 			err);
-		if (db->insert_message == nullptr) {
+		if (dbc->insert_message == nullptr) {
 			return false;
 		}
 	}
-	if (!db_begin(db, err)) {
+	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	sqlite3_stmt *st = db->insert_target;
+	struct db_stmt *st = dbc->insert_target;
 	bind_i64(st, ":network", network_id);
 	bind_text(st, ":target", name);
-	bool ok = db_step_done(db, st, err);
-	sqlite3_clear_bindings(st);
+	bool ok = db_step_done(st, err);
+	db_clear_bindings(st);
 	size_t start = ids->len;
-	st = db->insert_message;
+	st = dbc->insert_message;
 	for (size_t i = 0; ok && i < n; i++) {
 		char *time = nullptr, *text = nullptr;
 		if (!message_time_text(msgs[i], &time, &text, err)) {
@@ -206,16 +227,16 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 		} else {
 			bind_null(st, ":text");
 		}
-		ok = db_step_done(db, st, err);
-		sqlite3_clear_bindings(st);
+		ok = db_step_done(st, err);
+		db_clear_bindings(st);
 		xfree(time);
 		xfree(text);
 		if (ok) {
-			vec_push(ids, sqlite3_last_insert_rowid(db->conn));
+			vec_push(ids, db_last_insert_rowid(dbc));
 		}
 	}
-	if (!ok || !db_commit(db, err)) {
-		db_rollback(db);
+	if (!ok || !db_commit(dbc, err)) {
+		db_rollback(dbc);
 		ids->len = start;
 		return false;
 	}
@@ -225,6 +246,10 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 				     const struct db_message_options *o, db_target_last_vec *out,
 				     struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	const char *inner =
 		o->events
 			? "SELECT max(latest) FROM (\n"
@@ -251,7 +276,7 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 	}
 	strbuf_append_cstr(&q, o->take_last ? "ORDER BY latest DESC " : "ORDER BY latest ASC ");
 	strbuf_append_cstr(&q, "LIMIT :limit");
-	sqlite3_stmt *st = db_prepare(db, strbuf_cstr(&q), err);
+	struct db_stmt *st = db_prepare(dbc, strbuf_cstr(&q), err);
 	if (st == nullptr) {
 		return false;
 	}
@@ -266,7 +291,7 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 	db_target_last_vec v = {0};
 	int rc;
 	bool ok = true;
-	while (ok && (rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		struct db_target_last t = {.name = col_lossy(st, 0)};
 		ok = col_time(st, 1, &t.latest_message, err);
 		if (ok) {
@@ -276,9 +301,9 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 		}
 	}
 	if (ok && rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	if (!ok) {
 		db_target_last_vec_free(&v);
 		return false;
@@ -294,6 +319,10 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 			  const struct db_message_options *o, db_message_row_vec *out,
 			  struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	const char *search = o->text != nullptr ? o->text : "";
 	const char *sender = o->sender != nullptr ? o->sender : "";
 	AUTO_STRBUF struct strbuf text = STRBUF_INIT;
@@ -355,7 +384,7 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 					    : "ORDER BY time ASC, id ASC ");
 	strbuf_append_cstr(&q, "LIMIT :limit");
 
-	sqlite3_stmt *st = db_prepare(db, strbuf_cstr(&q), err);
+	struct db_stmt *st = db_prepare(dbc, strbuf_cstr(&q), err);
 	if (st == nullptr) {
 		return false;
 	}
@@ -381,7 +410,7 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 	db_message_row_vec v = {0};
 	int rc;
 	bool ok = true;
-	while (ok && (rc = sqlite3_step(st)) == SQLITE_ROW) {
+	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		AUTOFREE char *raw = col_lossy(st, 2);
 		enum irc_parse_error pe;
 		struct irc_msg *m = irc_msg_parse(str_from(raw), &pe);
@@ -396,9 +425,9 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 			     });
 	}
 	if (ok && rc != SQLITE_DONE) {
-		ok = db_sql_err(db, err);
+		ok = db_sql_err(dbc, err);
 	}
-	sqlite3_finalize(st);
+	db_finalize(st);
 	if (!ok) {
 		db_message_row_vec_free(&v);
 		return false;
@@ -412,6 +441,10 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 
 bool db_list_messages(struct db *db, int64_t network_id, const char *name,
 		      const struct db_message_options *o, irc_msg_vec *out, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
 	db_message_row_vec rows = {0};
 	if (!db_list_message_rows(db, network_id, name, o, &rows, err)) {
 		return false;
@@ -424,8 +457,13 @@ bool db_list_messages(struct db *db, int64_t network_id, const char *name,
 	return true;
 }
 
-bool record_message_id_high_water(struct db *db, struct err **err) {
-	return db_exec_one(db,
+bool record_message_id_high_water(struct db_conn *dbc, struct err **err) {
+	// Turso tenants reserve every ID through this row before inserting:
+	// their clustered table can't seek max(id)
+	if (dbc->remote) {
+		return true;
+	}
+	return db_exec_one(dbc,
 			   "INSERT INTO MessageIdHighWater(id, last_id)\n"
 			   "        SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1\n"
 			   "        ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id\n"
@@ -435,18 +473,19 @@ bool record_message_id_high_water(struct db *db, struct err **err) {
 
 bool db_delete_messages_before(struct db *db, struct timestamp before, size_t limit,
 			       size_t *deleted, struct err **err) {
+	struct db_conn *dbc = &db->account;
 	*deleted = 0;
 	if (limit == 0) {
 		return true;
 	}
-	if (!db_begin(db, err)) {
+	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	bool ok = record_message_id_high_water(db, err);
-	sqlite3_stmt *st = nullptr;
+	bool ok = record_message_id_high_water(dbc, err);
+	struct db_stmt *st = nullptr;
 	if (ok) {
 		st = db_prepare(
-			db,
+			dbc,
 			"DELETE FROM Message WHERE id IN (\n"
 			"                SELECT id FROM (\n"
 			"                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m "
@@ -465,12 +504,12 @@ bool db_delete_messages_before(struct db *db, struct timestamp before, size_t li
 		AUTOFREE char *b = format_server_time_cstr(before);
 		bind_text(st, ":before", b);
 		bind_i64(st, ":limit", limit > INT64_MAX ? INT64_MAX : (int64_t)limit);
-		ok = db_step_done(db, st, err);
-		*deleted = (size_t)sqlite3_changes64(db->conn);
+		ok = db_step_done(st, err);
+		*deleted = (size_t)db_changes(dbc);
 	}
-	sqlite3_finalize(st);
-	if (!ok || !db_commit(db, err)) {
-		db_rollback(db);
+	db_finalize(st);
+	if (!ok || !db_commit(dbc, err)) {
+		db_rollback(dbc);
 		*deleted = 0;
 		return false;
 	}
