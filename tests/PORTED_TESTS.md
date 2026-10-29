@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 90 of 165 unit tests (phases 0–4); 0 of 17 scenarios.
+Ported so far: 102 of 165 unit tests (phases 0–5); 0 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -139,18 +139,18 @@ Also compared against the Rust code by the differential harness
 | `src/service/mod.rs` | `help_listing` | pending: phase 7 |
 | `src/service/mod.rs` | `durations` | pending: phase 7 |
 | `src/tls.rs` | `pinned_cert` | `test_net_misc.c`: `test_pinned_cert` |
-| `src/upstream/mod.rs` | `errno_messages` | pending: phase 5 |
-| `src/upstream/mod.rs` | `labels` | pending: phase 5 |
-| `src/upstream/mod.rs` | `registration_errors` | pending: phase 5 |
-| `src/upstream/mod.rs` | `caps_requested` | pending: phase 5 |
-| `src/upstream/mod.rs` | `cap_ls_continuation` | pending: phase 5 |
-| `src/upstream/mod.rs` | `whox_fields` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `whois_no_such_nick` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `who_try_again` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `auto_detach` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `labeled_nested_batch` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `registration_timeout` | pending: phase 5 |
-| `src/upstream/server_tests.rs` | `sasl_cap_nak_ends_capability_negotiation` | pending: phase 5 |
+| `src/upstream/mod.rs` | `errno_messages` | `test_upstream.c`: `test_errno_messages` |
+| `src/upstream/mod.rs` | `labels` | `test_upstream.c`: `test_labels` |
+| `src/upstream/mod.rs` | `registration_errors` | `test_upstream.c`: `test_registration_errors` |
+| `src/upstream/mod.rs` | `caps_requested` | `test_upstream.c`: `test_caps_requested` |
+| `src/upstream/mod.rs` | `cap_ls_continuation` | `test_upstream.c`: `test_cap_ls_continuation` |
+| `src/upstream/mod.rs` | `whox_fields` | `test_upstream.c`: `test_whox_fields` |
+| `src/upstream/server_tests.rs` | `whois_no_such_nick` | `test_upstream.c`: `test_whois_no_such_nick` |
+| `src/upstream/server_tests.rs` | `who_try_again` | `test_upstream.c`: `test_who_try_again` |
+| `src/upstream/server_tests.rs` | `auto_detach` | `test_upstream.c`: `test_auto_detach` |
+| `src/upstream/server_tests.rs` | `labeled_nested_batch` | `test_upstream.c`: `test_labeled_nested_batch` |
+| `src/upstream/server_tests.rs` | `registration_timeout` | `test_upstream.c`: `test_registration_timeout` |
+| `src/upstream/server_tests.rs` | `sasl_cap_nak_ends_capability_negotiation` | `test_upstream.c`: `test_sasl_cap_nak_ends_capability_negotiation` |
 | `src/user/delivered.rs` | `store` | pending: phase 6 |
 | `src/user/mod.rs` | `local_addr` | pending: phase 6 |
 | `src/user/mod.rs` | `highlight` | pending: phase 6 |
@@ -205,3 +205,8 @@ checks welcome, dynamic ISUPPORT, tagged virtual welcomes, independent
 labels, detach, late routing and parent teardown. `fuzz_downstream_session`
 exercises CAP/SASL registration, authentication completion and virtual
 connection creation/destruction with a full loop/DB teardown per input.
+
+Phase 5: upstream protocol fixtures cover all twelve upstream Rust tests.
+Additional C-only coverage checks the live TCP/DNS runner, destruction with
+DNS outstanding, the 64-command budget and multiline assembly.
+`fuzz_upstream_session` interleaves hostile input, commands and timers.

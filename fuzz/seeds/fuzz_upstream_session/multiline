@@ -1,0 +1,10 @@
+:server 001 fuzzer :Welcome
+:bob!b@host BATCH +m draft/multiline #chan
+@batch=m :bob!b@host PRIVMSG #chan :one
+@batch=m :bob!b@host PRIVMSG #chan :two
+:bob!b@host BATCH -m
+@label=sd-1-0-label :server BATCH +o labeled-response
+@batch=o :server BATCH +i nested
+@batch=i :server 311 fuzzer x u h * :X
+:server BATCH -i
+:server BATCH -o

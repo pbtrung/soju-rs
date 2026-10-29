@@ -1,0 +1,11 @@
+:server CAP * LS * :batch message-tags
+:server CAP * LS :labeled-response echo-message draft/multiline
+:server CAP * ACK :batch message-tags labeled-response echo-message draft/multiline
+:server 001 fuzzer :Welcome
+:server 005 fuzzer CHANTYPES=#& PREFIX=(ov)@+ CHANMODES=beI,k,l,imnst CASEMAPPING=rfc1459 :supported
+:fuzzer!u@host JOIN #chan
+:server 353 fuzzer = #chan :@fuzzer +bob
+:server 366 fuzzer #chan :end
+:bob!b@host PRIVMSG #chan :hello
+:bob!b@host NICK alice
+:alice!b@host QUIT :bye

@@ -1,6 +1,6 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–4 implemented; phases 5–6 next**
+Status: **phases 0–5 implemented; phases 6–7 next**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
 and the stateful downstream session fuzzer. Network selection, channel
@@ -732,3 +732,8 @@ Phase 4: welcome/sync and multiplex lifecycle socket tests, downstream
 session seed replay, GCC/Clang debug and ASan/UBSan/LSan suites, clang-tidy,
 and a 60-second libFuzzer run. Long fuzzing and the full target/mode matrix
 are still required by the phase exit criteria.
+
+Phase 5: upstream protocol and TCP/DNS lifetime tests, GCC/Clang debug and
+ASan suites, clang-tidy, and a 60-second upstream-session libFuzzer run.
+Phase 4 additionally passed GCC/Clang release, UBSan and TSan, and Clang
+MSan. Valgrind could not configure because the executable is not installed.
