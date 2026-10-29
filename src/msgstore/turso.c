@@ -147,7 +147,8 @@ static bool reserve_ahead(struct batch_store *b, struct err **err) {
 		return false;
 	}
 	if (!b->has_next && !r->running && now_ms() >= b->reserve_retry) {
-		*r = (struct reservation){.writer = b->allocator, .count = (int64_t)b->limit * 1024};
+		*r = (struct reservation){.writer = b->allocator,
+					  .count = (int64_t)b->limit * 1024};
 		atomic_init(&r->done, false);
 		if (pthread_create(&r->thread, nullptr, reserve_run, r) != 0) {
 			return err_set(err, 0, "failed to start the Turso message ID allocator");
@@ -162,12 +163,13 @@ bool batch_store_prepare(struct batch_store *b, struct err **err) {
 		return true;
 	}
 	b->writer = db_message_writer_new(b->db, b->user_id, err);
-	b->allocator = b->writer != nullptr ? db_message_writer_new(b->db, b->user_id, err) : nullptr;
+	b->allocator =
+		b->writer != nullptr ? db_message_writer_new(b->db, b->user_id, err) : nullptr;
 	// Amortized reservations. IDs are never reused across crashes: gaps in
 	// history cursors are intentional and harmless.
 	if (b->allocator == nullptr ||
-	    !db_message_writer_reserve(b->writer, (int64_t)b->limit * 1024, &b->next_id,
-				       &b->end_id, err) ||
+	    !db_message_writer_reserve(b->writer, (int64_t)b->limit * 1024, &b->next_id, &b->end_id,
+				       err) ||
 	    !db_message_buffer_open(&b->index, err)) {
 		return false;
 	}
@@ -213,14 +215,17 @@ static bool reap(struct batch_store *b, bool wait, struct err **err) {
 	if (f->ok) {
 		size_t rejected = f->rejected;
 		bool ok = db_message_buffer_remove(b->index, f->rows.data, f->rows.len, err);
+		if (!ok) {
+			return false;
+		}
 		flight_free(f);
 		b->flight = nullptr;
-		if (ok && rejected > 0) {
+		if (rejected > 0) {
 			return err_set(err, 0,
 				       "Turso rejected %zu buffered messages; they were not stored",
 				       rejected);
 		}
-		return ok;
+		return true;
 	}
 	f->failures++;
 	f->retry_at = now_ms() + (1000U << (f->failures < 5 ? f->failures : 5));
@@ -270,11 +275,33 @@ static bool wait_capacity(struct batch_store *b, struct err **err) {
 		}
 	}
 	if (b->current.len >= b->limit || b->current_bytes >= MAX_BUFFER_BYTES) {
-		struct err *e = nullptr;
-		if (!reap(b, true, &e)) {
+		// Preserve the two-buffer bound across transient write failures. A
+		// failed flight stays in the overlay; retry it after its backoff before
+		// accepting more rows into the current buffer.
+		for (;;) {
+			struct err *e = nullptr;
+			bool ok = reap(b, true, &e);
+			if (ok && b->flight == nullptr) {
+				err_free(e);
+				break;
+			}
+			if (b->flight == nullptr) {
+				if (err != nullptr) {
+					*err = e;
+				} else {
+					err_free(e);
+				}
+				return false;
+			}
 			err_free(e);
+			uint64_t now = now_ms();
+			if (now < b->flight->retry_at) {
+				uv_sleep((unsigned)(b->flight->retry_at - now));
+			}
 		}
-		return dispatch(b, err);
+		if (!dispatch(b, err)) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -335,8 +362,11 @@ bool batch_store_flush(struct batch_store *b, struct err **err) {
 		struct err *e = nullptr;
 		if (!reap(b, true, &e)) {
 			if (++failures >= 3) {
-				size_t pending = b->current.len + (b->flight != nullptr ? b->flight->rows.len : 0);
-				err_set(err, 0, "failed to flush %zu buffered messages after 3 attempts: %s",
+				size_t pending = b->current.len +
+						 (b->flight != nullptr ? b->flight->rows.len : 0);
+				err_set(err, 0,
+					"failed to flush %zu buffered messages after 3 attempts: "
+					"%s",
 					pending, err_msg(e));
 				err_free(e);
 				return false;

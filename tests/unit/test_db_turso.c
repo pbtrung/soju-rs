@@ -4,10 +4,13 @@
 #include "testsupport.h"
 
 #include <yyjson.h>
+#include <uv.h>
 
 #include "base/alloc.h"
 #include "db/internal.h"
 #include "db/turso.h"
+#include "db/writer.h"
+#include "msgstore/turso.h"
 #include "turso_mock.h"
 
 static size_t databases(struct turso_mock *m) {
@@ -306,6 +309,174 @@ static void test_authorization_failures_do_not_expose_credentials(void **state) 
 	assert_non_null(strstr(err_msg(e), "authorization failed"));
 	assert_null(strstr(err_msg(e), "wrong-sql-secret"));
 	err_free(e);
+	turso_mock_stop(m);
+}
+
+static struct irc_msg *batch_message(const char *text, const char *time) {
+	struct irc_msg *msg = IRC_MSG("PRIVMSG", "#batch", text);
+	irc_tags_set(&msg->tags, "time", time);
+	irc_msg_set_prefix(msg, "alice", "user", "host");
+	return msg;
+}
+
+static size_t batch_query(struct db *db, int64_t network, db_message_row_vec *rows) {
+	struct db_message_options options = {.limit = 1000};
+	assert_true(db_list_message_rows(db, network, "#batch", &options, rows, nullptr));
+	return rows->len;
+}
+
+static void test_message_batch_overlay_retry_and_commit(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://batch.example.org");
+	struct batch_store *batch = batch_store_new(db, alice.id, 3);
+	assert_true(batch_store_prepare(batch, nullptr));
+	pthread_mutex_lock(&m->mu);
+	m->st.fault_sql = xstrdup("COMMIT");
+	m->st.fault = TURSO_FAULT_HTTP_AFTER;
+	pthread_mutex_unlock(&m->mu);
+	struct irc_msg *messages[3] = {
+		batch_message("first", "2026-10-28T00:00:01.000Z"),
+		batch_message("second", "2026-10-28T00:00:02.000Z"),
+		batch_message("third", "2026-10-28T00:00:03.000Z"),
+	};
+	int64_t ids[3];
+	for (size_t i = 0; i < 3; i++) {
+		assert_true(
+			batch_store_append(batch, net.id, "#batch", messages[i], &ids[i], nullptr));
+		irc_msg_free(messages[i]);
+	}
+	// A lost COMMIT response is ambiguous: the retry must be idempotent and
+	// the in-memory overlay remains readable while either attempt is running.
+	db_message_row_vec rows = {0};
+	assert_int_equal(batch_query(batch_store_index(batch), net.id, &rows), 3);
+	assert_int_equal(rows.data[0].id, ids[0]);
+	assert_string_equal(irc_msg_trailing(rows.data[2].message), "third");
+	db_message_row_vec_free(&rows);
+	assert_true(batch_store_flush(batch, nullptr));
+	assert_int_equal(batch_query(db, net.id, &rows), 3);
+	assert_int_equal(rows.data[0].id, ids[0]);
+	db_message_row_vec_free(&rows);
+	assert_true(turso_mock_count(m, "INSERT INTO Message(") >= 2);
+	batch_store_free(batch);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_message_writer_splits_host_limits_and_isolates_conflicts(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://batch.example.org");
+	struct db_message_writer *writer = db_message_writer_new(db, alice.id, nullptr);
+	int64_t first, last;
+	assert_true(db_message_writer_reserve(writer, 20, &first, &last, nullptr));
+	assert_int_equal(last - first, 19);
+	struct db_message_insert rows[5] = {0};
+	for (size_t i = 0; i < 5; i++) {
+		char text[32];
+		snprintf(text, sizeof(text), "batch item %zu", i);
+		struct irc_msg *msg = batch_message(text, "2026-10-28T00:00:01.000Z");
+		assert_true(db_message_insert_init(&rows[i], first + (int64_t)i, net.id, "#batch",
+						   msg, nullptr));
+		irc_msg_free(msg);
+	}
+	pthread_mutex_lock(&m->mu);
+	m->st.max_body = 2500;
+	pthread_mutex_unlock(&m->mu);
+	size_t rejected = 0;
+	assert_true(db_message_writer_write(writer, rows, 5, &rejected, nullptr));
+	assert_int_equal(rejected, 0);
+	assert_true(turso_mock_count(m, "INSERT INTO Message(") > 1);
+	// Retrying identical data is safe. Conflicting contents at the same ID
+	// are rejected without rolling back neighboring rows.
+	assert_true(db_message_writer_write(writer, rows, 5, &rejected, nullptr));
+	struct irc_msg *badmsg = batch_message("conflict", "2026-10-28T00:00:01.000Z");
+	struct db_message_insert bad = {0};
+	assert_true(db_message_insert_init(&bad, first + 2, net.id, "#batch", badmsg, nullptr));
+	irc_msg_free(badmsg);
+	assert_true(db_message_writer_write(writer, &bad, 1, &rejected, nullptr));
+	assert_int_equal(rejected, 1);
+	db_message_row_vec found = {0};
+	assert_int_equal(batch_query(db, net.id, &found), 5);
+	assert_string_equal(irc_msg_trailing(found.data[2].message), "batch item 2");
+	db_message_row_vec_free(&found);
+	struct strbuf escaped = STRBUF_INIT;
+	for (size_t i = 0; i < 8000; i++) {
+		strbuf_append_cstr(&escaped, "\\\"");
+	}
+	struct db_message_insert large[15] = {0};
+	for (size_t i = 0; i < 15; i++) {
+		struct irc_msg *msg =
+			batch_message(strbuf_cstr(&escaped), "2026-10-28T00:00:01.000Z");
+		assert_true(db_message_insert_init(&large[i], first + 5 + (int64_t)i, net.id,
+						   "#batch", msg, nullptr));
+		irc_msg_free(msg);
+	}
+	strbuf_free(&escaped);
+	pthread_mutex_lock(&m->mu);
+	m->st.max_body = 0;
+	m->st.max_batch_lines = 2;
+	vec_clear(&m->st.request_sizes);
+	pthread_mutex_unlock(&m->mu);
+	assert_true(db_message_writer_write(writer, large, 15, &rejected, nullptr));
+	pthread_mutex_lock(&m->mu);
+	assert_true(m->st.request_sizes.len > 1);
+	for (size_t i = 0; i < m->st.request_sizes.len; i++) {
+		assert_true(m->st.request_sizes.data[i] <= HRANA_BODY_BUDGET);
+	}
+	pthread_mutex_unlock(&m->mu);
+	for (size_t i = 0; i < 15; i++) {
+		db_message_insert_free(&large[i]);
+	}
+	for (size_t i = 0; i < 5; i++) {
+		db_message_insert_free(&rows[i]);
+	}
+	db_message_insert_free(&bad);
+	db_message_writer_free(writer);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_message_batch_keeps_appending_during_slow_commit(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://batch.example.org");
+	struct batch_store *batch = batch_store_new(db, alice.id, 3);
+	assert_true(batch_store_prepare(batch, nullptr));
+	pthread_mutex_lock(&m->mu);
+	m->st.delay_before_sql = xstrdup("INSERT INTO Message(");
+	m->st.delay_before_ms = 500;
+	pthread_mutex_unlock(&m->mu);
+	uint64_t start = uv_hrtime();
+	for (size_t i = 0; i < 6; i++) {
+		char text[32];
+		snprintf(text, sizeof(text), "slow item %zu", i);
+		struct irc_msg *msg = batch_message(text, "2026-10-28T00:00:01.000Z");
+		int64_t id;
+		assert_true(batch_store_append(batch, net.id, "#batch", msg, &id, nullptr));
+		irc_msg_free(msg);
+	}
+	assert_true((uv_hrtime() - start) / 1000000 < 250);
+	db_message_row_vec rows = {0};
+	assert_int_equal(batch_query(batch_store_index(batch), net.id, &rows), 6);
+	db_message_row_vec_free(&rows);
+	assert_true(batch_store_flush(batch, nullptr));
+	assert_int_equal(batch_query(db, net.id, &rows), 6);
+	db_message_row_vec_free(&rows);
+	batch_store_free(batch);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
 	turso_mock_stop(m);
 }
 
@@ -614,5 +785,8 @@ T_MAIN(cmocka_unit_test(test_provisioning_authentication_isolation_and_restart),
        cmocka_unit_test(test_failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed),
        cmocka_unit_test(test_malformed_commit_responses_fail_without_replaying_writes),
        cmocka_unit_test(test_binary_values_named_parameters_and_replication_index),
+       cmocka_unit_test(test_message_batch_overlay_retry_and_commit),
+       cmocka_unit_test(test_message_writer_splits_host_limits_and_isolates_conflicts),
+       cmocka_unit_test(test_message_batch_keeps_appending_during_slow_commit),
        cmocka_unit_test(test_cross_tenant_network_update_cannot_poison_routes_after_restart))
 // clang-format on

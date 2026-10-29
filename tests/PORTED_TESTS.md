@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 145 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
+Ported so far: 150 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -79,11 +79,11 @@ Also compared against the Rust code by the differential harness
 | `src/database/turso/tests.rs` | `cross_tenant_network_update_cannot_poison_routes_after_restart` | `test_db_turso.c`: `test_cross_tenant_network_update_cannot_poison_routes_after_restart` |
 | `src/database/turso/tests.rs` | `startup_and_recurring_expiry_never_send_file_maintenance_sql` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `buffered_history_search_targets_and_shutdown_include_pending_lines` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `a_slow_commit_does_not_block_the_other_buffer_or_history_reads` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `atomic_message_batches_rollback_and_reject_conflicting_reserved_ids` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `retry_lost_batch_commit_response_without_duplicate_lines` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `encoded_json_body_budget_splits_long_escaped_lines` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `split_and_retry_host_body_and_processing_limits` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `a_slow_commit_does_not_block_the_other_buffer_or_history_reads` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit` |
+| `src/database/turso/tests.rs` | `atomic_message_batches_rollback_and_reject_conflicting_reserved_ids` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
+| `src/database/turso/tests.rs` | `retry_lost_batch_commit_response_without_duplicate_lines` | `test_db_turso.c`: `test_message_batch_overlay_retry_and_commit` |
+| `src/database/turso/tests.rs` | `encoded_json_body_budget_splits_long_escaped_lines` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
+| `src/database/turso/tests.rs` | `split_and_retry_host_body_and_processing_limits` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
 | `src/database/turso/tests.rs` | `reserved_message_ids_are_not_reused_after_restart_or_expiry` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `background_commits_keep_the_same_user_event_loop_responsive` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `production_message_path_commits_chathistory_limit_lines_per_http_batch` | pending: phase 9b |
