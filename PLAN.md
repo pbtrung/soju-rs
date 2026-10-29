@@ -51,16 +51,35 @@ message store, `sojudb`.
 These are rules, not suggestions: code review rejects violations, and
 `tools/lint.sh` (clang-tidy + grep checks) enforces what it can.
 
-1. **One thread owns all state.** All IRC/user/network/connection state lives
-   on the single libuv loop thread. No locks around it. Only two kinds of work
-   leave the loop thread:
+1. **Every object is owned by one loop thread; the number of loops follows
+   the CPU count, like soju-rs's Tokio runtime flavor.** soju-rs runs a
+   `current_thread` runtime on a single CPU and a `multi_thread` one
+   otherwise (`src/bin/soju.rs`). The C port runs N libuv loops, one per
+   thread, with N = the number of CPUs (`uv_available_parallelism()`):
+   - **N = 1**: one loop thread owns everything; events between objects are
+     plain function calls and same-loop queues, no locks, no hand-offs
+     (the `current_thread` case);
+   - **N > 1**: each **user** (with its networks, upstream connections and
+     message store) is pinned to loop `user_id % N`; each **connection** is
+     pinned to the loop that accepted it (listeners distribute accepted
+     sockets round-robin). A downstream connection and its user may live on
+     different loops, like a Tokio connection task and the user actor in
+     soju-rs; they talk through **per-loop inboxes** (a mutex-protected
+     queue drained by a `uv_async_t`) carrying owned messages. No object is
+     ever touched from another loop: there are no locks around object
+     state, only around the inboxes and the few process-wide tables
+     (user directory, metrics counters with atomics, the live-object list
+     of rule 11).
+   Two other kinds of work leave the loops:
    - the **DB thread** (one dedicated thread owning the SQLite connection,
      matching the Rust `Mutex<Connection>` serialization), and
    - **CPU jobs** on the libuv threadpool (bcrypt, certfp key generation,
-     Web Push encryption).
-   Jobs take **deep-copied inputs** and return **freshly allocated outputs**;
-   they never touch loop-thread objects. Results come back through
-   `uv_async_t` / `uv_queue_work` after-callbacks on the loop thread.
+     Web Push encryption), limited like soju-rs's `cpu_work`.
+   Jobs and inbox messages take **deep-copied inputs** and return **freshly
+   allocated outputs**; they never touch another thread's objects. Results
+   come back to the submitting loop through `uv_async_t` / `uv_queue_work`
+   after-callbacks. TSan runs every integration test with N = 1 and N = 4
+   (`SOJU_LOOPS` overrides N for tests).
 2. **Objects are addressed by ID across async boundaries, never by pointer.**
    The Rust code already does this (`dc_id`, `conn_id`, `net_id`,
    `runner_id`). A completion callback looks the ID up in its owner's table;
@@ -355,7 +374,7 @@ uninstrumented system library.
 
 | Rust crate(s) | C replacement | Notes |
 |---------------|---------------|-------|
-| tokio (runtime, timers, signals, process) | **libuv** | single loop thread + DB thread + threadpool |
+| tokio (runtime, timers, signals, process) | **libuv** | one loop thread per CPU (one on a single CPU, like the `current_thread` flavor) + DB thread + threadpool |
 | tokio-rustls, rustls, aws-lc-rs, webpki-roots, rustls-native-certs | **OpenSSL 3** (system, dynamic) | our own TLS-over-libuv layer using memory BIOs; system trust store via `SSL_CTX_set_default_verify_paths` |
 | hyper, tokio-tungstenite | **libwebsockets** (`LWS_WITH_LIBUV`, foreign loop) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
 | reqwest | **libwebsockets** HTTP client | OAuth2, HTTP auth, Web Push; custom DNS check for internal IPs |
@@ -495,8 +514,13 @@ never plain flags, so TSan on gnu covers it for both targets.
                                       └── uv_async results back to loop ──┘
 ```
 
+- Loops: N loop threads (rule 1), each with the diagram's components for
+  the users and connections pinned to it; with N = 1 it is exactly the
+  diagram. Cross-loop events (a downstream line for a user on another
+  loop, a message to deliver to a connection on another loop) go through
+  the destination loop's inbox.
 - The Rust per-user actor (`User::run` + `mpsc` of `Event`) becomes a per-user
-  struct whose event handlers are called directly on the loop thread. Events
+  struct whose event handlers are called directly on the user's loop thread. Events
   that were posted to a channel (timers, upstream messages, DB results) keep
   being *queued* per user and drained in a `uv_idle`/`uv_check` callback, so
   the handler order and re-entrancy match the Rust event loop (a handler
@@ -679,6 +703,9 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
    (section 3.2).
 8. Turso Cloud storage and `soju.im/multiplex` are **in scope**: they are
    documented soju-rs features (README "Additions").
+9. Threads: one libuv loop per CPU, a single loop on a single CPU, like
+   soju-rs's choice between Tokio's `current_thread` and `multi_thread`
+   runtimes (rule 1).
 
 ## 8. Changes on `main` since v0.99.15
 

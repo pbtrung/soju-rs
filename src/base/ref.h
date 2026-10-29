@@ -1,7 +1,8 @@
 // Live-object tracking (PLAN.md 2.1 rule 11). Long-lived objects (users,
 // networks, connections, ...) embed a struct ref_node and register it on
 // creation; at shutdown and at the end of every test, nothing may be left.
-// Everything runs on the loop thread: no locking.
+// The list is shared by the loop threads (locked); a given object is only
+// tracked and untracked by its owner.
 //
 //   struct conn { struct ref_node ref; ... };
 //   c = xcalloc(1, sizeof(*c)); REF_TRACK(&c->ref, "conn");
@@ -36,7 +37,8 @@ size_t ref_dump_live(FILE *f);
 #define REF_TRACK(node, type) ref_track_at((node), (type), __FILE__, __LINE__)
 
 // A reference count for objects shared between several owners (e.g. a
-// connection and its in-flight write requests, rule 8).
+// connection and its in-flight write requests, rule 8). Not atomic: only
+// the owning loop thread touches it.
 struct refcount {
 	unsigned n;
 };
