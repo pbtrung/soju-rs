@@ -18,10 +18,12 @@ impl Database {
         };
         db.check_turso_owner(controller, owner)?;
         db.upgrade()?;
+        db.conn().execute_batch("CREATE TABLE IF NOT EXISTS MessageIdHighWater (id INTEGER PRIMARY KEY CHECK(id=0), last_id INTEGER NOT NULL);")?;
+        db.rebuild_turso_messages()
+            .context("rebuild Turso message table; restart to resume")?;
         db.migrate_turso_search()
             .context("migrate Turso search index; restart to resume")?;
         db.remove_turso_user()?;
-        db.conn().execute_batch("CREATE TABLE IF NOT EXISTS MessageIdHighWater (id INTEGER PRIMARY KEY CHECK(id=0), last_id INTEGER NOT NULL);")?;
         Ok(db)
     }
 
@@ -117,6 +119,94 @@ impl Database {
         })();
         conn.pragma_update(None, "foreign_keys", true)?;
         result
+    }
+
+    /// Copy a rowid Message table into the clustered WITHOUT ROWID layout in
+    /// bounded transactions. Message IDs are kept, so the search index stays
+    /// valid. Its cursor commits with each chunk, so restart or an ambiguous
+    /// response cannot copy a row twice. Startup has not made this tenant
+    /// available to writers yet.
+    fn rebuild_turso_messages(&self) -> Result<()> {
+        let mut conn = self.conn();
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='Message'",
+            [],
+            |r| r.get(0),
+        )?;
+        if sql
+            .split_whitespace()
+            .collect::<String>()
+            .to_ascii_uppercase()
+            .contains("WITHOUTROWID")
+        {
+            return Ok(());
+        }
+        let (table, _) = super::TENANT_SCHEMA
+            .split_once("CREATE TABLE Message (")
+            .and_then(|(_, rest)| rest.split_once(") WITHOUT ROWID;"))
+            .ok_or_else(|| anyhow::anyhow!("missing tenant Message schema"))?;
+        // Reservations take over from max(id), which the clustered table
+        // can't seek. Older releases inserted without updating this row.
+        conn.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS MessageNext ({table}) WITHOUT ROWID;
+            CREATE UNIQUE INDEX IF NOT EXISTS MessageTextIdIndex ON MessageNext(target, id) WHERE text IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS TursoMessageRebuild(id INTEGER PRIMARY KEY CHECK(id=0), message INTEGER NOT NULL);
+            INSERT INTO TursoMessageRebuild(id,message) VALUES(0,0) ON CONFLICT DO NOTHING;
+            INSERT INTO MessageIdHighWater(id,last_id) SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1
+                ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id WHERE last_id<excluded.last_id;"
+        ))?;
+        let mut page = 1000;
+        loop {
+            let cursor: i64 = conn.query_row(
+                "SELECT message FROM TursoMessageRebuild WHERE id=0",
+                [],
+                |r| r.get(0),
+            )?;
+            let end: Option<i64> = conn.query_row(
+                "SELECT max(id) FROM (SELECT id FROM Message WHERE id>? ORDER BY id LIMIT ?)",
+                params![cursor, page],
+                |r| r.get(0),
+            )?;
+            let Some(end) = end else {
+                break;
+            };
+            let result = conn.atomic_batch(vec![
+                statement(
+                    "INSERT INTO MessageNext(target,time,id,raw,sender,text)
+                    SELECT target,time,id,raw,sender,text FROM Message WHERE id>:cursor AND id<=:end
+                    AND EXISTS(SELECT 1 FROM TursoMessageRebuild WHERE id=0 AND message=:cursor)",
+                    named_params! {":cursor":cursor,":end":end},
+                )?,
+                statement(
+                    "UPDATE TursoMessageRebuild SET message=:end WHERE id=0 AND message=:cursor",
+                    named_params! {":cursor":cursor,":end":end},
+                )?,
+            ]);
+            if let Err(err) = result {
+                let text = err.to_string();
+                if page > 1
+                    && (text.contains("TIMEOUT")
+                        || text.contains("timed out")
+                        || text.contains("HTTP 504"))
+                {
+                    page = (page / 2).max(1);
+                    continue; // Read the durable cursor before retrying.
+                }
+                return Err(err.into());
+            }
+        }
+        // Nothing references Message. Dropping it also drops its indexes
+        // and search triggers; the search index keeps the same row IDs.
+        let (_, triggers) = super::FTS_SCHEMA
+            .split_once("CREATE TRIGGER")
+            .ok_or_else(|| anyhow::anyhow!("missing FTS triggers"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(&format!(
+            "DROP TABLE Message; ALTER TABLE MessageNext RENAME TO Message;
+            DROP TABLE TursoMessageRebuild; CREATE TRIGGER{triggers}"
+        ))?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Build sparse FTS in bounded transactions. Its cursor commits with

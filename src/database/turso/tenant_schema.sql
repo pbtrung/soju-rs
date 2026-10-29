@@ -74,19 +74,26 @@ CREATE TABLE WebPushSubscription (
 
 CREATE INDEX WebPushSubscription_user_network_index ON WebPushSubscription(user, network);
 
+-- Clustered by history order: event playback, expiry and deletion seek the
+-- primary key, and an event costs one row write. Text rows also have an ID
+-- index for search results and insertion-order delivery cursors.
 CREATE TABLE Message (
-	id INTEGER PRIMARY KEY,
 	target INTEGER NOT NULL,
-	raw TEXT NOT NULL,
 	time TEXT NOT NULL,
+	id INTEGER NOT NULL,
+	raw TEXT NOT NULL,
 	sender TEXT NOT NULL,
 	text TEXT,
+	PRIMARY KEY(target, time, id),
 	FOREIGN KEY(target) REFERENCES MessageTarget(id)
-);
+) WITHOUT ROWID;
 
-CREATE INDEX MessageEventIndex ON Message(target, time) WHERE text IS NULL;
-CREATE INDEX MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
-CREATE INDEX Message_target_index ON Message(target);
+CREATE UNIQUE INDEX MessageTextIdIndex ON Message(target, id) WHERE text IS NOT NULL;
+
+CREATE TABLE MessageIdHighWater (
+	id INTEGER PRIMARY KEY CHECK (id = 0),
+	last_id INTEGER NOT NULL
+);
 
 CREATE TABLE MessageTarget (
 	id INTEGER PRIMARY KEY,

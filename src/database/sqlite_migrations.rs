@@ -214,4 +214,13 @@ pub const MIGRATIONS: &[&str] = &[
         ANALYZE MessageTextIndex;
     "#,
     include_str!("query_indexes.sql"),
+    // Turso tenants then rebuild Message without a rowid, see
+    // sqlite::turso::rebuild_turso_messages. Local databases keep their
+    // upstream-compatible table.
+    r#"
+        CREATE TABLE IF NOT EXISTS MessageIdHighWater (
+            id INTEGER PRIMARY KEY CHECK (id = 0),
+            last_id INTEGER NOT NULL
+        );
+    "#,
 ];

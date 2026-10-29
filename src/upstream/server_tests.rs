@@ -354,3 +354,38 @@ async fn registration_timeout() {
     assert!(start.elapsed() >= crate::upstream::REGISTER_TIMEOUT);
     srv.shutdown().await;
 }
+
+/// CAP LS holds back CAP END while SASL is requested: a NAK must release it.
+#[tokio::test]
+async fn sasl_cap_nak_ends_capability_negotiation() {
+    let database = Database::open_in_memory().unwrap();
+    let mut user = db::User::new(USERNAME);
+    database.store_user(&mut user).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut network = db::Network::new(&format!(
+        "irc+insecure://{}",
+        listener.local_addr().unwrap()
+    ));
+    network.sasl.mechanism = "PLAIN".to_owned();
+    network.sasl.plain_username = USERNAME.to_owned();
+    network.sasl.plain_password = "secret".to_owned();
+    database.store_network(user.id, &mut network).unwrap();
+    let srv = Server::new(database, Logger::new(false));
+    srv.set_config(ServerConfig::default());
+    srv.start().unwrap();
+
+    let (s, _) = tokio::time::timeout(TIMEOUT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut upstream = TestConn::new(Box::new(s));
+    upstream.expect("CAP").await;
+    upstream.expect("NICK").await;
+    upstream.expect("USER").await;
+    upstream.send(msg!("CAP", "*", "LS", "sasl"));
+    let req = upstream.expect("CAP").await;
+    assert_eq!(req.params[0], "REQ");
+    upstream.send(msg!("CAP", "*", "NAK", req.params[1].clone()));
+    assert_eq!(upstream.expect("CAP").await.params, ["END"]);
+    srv.shutdown().await;
+}

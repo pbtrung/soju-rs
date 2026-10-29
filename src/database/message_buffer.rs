@@ -62,7 +62,12 @@ impl MessageInsert {
 pub(crate) struct MessageWriter {
     conn: Mutex<WriterConnection>,
     max_lines: AtomicUsize,
+    /// Consecutive successful chunks since max_lines was last lowered.
+    successes: AtomicUsize,
 }
+
+/// Successful chunks after which a lowered line limit doubles again.
+const MAX_LINES_RECOVERY: usize = 8;
 
 struct TargetId {
     id: i64,
@@ -144,8 +149,9 @@ impl WriterConnection {
                 ]);
             }
             // An identical retry performs no UPDATE or FTS writes. A different
-            // row with the same ID deliberately violates NOT NULL and aborts.
-            sql.push_str(" ON CONFLICT(id) DO UPDATE SET raw=NULL WHERE NOT (
+            // text row with the same target and ID deliberately violates NOT
+            // NULL and aborts. Retries reuse the stored time, hence the key.
+            sql.push_str(" ON CONFLICT DO UPDATE SET raw=NULL WHERE NOT (
                 Message.target=excluded.target AND Message.raw=excluded.raw AND Message.time=excluded.time
                 AND Message.sender=excluded.sender AND Message.text IS excluded.text)");
             let params: Vec<&dyn ToSql> = values.iter().map(|v| v as &dyn ToSql).collect();
@@ -179,6 +185,7 @@ impl MessageWriter {
                 targets: HashMap::new(),
             }),
             max_lines: AtomicUsize::new(usize::MAX),
+            successes: AtomicUsize::new(0),
         }
     }
 
@@ -189,12 +196,12 @@ impl MessageWriter {
         ensure!(count > 0, "empty message ID reservation");
         let state = self.conn.lock().unwrap();
         let conn = &state.conn;
+        // Every tenant ID is reserved here (tenant opening records older
+        // IDs first): the clustered Message table can't seek max(id).
         let end: i64 = conn.query_row(
             "INSERT INTO MessageIdHighWater(id, last_id)
-             SELECT 0, max(coalesce((SELECT max(id) FROM Message), 0),
-                           coalesce((SELECT last_id FROM MessageIdHighWater WHERE id=0), 0)) + :count
-             WHERE max(coalesce((SELECT max(id) FROM Message), 0),
-                       coalesce((SELECT last_id FROM MessageIdHighWater WHERE id=0), 0)) <= :maximum
+             SELECT 0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id=0), 0) + :count
+             WHERE coalesce((SELECT last_id FROM MessageIdHighWater WHERE id=0), 0) <= :maximum
              ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id
              RETURNING last_id",
             named_params! {":count":count, ":maximum":i64::MAX-count},
@@ -203,16 +210,19 @@ impl MessageWriter {
         Ok((end - count + 1)..=end)
     }
 
-    pub fn write(&self, messages: &[MessageInsert]) -> Result<()> {
+    /// Writes messages, returning how many were rejected by a constraint
+    /// and dropped. Other errors keep the batch for a retry.
+    pub fn write(&self, messages: &[MessageInsert]) -> Result<usize> {
+        let mut rejected = 0;
         for chunk in messages.chunks(self.max_lines.load(Ordering::Relaxed).max(1)) {
-            self.write_chunk(chunk)?;
+            rejected += self.write_chunk(chunk)?;
         }
-        Ok(())
+        Ok(rejected)
     }
 
-    fn write_chunk(&self, messages: &[MessageInsert]) -> Result<()> {
+    fn write_chunk(&self, messages: &[MessageInsert]) -> Result<usize> {
         if messages.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         // atomic_batch checks the exact serialized pipeline size before
         // sending. Split on body limits and processing timeouts; stable IDs
@@ -235,7 +245,22 @@ impl MessageWriter {
             }
         };
         match result {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Grow back after a transient timeout lowered the limit
+                let max = self.max_lines.load(Ordering::Relaxed);
+                if max != usize::MAX
+                    && self.successes.fetch_add(1, Ordering::Relaxed) + 1 >= MAX_LINES_RECOVERY
+                {
+                    self.successes.store(0, Ordering::Relaxed);
+                    let _ = self.max_lines.compare_exchange(
+                        max,
+                        max.saturating_mul(2),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                }
+                Ok(0)
+            }
             Err(err) => {
                 let text = err.to_string();
                 let size = text.contains("HTTP body budget") || text.contains("HTTP 413");
@@ -243,15 +268,24 @@ impl MessageWriter {
                     || text.contains("QUERY_TIMEOUT")
                     || text.contains("timed out")
                     || text.contains("HTTP 504");
-                if messages.len() == 1 || !(size || timeout) {
+                // A row the database rejects, e.g. a conflicting reserved ID,
+                // would otherwise block every later message of this user.
+                // Isolate it; the batch rolled back, the others are retried.
+                let rejected =
+                    text.contains("SQLITE_CONSTRAINT") || text.contains("constraint failed");
+                if messages.len() == 1 && rejected {
+                    return Ok(1);
+                }
+                if messages.len() == 1 || !(size || timeout || rejected) {
                     return Err(err.into());
                 }
                 let middle = messages.len() / 2;
                 if timeout {
                     self.max_lines.fetch_min(middle.max(1), Ordering::Relaxed);
+                    self.successes.store(0, Ordering::Relaxed);
                 }
-                self.write_chunk(&messages[..middle])?;
-                self.write_chunk(&messages[middle..])
+                Ok(self.write_chunk(&messages[..middle])?
+                    + self.write_chunk(&messages[middle..])?)
             }
         }
     }

@@ -16,14 +16,20 @@ Reproduce with `python3 scripts/bench-query-cost.py`.
 | before_unchanged_200_of_2000_receipts | 2,400 | 800 |
 | before_unchanged_read_receipt | 1 | 1 |
 | before_expiry_zero_of_100400 | 100,401 | 0 |
-| one_time_migration_100400 | 99,861 | 205 |
-| after_text_200_cold_target | 602 | 800 |
-| after_identical_retry_200 | 400 | 0 |
-| after_events_200 | 600 | 600 |
+| one_time_migration_100400 | 403,904 | 100,906 |
+| after_text_200_cold_target | 402 | 600 |
+| after_identical_retry_200 | 200 | 0 |
+| after_events_200 | 400 | 200 |
 | after_unchanged_200_of_2000_receipts | 201 | 0 |
 | after_three_receipt_changes | 205 | 5 |
 | after_unchanged_read_receipt | 1 | 0 |
-| after_expiry_zero_of_100400 | 403 | 1 |
+| after_expiry_zero_of_100400 | 202 | 0 |
+| after_event_history_50_of_1000 | 51 | 0 |
+| after_text_history_50_behind_1000_events | 1,251 | 0 |
+| after_last_text_id | 2 | 0 |
+| after_backlog_after_last_id | 5 | 0 |
+| after_backlog_10_new | 42 | 0 |
+| after_search_1_of_200 | 4 | 0 |
 
 Expiry fixture: 100,400 messages across 100 targets, none expired.
 
@@ -32,13 +38,18 @@ path uses the production MessageWriter. Cold-target resolution is included;
 subsequent writes reuse its bounded target cache. Network/target foreign keys
 remain enforced. An identical retry must write zero rows.
 
-The optimized expiry measurement includes recording the highest message ID.
-The old HAVING-based high-water statement is rejected by this engine's HTTP
-SQL parser, so the baseline conservatively measures only its expiry scan.
-The SQLite full-scan high-water comparison is documented separately. The
-one-time migration case is measured separately; it preserves all 100,400
-messages and passes FTS integrity checks. Setup, cleanup and validation
-queries are outside the measured intervals.
+Baselines use the frozen v0.99.21 schema and insert SQL. The optimized
+cases use the clustered schema-33 tenant Message table: PRIMARY KEY
+(target, time, id) WITHOUT ROWID, plus a text-only (target, id) index.
+Tenants reserve every message ID through one high-water row, so expiry
+no longer records the highest ID. The one-time migration case upgrades the
+schema-31 fixture, including the clustered copy and sparse FTS rebuild; it
+preserves all 100,400 messages and passes FTS integrity checks.
+
+The read cases run after the expiry fixture adds 1,000 newer events to
+each target. Text-only history steps over those events: the clustered
+layout trades these cheaper reads for one fewer index write per message.
+Setup, cleanup and validation queries are outside the measured intervals.
 
 
 ## Native SQLite plans and VM steps

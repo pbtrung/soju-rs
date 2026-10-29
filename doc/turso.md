@@ -62,7 +62,7 @@ commits a write but its response is lost, the operation reports failure and
 its outcome is uncertain. Check the saved state before repeating it. A failed
 transaction is discarded instead of continuing on a new auto-commit stream.
 
-Use v0.99.22 or later with hosted Turso. It closes a transaction's stream in
+Use v0.99.21 or later with hosted Turso. It closes a transaction's stream in
 the same pipeline as COMMIT, accepting the null baton returned after a
 successful commit. v0.99.20 could incorrectly report `Turso closed the stream
 during a transaction` after creating the controller schema. Keep the same
@@ -122,6 +122,32 @@ user databases that should be removable through soju.
 Deletion validates the link and group again before calling the Platform API;
 it refuses to delete the controller or a database moved to another group.
 
+## Upgrading to v0.99.23
+
+Back up the controller and all user databases before upgrading. User
+databases become schema 33 (local SQLite also records 33, without changes to
+its tables). The controller stays at version 2. Earlier binaries cannot
+reopen upgraded user databases.
+
+Startup rebuilds each user's `Message` table into the clustered layout
+described in [Message table layout](#message-table-layout). Rows are copied
+in ID order, in transactions of at most 1,000 messages, committing a cursor
+with each chunk. An interrupted or ambiguous copy resumes on restart without
+duplicating rows; timeouts halve the chunk size. The old table, its three
+indexes and its search triggers are replaced only after copying completes.
+Message IDs are kept, so the search index and delivery receipts stay valid
+without a rebuild. Message ID reservations continue from the highest ID
+already stored.
+
+The copy is a one-time cost of about one row read and one row written per
+stored message, plus one written per text message for its ID index. In the
+[real-engine measurement](turso-query-evidence.md), migrating 100,400 event
+rows read 403,904 rows and wrote 100,906. Every message written afterwards
+saves at least one row write, so the copy is repaid once as many new
+messages have been stored. Allow startup time for large histories. Upgrading
+from v0.99.21 or earlier skips creating the schema-32 event index on Turso,
+since the rebuild replaces it.
+
 ## Upgrading to v0.99.22
 
 Back up the controller and all user databases before upgrading. The controller
@@ -166,7 +192,11 @@ The filling buffer is also dispatched at an 8 MiB message-data budget.
 Messages use multi-row VALUES inserts of up to 100 lines per SQL statement,
 sharing one HTTP batch with one BEGIN and one COMMIT. Target IDs are resolved
 once and kept in a bounded cache; foreign keys remain enabled. An identical
-retry does not UPDATE the existing rows or repeat their FTS writes. For example, 400 short
+retry does not UPDATE the existing rows or repeat their FTS writes. A row the
+database rejects with a constraint error, such as a reserved ID reused with
+different contents, is isolated by splitting the batch: the other rows are
+stored, and the rejected one is dropped and logged rather than blocking
+every later message of that user. For example, 400 short
 messages arriving together with `chathistory-limit 200` use two message
 transactions. A quiet connection receiving one message per second or less
 can produce one-message transactions because of the partial-flush timer.
@@ -177,7 +207,8 @@ COMMIT, so a statement error cannot leave a partial transaction. Large
 batches are split to keep each serialized HTTP body at or below 512 KiB,
 including JSON escaping, bound arguments, and protocol envelopes. HTTP 413
 responses and processing timeouts cause further splitting; a timeout also
-lowers subsequent request sizes. These are application budgets, not a claim
+lowers subsequent request sizes, which double again after eight successful
+requests. These are application budgets, not a claim
 about a fixed hosted quota. The upstream libSQL server defaults to a
 [five-second transaction timeout][libsql transaction timeout]; hosted
 settings and proxy limits may differ. One logical buffer may therefore
@@ -190,18 +221,12 @@ stream, sharing the writer's replication watermark, and merge results
 without duplicates. Normal database queries still wait for their own HTTP
 responses; they do not wait for the background writer's client-side lock.
 
-Fresh user databases and schema upgrades include
-`MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL`.
-Text-only history and latest-target queries can use this partial index to
-skip JOIN/PART and other event rows. A disjoint `MessageEventIndex` covers
-rows whose text is NULL. Event playback merges both ordered indexes; a text
-row no longer needs two timestamp-index entries. Sparse FTS indexes text
-rows only, with `columnsize=0` because search does not use token-count
-ranking. Turso creates these indexes without ANALYZE or VACUUM.
-
 If both buffers fill, incoming message events retain their socket input
-permits and wait for space; control commands can still run. This applies
-backpressure rather than keeping an unlimited backlog. A single IRC event
+permits and wait for space; control commands can still run, unless the same
+connection already has a deferred event: each connection's input stays in
+order, so a client's PART or QUIT cannot overtake its pending PRIVMSG. PING
+and PONG are always answered. This applies backpressure rather than keeping
+an unlimited backlog. A single IRC event
 that fans out to several channels finishes before further input is deferred.
 A long cloud outage can eventually exhaust the socket input budget too.
 Pending network deletions cannot recreate their old parent networks when a
@@ -221,6 +246,33 @@ three times, then logs any remaining flush error. Cloud unavailability
 prevents a durability guarantee during that interval. Local `message-store
 db` keeps its immediate SQLite writes.
 
+## Message table layout
+
+User databases store `Message` as a `WITHOUT ROWID` table with the primary
+key `(target, time, id)`, plus a unique `MessageTextIdIndex ON
+Message(target, id) WHERE text IS NOT NULL`. Writing an event (JOIN, PART,
+QUIT, MODE…) costs one row; a text message also writes its ID index entry
+and its search entry. Measured on the real engine, 200 events write 200
+rows instead of 600, and 200 text messages 600 instead of 800.
+
+- History with event playback, the latest message of each target, expiry
+  and network deletion seek the primary key directly.
+- Search results and delivery cursors seek the text ID index. A delivery
+  cursor is the ID of the last *text* message: backlog for clients without
+  CHATHISTORY replays text messages only, so later events never affect it.
+- Text-only history and text-only target lists step over the events stored
+  between text messages. This costs extra row reads, never writes; clients
+  with `draft/event-playback` don't incur it.
+- Message IDs are allocated only from durable reservations in
+  `MessageIdHighWater`; the clustered table is never scanned for `max(id)`.
+
+Sparse FTS indexes text rows only, with `columnsize=0` because search does
+not use token-count ranking. Turso creates these structures without ANALYZE
+or VACUUM. Local SQLite keeps its upstream-compatible rowid table with
+`MessageTextIndex` and `MessageEventIndex`.
+
+## Schema versions and maintenance
+
 Cloud schema versions live in `SojuSchemaVersion`, avoiding writes to
 `PRAGMA user_version`, which [Turso Cloud documents as read-only][cloud
 limitations]. Existing databases initialized by v0.99.19 import their legacy
@@ -228,9 +280,9 @@ pragma version on first open, then use the table for future upgrades.
 Cloud databases first initialized by v0.99.20 need v0.99.20 or later: older
 builds do not understand this schema-version table.
 
-[libsql transaction timeout]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/connection/mod.rs
-[cloud limitations]: https://docs.turso.tech/cloud/limitations
-Expiry removes messages and optimizes each user's FTS index. It never sends
+Expiry removes messages from each user database in turn and optimizes the
+FTS index of those that deleted any. A failing database is reported without
+stopping the others. It never sends
 `VACUUM`, `PRAGMA wal_checkpoint`, `PRAGMA shrink_memory` or file-space probes
 to Turso, including after the startup expiry pass. These operations are for
 local SQLite; the hosted SQL interface rejects client-issued `VACUUM` and
@@ -244,3 +296,5 @@ by regression tests and the remaining verification limits.
 [Turso API authentication]: https://docs.turso.tech/api-reference/authentication
 [SQL-over-HTTP protocol]: https://docs.turso.tech/sdk/http/reference
 [server SQL allowlist]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/query_analysis.rs
+[libsql transaction timeout]: https://github.com/tursodatabase/libsql/blob/main/libsql-server/src/connection/mod.rs
+[cloud limitations]: https://docs.turso.tech/cloud/limitations

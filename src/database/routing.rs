@@ -264,6 +264,55 @@ impl Database {
         Ok(count)
     }
 
+    /// Deletes messages older than before in chunks, pausing in between,
+    /// until stopped. Returns how many were deleted. Each Turso tenant is
+    /// expired on its own, and only those that deleted messages merge their
+    /// search index; a failing tenant doesn't stop the others.
+    pub fn expire_messages(
+        &self,
+        before: DateTime<Utc>,
+        chunk: usize,
+        pause: std::time::Duration,
+        stopped: &dyn Fn() -> bool,
+    ) -> Result<usize> {
+        let expire = |db: &sqlite::Database| -> Result<usize> {
+            let mut n = 0;
+            loop {
+                let deleted = db.delete_messages_before(before, chunk)?;
+                n += deleted;
+                if deleted < chunk || stopped() {
+                    return Ok(n);
+                }
+                std::thread::sleep(pause);
+            }
+        };
+        let Some(c) = &self.cloud else {
+            return expire(&self.account);
+        };
+        let mut count = 0;
+        let mut error = None;
+        for db in c.databases() {
+            if stopped() {
+                break;
+            }
+            let result = expire(&db).and_then(|n| {
+                count += n;
+                if n > 0 {
+                    db.conn()
+                        .execute_batch("INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize')")?;
+                }
+                Ok(())
+            });
+            if let Err(e) = result {
+                error.get_or_insert(e);
+            }
+        }
+        match error {
+            Some(e) => Err(e.context(format!("after deleting {count} messages"))),
+            None => Ok(count),
+        }
+    }
+
     pub fn free_page_ratio(&self) -> Result<f64> {
         if self.cloud.is_some() {
             Ok(0.0)

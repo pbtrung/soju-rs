@@ -92,11 +92,12 @@ Behaviour changes:
   leaves it to the admin)
 - Disjoint text/event indexes speed up history without duplicate timestamp
   entries. Sparse FTS and guarded updates reduce unnecessary work. The
-  current database schema is version 32; earlier soju-rs and upstream
+  current database schema is version 33; earlier soju-rs and upstream
   versions supporting older schemas cannot open the upgraded database
 - [Turso Cloud storage](doc/turso.md) uses a controller account directory
   and a separate database per user, with asynchronous multi-row message
-  batches. See the [query-cost evidence](doc/turso-query-evidence.md) for
+  batches. Its message table is clustered by target and time, so an event
+  costs one row write. See the [query-cost evidence](doc/turso-query-evidence.md) for
   measured read/write reductions and migration requirements
 
 ## Testing

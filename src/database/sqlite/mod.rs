@@ -183,8 +183,13 @@ impl Database {
             for (i, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
                 // Turso's hosted SQL allowlist rejects ANALYZE. The partial
                 // index itself is supported; local SQLite still analyzes it.
+                // The Message rebuild that follows replaces the timestamp
+                // indexes: don't write an index entry for every message first.
                 let migration = if tx.is_remote() {
-                    migration.replace("ANALYZE MessageTextIndex;", "")
+                    migration.replace("ANALYZE MessageTextIndex;", "").replace(
+                        "CREATE INDEX IF NOT EXISTS MessageEventIndex ON Message(target, time) WHERE text IS NULL;",
+                        "",
+                    )
                 } else {
                     (*migration).to_owned()
                 };

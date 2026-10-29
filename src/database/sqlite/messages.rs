@@ -10,18 +10,20 @@ use crate::irc::Message;
 use crate::xirc;
 
 impl Database {
-    /// Returns the ID of the last message stored for a target, or 0.
+    /// Returns the ID of the last text message stored for a target, or 0.
     ///
     /// Delivery receipts are cursors in insertion order (see after_id in
     /// list_messages): this is the last message stored, not the one with the
-    /// latest time, which upstream servers may send out of order.
+    /// latest time, which upstream servers may send out of order. Backlog
+    /// replays only text messages after the cursor, so skipping later events
+    /// selects the same messages; Turso tenants only index text message IDs.
     pub fn get_message_last_id(&self, network_id: i64, name: &str) -> Result<i64> {
         let conn = self.conn();
         Ok(conn
             .query_row(
-                "SELECT m.id FROM Message AS m, MessageTarget AS t
-                WHERE t.network = :network AND t.target = :target AND m.target = t.id
-                ORDER BY m.id DESC LIMIT 1",
+                "SELECT id FROM Message
+                WHERE target = (SELECT id FROM MessageTarget WHERE network = :network AND target = :target)
+                AND text IS NOT NULL ORDER BY id DESC LIMIT 1",
                 named_params! {":network": network_id, ":target": name},
                 |r| r.get(0),
             )
@@ -122,7 +124,37 @@ impl Database {
         )?
         .execute(named_params! {":network": network_id, ":target": name})?;
         let mut ids = Vec::with_capacity(msgs.len());
-        {
+        if tx.is_remote() {
+            // Turso tenants can't seek max(id) of their clustered table:
+            // reserve IDs like the background writer does.
+            let count = msgs.len() as i64;
+            let end: i64 = tx.query_row(
+                "INSERT INTO MessageIdHighWater(id, last_id)
+                VALUES (0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) + :count)
+                ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
+                RETURNING last_id",
+                named_params! {":count": count},
+                |r| r.get(0),
+            )?;
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO Message(id, target, raw, time, sender, text)
+                SELECT :id, id, :raw, :time, :sender, :text
+                FROM MessageTarget WHERE network = :network AND target = :target",
+            )?;
+            for (msg, id) in msgs.iter().zip(end - count + 1..) {
+                let (time, text) = message_time_text(msg)?;
+                stmt.execute(named_params! {
+                    ":id": id,
+                    ":network": network_id,
+                    ":target": name,
+                    ":raw": msg.to_string(),
+                    ":time": time,
+                    ":sender": msg.prefix_name(),
+                    ":text": text,
+                })?;
+                ids.push(id);
+            }
+        } else {
             // Message IDs are delivery receipt cursors: never reuse the IDs
             // of deleted messages, see record_message_id_high_water
             let mut stmt = tx.prepare_cached(
@@ -136,22 +168,12 @@ impl Database {
                 WHERE network = :network AND target = :target",
             )?;
             for msg in msgs {
-                let t = match msg.tags.get("time") {
-                    Some(tag) => xirc::parse_server_time(tag)
-                        .ok_or_else(|| anyhow!("failed to parse message time tag: {tag:?}"))?,
-                    None => Utc::now(),
-                };
-                let text = match msg.command.as_str() {
-                    "PRIVMSG" | "NOTICE" if msg.params.len() > 1 => {
-                        Some(strip_ansi(&msg.params[1]))
-                    }
-                    _ => None,
-                };
+                let (time, text) = message_time_text(msg)?;
                 stmt.execute(named_params! {
                     ":network": network_id,
                     ":target": name,
                     ":raw": msg.to_string(),
-                    ":time": xirc::format_server_time(t),
+                    ":time": time,
                     ":sender": msg.prefix_name(),
                     ":text": text,
                 })?;
@@ -167,7 +189,11 @@ impl Database {
         network_id: i64,
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
-        let inner = if options.events {
+        let remote = self.conn().is_remote();
+        let inner = if options.events && remote {
+            // Turso tenants cluster messages by target and time
+            "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1"
+        } else if options.events {
             "SELECT max(latest) FROM (
                 SELECT max(time) latest FROM Message WHERE target=MessageTarget.id AND text IS NULL
                 UNION ALL
@@ -248,11 +274,6 @@ impl Database {
         name: &str,
         options: &MessageOptions,
     ) -> Result<Vec<crate::database::MessageRow>> {
-        let mut query = String::from(
-            "SELECT m.id AS id, m.time AS time, m.raw AS raw
-            FROM Message AS m, MessageTarget AS t
-            WHERE m.target = t.id AND t.network = :network AND t.target = :target ",
-        );
         let after = time_to_sql(options.after_time);
         let before = time_to_sql(options.before_time);
         let text = quote_fts_query(&options.text);
@@ -261,11 +282,38 @@ impl Database {
             // be a syntax error
             return Ok(Vec::new());
         }
+        let conn = self.conn();
+        let remote = conn.is_remote();
+        let target = "(SELECT id FROM MessageTarget WHERE network = :network AND target = :target)";
+        let mut query = String::from("SELECT m.id AS id, m.time AS time, m.raw AS raw FROM ");
+        if !options.text.is_empty() {
+            // Seek each search result by ID, rather than scanning the
+            // target's history for them
+            query.push_str(
+                "(SELECT rowid AS r FROM MessageFTS WHERE MessageFTS MATCH :text) AS f
+                CROSS JOIN Message AS m ON m.id = f.r ",
+            );
+        } else {
+            query.push_str("Message AS m ");
+        }
+        query.push_str(&format!("WHERE m.target = {target} "));
         let limit = options.limit as i64;
         let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> =
             vec![(":network", &network_id), (":target", &name)];
+        if !options.text.is_empty() {
+            binds.push((":text", &text));
+        }
+        let text_only = !options.events || !options.text.is_empty();
         if options.after_id > 0 {
-            query.push_str("AND m.id > :afterID ");
+            if text_only {
+                // Delivery cursors: seek the text message ID index
+                query.push_str(&format!(
+                    "AND (m.time, m.id) IN (SELECT time, id FROM Message
+                    WHERE target = {target} AND text IS NOT NULL AND id > :afterID) "
+                ));
+            } else {
+                query.push_str("AND m.id > :afterID ");
+            }
             binds.push((":afterID", &options.after_id));
         }
         if options.after_time.is_some() {
@@ -282,20 +330,15 @@ impl Database {
             query.push_str("AND m.sender = :sender ");
             binds.push((":sender", &options.sender));
         }
-        if !options.text.is_empty() {
-            query.push_str(
-                "AND m.id IN (SELECT ROWID FROM MessageFTS WHERE MessageFTS MATCH :text) ",
-            );
-            binds.push((":text", &text));
-        }
-        if options.events && options.text.is_empty() {
+        if text_only {
+            query.push_str("AND m.text IS NOT NULL ");
+        } else if !remote {
             // Merge two disjoint ordered indexes, avoiding a second timestamp
             // index entry on every text message. LIMIT applies to their union.
+            // Turso tenants are clustered by target and time instead.
             let text_query = format!("{query}AND m.text IS NOT NULL ");
             query.push_str("AND m.text IS NULL UNION ALL ");
             query.push_str(&text_query);
-        } else {
-            query.push_str("AND m.text IS NOT NULL ");
         }
         // Messages often share a time, e.g. the lines of a multiline
         // message: order them as they were stored. The (target, time) index
@@ -308,7 +351,6 @@ impl Database {
         query.push_str("LIMIT :limit");
         binds.push((":limit", &limit));
 
-        let conn = self.conn();
         let mut stmt = conn.prepare(&query)?;
         let rows = stmt.query_map(binds.as_slice(), |r| {
             Ok((r.get(0)?, lossy_string(r, 1)?, lossy_string(r, 2)?))
@@ -341,6 +383,20 @@ impl Database {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         record_message_id_high_water(&tx)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        if tx.is_remote() {
+            // Seek each target's oldest messages in the clustered table
+            let n = tx.execute(
+                "DELETE FROM Message WHERE (target, time, id) IN (
+                    SELECT m.target, m.time, m.id FROM MessageTarget t
+                    CROSS JOIN Message m ON m.target = t.id
+                    WHERE m.time < :before LIMIT :limit
+                )",
+                named_params! {":before": xirc::format_server_time(before), ":limit": limit},
+            )?;
+            tx.commit()?;
+            return Ok(n);
+        }
         let n = tx.execute(
             "DELETE FROM Message WHERE id IN (
                 SELECT id FROM (
@@ -351,7 +407,7 @@ impl Database {
                     WHERE m.text IS NOT NULL AND m.time<:before
                 ) LIMIT :limit
             )",
-            named_params!{":before":xirc::format_server_time(before),":limit":i64::try_from(limit).unwrap_or(i64::MAX)},
+            named_params! {":before":xirc::format_server_time(before),":limit":limit},
         )?;
         tx.commit()?;
         Ok(n)
@@ -364,7 +420,13 @@ impl Database {
 ///
 /// The table isn't part of upstream's schema: Go soju ignores it, and keeps
 /// reusing IDs if it deletes messages itself.
+///
+/// Turso tenants reserve every ID through this row before inserting, so it
+/// is already up to date there; their clustered table can't seek max(id).
 pub(super) fn record_message_id_high_water(conn: &super::Connection) -> Result<()> {
+    if conn.is_remote() {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO MessageIdHighWater(id, last_id)
         SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1
@@ -373,6 +435,20 @@ pub(super) fn record_message_id_high_water(conn: &super::Connection) -> Result<(
         [],
     )?;
     Ok(())
+}
+
+/// Returns the stored time and searchable text of a message.
+fn message_time_text(msg: &Message) -> Result<(String, Option<String>)> {
+    let t = match msg.tags.get("time") {
+        Some(tag) => xirc::parse_server_time(tag)
+            .ok_or_else(|| anyhow!("failed to parse message time tag: {tag:?}"))?,
+        None => Utc::now(),
+    };
+    let text = match msg.command.as_str() {
+        "PRIVMSG" | "NOTICE" if msg.params.len() > 1 => Some(strip_ansi(&msg.params[1])),
+        _ => None,
+    };
+    Ok((xirc::format_server_time(t), text))
 }
 
 /// Returns whether a character is a token character for FTS5's unicode61

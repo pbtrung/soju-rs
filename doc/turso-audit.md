@@ -77,8 +77,10 @@ close. The previous client incorrectly required a baton after COMMIT, so
 controller schema creation succeeded but startup reported a transaction
 failure. The mock previously retained every stream until explicitly closed.
 
-COMMIT now sends the replication-index probe and explicit close in the same
-pipeline, validating every response before reporting success. Transaction
+In v0.99.21, COMMIT sent the replication-index probe and explicit close in
+the same pipeline, validating every response before reporting success.
+(Since v0.99.22, COMMIT's own execute response carries the replication
+index, so the separate probe is gone; see below.) Transaction
 poisoning remains active throughout: lost streams before COMMIT, incomplete
 or mistyped responses, and lost commit responses still fail without replay.
 The mock now closes idle streams by default. Regressions cover both hosted
@@ -134,9 +136,55 @@ tests passed (161 library, 3 sojuctl, 34 bouncer integration), plus the
 separately invoked real-engine benchmark. Its ignored test is driven by
 `python3 scripts/bench-query-cost.py`.
 
+## Clustered messages and audit follow-up (v0.99.23)
+
+Turso user databases (schema 33) store `Message` as `WITHOUT ROWID` with
+primary key `(target, time, id)` and a unique text-only `(target, id)`
+index, replacing the rowid table's three secondary indexes. Measured on the
+pinned engine, 200 events now write 200 rows (v0.99.22: 600) and 200 text
+messages 600 (800); expiry probes read 202 rows (403). See the
+[evidence report](turso-query-evidence.md).
+
+- Equivalence: delivery cursors become the last *text* message ID. Their
+  only consumer, backlog for clients without CHATHISTORY, replays text after
+  the cursor, so it selects the same messages. Search drives from FTS row
+  IDs into the text ID index. Message IDs come only from durable
+  reservations; migration seeds the reservation row from the stored
+  maximum, because releases up to v0.99.19 inserted without updating it.
+- Migration copies rows in resumable 1,000-row transactions guarded by a
+  durable cursor; a regression loses a committed chunk's response, restarts,
+  and verifies counts, search, high-water continuity and FTS integrity.
+  Fresh and migrated layouts are checked against the same plan assertions.
+- Writer: a constraint-rejected row (e.g. a conflicting reserved ID) is
+  isolated by bisection and dropped with an error instead of retrying the
+  whole batch forever and blocking the user's input. Batch errors now carry
+  the server message, so the classification sees it. A timeout-lowered line
+  limit doubles again after eight successful chunks.
+- Expiry runs per user database: only databases that deleted messages are
+  optimized, and one failing database no longer skips the rest.
+- Input backpressure preserves each connection's order: once a connection
+  has a deferred event, its later events (except PING/PONG) queue behind it,
+  so a client's PART/QUIT cannot overtake or discard its pending PRIVMSG.
+- Non-storage fixes: a NAK of the SASL capability request now sends CAP END
+  instead of stalling registration until the timeout; the registration
+  timer no longer closes a connection that registered while the select was
+  armed; CAP LS/LIST line splitting no longer underflows with a very long
+  bouncer-only nick.
+- Documentation: corrected the hosted-COMMIT release (v0.99.21), stale test
+  counts, expiry optimization wording and misplaced link definitions.
+
+v0.99.23 validation: formatting and strict Clippy passed; all 199 ordinary
+tests passed (162 library, 3 sojuctl, 34 bouncer integration), plus the
+real-engine benchmark, which asserts the new write counts and read bounds.
+Dependencies were updated, including rusqlite 0.41.1.
+
+Known limit: when ID reservation keeps failing, a message event that
+bypasses the capacity check or fans out past the remaining IDs is forwarded
+but not stored; the error is logged.
+
 ## Validation and limits
 
-Post-release verification exercises `upstream::append_log` on a running
+Post-release v0.99.20 verification exercises `upstream::append_log` on a running
 Turso user's event loop with `chathistory-limit 200`: 400 short messages
 produce exactly two HTTP message batches, each with 200 INSERTs and one
 BEGIN/COMMIT pair. No message INSERT is sent as a standalone execute
@@ -144,8 +192,9 @@ request. Existing timer coverage verifies that a quiet connection can
 instead flush a single message after one second. The schema-upgrade
 regression also inspects fresh and upgraded tenant databases for the
 partial MessageTextIndex and checks text-only history and latest-target
-query plans. Formatting, strict Clippy and all 194 tests passed (157
-library, 3 sojuctl, 34 bouncer integration tests).
+query plans. Formatting, strict Clippy and the then-current 194 tests
+passed (157 library, 3 sojuctl, 34 bouncer integration tests). Schema 33
+replaces those Turso indexes; its layout regression checks the new plans.
 
 Run the required checks:
 

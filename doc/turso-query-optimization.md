@@ -80,6 +80,9 @@ Local SQLite keeps its combined account schema.
 
 ## Results
 
+These exploratory measurements were taken while designing v0.99.22, before
+its final code; the [evidence report](turso-query-evidence.md) is
+regenerated from the final code and differs by a row or a few VM steps.
 The initial local libSQL measurements use the official server image pinned
 to `sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67`.
 These are real engine counters on disposable local data, not cloud invoices.
@@ -149,3 +152,31 @@ before/after numbers are measured locally rather than inferred from prices.
 [Turso usage and billing]: https://docs.turso.tech/help/usage-and-billing
 [indexing guidance]: https://turso.tech/blog/tips-for-maximizing-your-turso-billing-allowances-48a0fca163e9
 [FTS5 columnsize option]: https://www.sqlite.org/fts5.html#the_columnsize_option
+
+## Schema 33: clustered tenant messages
+
+v0.99.22 still wrote three secondary entries per message besides the row:
+a text or event timestamp index, `Message_target_index`, and (for text) an
+FTS entry. Candidate layouts were measured on the pinned engine with 200
+messages per transaction (rows read / written):
+
+| Layout | Text | Events | Rejected because |
+| --- | ---: | ---: | --- |
+| v0.99.22 rowid table, 3 indexes | 600 / 800 | 600 / 600 | Baseline |
+| `WITHOUT ROWID` key `(target, id)`, two time indexes | 400 / 600 | 400 / 400 | An event still writes a time index |
+| `WITHOUT ROWID` key `(target, time, id)`, no index | 400 / 400 | 400 / 200 | Last-ID, backlog cursor and search scan a whole target |
+| Key `(target, time, id)` + text-only `(target, id)` index | 402 / 600 | 400 / 200 | Accepted |
+
+The accepted layout keeps every frequent query a seek: event history,
+latest target time, expiry and deletion on the primary key; last text ID,
+backlog after a cursor and search results on the text ID index. Text-only
+history and text-only target lists read past interleaved events instead of
+using an index: extra reads, no writes. Delivery cursors become last text
+IDs, which is equivalent because backlog replays text only.
+
+Rejected alternatives: storing a per-target last ID would add a write per
+target per batch; an expression index on `(target, text IS NULL, time)`
+costs the same writes as the partial pair; time-bounded backlog queries
+would change cursor semantics for out-of-order server times. Local SQLite
+keeps its upstream-compatible rowid schema, so the shared queries were
+checked against both layouts (and the in-memory pending overlay).

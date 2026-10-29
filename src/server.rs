@@ -498,24 +498,18 @@ impl Server {
                 } else {
                     0.0
                 };
-                let mut n = 0;
-                loop {
-                    let deleted = self
-                        .db
-                        .delete_messages_before(before, EXPIRY_CHUNK_SIZE)
-                        .map_err(|e| anyhow!("failed to delete expired messages from db: {e}"))?;
-                    n += deleted;
-                    if deleted < EXPIRY_CHUNK_SIZE || self.stop.is_cancelled() {
-                        break;
-                    }
-                    // Runs on a blocking thread, see start
-                    std::thread::sleep(EXPIRY_CHUNK_PAUSE);
-                }
+                let n = self
+                    .db
+                    .expire_messages(before, EXPIRY_CHUNK_SIZE, EXPIRY_CHUNK_PAUSE, &|| {
+                        self.stop.is_cancelled()
+                    })
+                    .map_err(|e| anyhow!("failed to delete expired messages from db: {e:#}"))?;
                 logf!(
                     self.logger,
                     "deleted {n} expired messages older than {before_str} from db"
                 );
-                if n > 0 {
+                // Turso tenants merge their own search index while expiring
+                if local_sqlite && n > 0 {
                     let start = Instant::now();
                     self.db
                         .optimize()

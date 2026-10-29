@@ -124,10 +124,10 @@ impl DownstreamConn {
     /// fits in an IRC message.
     fn send_cap_list(&mut self, subcmd: &str, caps: &[String], prefix: Prefix) {
         // Room for ":<prefix> CAP <nick> <subcmd> * :" in 512 bytes
+        // A long bouncer-only nick must not underflow: keep a minimum
         let max = xirc::MAX_MESSAGE_LENGTH
-            - 2
-            - (prefix.formatted_len() + 2)
-            - (self.nick.len() + subcmd.len() + 10);
+            .saturating_sub(2 + prefix.formatted_len() + 2 + self.nick.len() + subcmd.len() + 10)
+            .max(64);
         let mut lines: Vec<String> = vec![String::new()];
         for cap in caps {
             let line = lines.last_mut().unwrap();

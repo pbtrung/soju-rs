@@ -286,10 +286,11 @@ The following directives are supported:
 	again in free disk space. All database access waits while it runs, so
 	clients and upstream connections may stall for the duration.
 
-	With _message-store turso_, startup and daily expiry delete messages and
-	optimize the FTS index. They never run VACUUM, WAL checkpoints or other
-	local file maintenance. The hosted SQL interface does not accept those
-	operations.
+	With _message-store turso_, startup and daily expiry delete messages from
+	each user database in turn and optimize the FTS index of those that
+	deleted messages; a failing database does not stop the others. They never
+	run VACUUM, WAL checkpoints or other local file maintenance. The hosted
+	SQL interface does not accept those operations.
 
 	By default, messages are kept indefinitely.
 

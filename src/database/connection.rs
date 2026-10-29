@@ -441,12 +441,13 @@ impl Connection {
                         .as_str()
                         .is_some_and(|m| m.contains("FOREIGN KEY constraint failed"));
                 return Err(error(format!(
-                    "Turso message batch failed ({})",
+                    "Turso message batch failed ({}): {}",
                     if foreign_key {
                         "SQLITE_CONSTRAINT_FOREIGNKEY"
                     } else {
                         err["code"].as_str().unwrap_or("UNKNOWN")
-                    }
+                    },
+                    err["message"].as_str().unwrap_or("unknown error")
                 )));
             }
             if !result.is_object() {

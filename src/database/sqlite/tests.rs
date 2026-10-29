@@ -582,7 +582,7 @@ fn migrations() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 32);
+    assert_eq!(SCHEMA_VERSION, 33);
 }
 
 #[test]

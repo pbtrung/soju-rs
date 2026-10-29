@@ -436,7 +436,6 @@ fn execute(conn: &mut rusqlite::Connection, stmt: &Json) -> rusqlite::Result<Jso
     }
     let cols: Vec<_> = query
         .column_names()
-        .iter()
         .map(|name| json!({"name":name, "decltype":null}))
         .collect();
     let count = cols.len();
@@ -750,7 +749,7 @@ fn user_schema_migration_preserves_messages() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_tenant_message_text_index(&cloud, &name);
+    assert_tenant_message_layout(&cloud, &name);
     drop(db);
     {
         let path = cloud.state.lock().unwrap().root.join(&name);
@@ -790,27 +789,39 @@ fn user_schema_migration_preserves_messages() {
         .unwrap(),
         messages
     );
-    assert_tenant_message_text_index(&cloud, &name);
+    assert_tenant_message_layout(&cloud, &name);
 }
 
-fn assert_tenant_message_text_index(cloud: &Cloud, name: &str) {
+fn assert_tenant_message_layout(cloud: &Cloud, name: &str) {
     let path = cloud.state.lock().unwrap().root.join(name);
     let conn = rusqlite::Connection::open(path).unwrap();
     let sql: String = conn
         .query_row(
-            "SELECT sql FROM sqlite_master WHERE type='index' AND name='MessageTextIndex'",
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='Message'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert!(sql.contains("ON Message(target, time) WHERE text IS NOT NULL"));
-    for query in [
-        "SELECT m.raw FROM Message m, MessageTarget t
-         WHERE m.target=t.id AND t.network=1 AND t.target='#a' AND m.text IS NOT NULL
-         ORDER BY m.time DESC, m.id DESC LIMIT 10",
-        "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id
-         AND text IS NOT NULL ORDER BY time DESC LIMIT 1) latest
-         FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+    assert!(sql.contains("PRIMARY KEY(target, time, id)") && sql.contains("WITHOUT ROWID"));
+    let indexes: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='Message' AND sql IS NOT NULL")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(indexes, ["MessageTextIdIndex"]);
+    let target = "(SELECT id FROM MessageTarget WHERE network=1 AND target='#a')";
+    for (query, expected) in [
+        // Delivery cursors and search results seek text message IDs
+        (format!("SELECT id FROM Message WHERE target={target} AND text IS NOT NULL ORDER BY id DESC LIMIT 1"), "MessageTextIdIndex"),
+        (format!("SELECT time,id FROM Message WHERE target={target} AND text IS NOT NULL AND id>5"), "MessageTextIdIndex"),
+        (format!("SELECT m.id FROM (SELECT rowid AS r FROM MessageFTS WHERE MessageFTS MATCH 'x') f
+            CROSS JOIN Message m ON m.id=f.r WHERE m.target={target} AND m.text IS NOT NULL"), "MessageTextIdIndex"),
+        // History, latest-target and expiry seek the clustered key
+        (format!("SELECT raw FROM Message m WHERE m.target={target} ORDER BY time DESC, id DESC LIMIT 10"), "PRIMARY KEY (target=?)"),
+        ("SELECT (SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1) FROM MessageTarget".into(), "PRIMARY KEY (target=?)"),
+        ("SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id WHERE m.time<'x' LIMIT 10".into(), "PRIMARY KEY (target=? AND time<?)"),
     ] {
         let plan = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
@@ -819,10 +830,8 @@ fn assert_tenant_message_text_index(cloud: &Cloud, name: &str) {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        assert!(
-            plan.iter().any(|p| p.contains("MessageTextIndex")),
-            "{plan:?}"
-        );
+        assert!(plan.iter().any(|p| p.contains(expected)), "{query}: {plan:?}");
+        assert!(!plan.iter().any(|p| p.contains("TEMP B-TREE")), "{query}: {plan:?}");
     }
 }
 
@@ -1479,18 +1488,18 @@ fn atomic_message_batches_rollback_and_reject_conflicting_reserved_ids() {
         &timed_message("conflicting contents", 0),
     )
     .unwrap();
-    assert!(writer.write(&[first.clone(), bad]).is_err());
+    // The rejected row is isolated and dropped instead of blocking the batch
+    assert_eq!(writer.write(&[first.clone(), bad]).unwrap(), 1);
     let opts = MessageOptions {
         limit: 100,
         ..Default::default()
     };
-    assert!(
-        db.list_messages(net.id, "#buffered", &opts)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        db.list_messages(net.id, "#buffered", &opts).unwrap().len(),
+        1
     );
-    writer.write(std::slice::from_ref(&first)).unwrap();
-    writer.write(&[first]).unwrap();
+    assert_eq!(writer.write(std::slice::from_ref(&first)).unwrap(), 0);
+    assert_eq!(writer.write(&[first]).unwrap(), 0);
     let collision = MessageInsert::new(
         id,
         net.id,
@@ -1498,7 +1507,7 @@ fn atomic_message_batches_rollback_and_reject_conflicting_reserved_ids() {
         &timed_message("different contents", 0),
     )
     .unwrap();
-    assert!(writer.write(&[collision]).is_err());
+    assert_eq!(writer.write(&[collision]).unwrap(), 1);
     let rows = db.list_messages(net.id, "#buffered", &opts).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].params[1], "original");
@@ -2065,14 +2074,31 @@ fn tenant_user_removal_and_sparse_search_resume_preserve_existing_data() {
         conn.execute("INSERT INTO WebPushSubscription(id,created_at,updated_at,user,network,endpoint,key_auth)VALUES(1,'2024-01-01T00:00:00.000Z','2024-01-01T00:00:00.000Z',?,1,'https://push.example','push-secret')",[account.id]).unwrap();
         conn.execute_batch("INSERT INTO Channel(id,network,name,key)VALUES(1,1,'#legacy','channel-secret');
             INSERT INTO MessageTarget(id,network,target,pinned)VALUES(1,1,'#legacy',1),(2,1,'#events',0);
-            WITH RECURSIVE m(id)AS(VALUES(1) UNION ALL SELECT id+1 FROM m WHERE id<600)
+            WITH RECURSIVE m(id)AS(VALUES(1) UNION ALL SELECT id+1 FROM m WHERE id<2400)
             INSERT INTO Message(id,target,raw,time,sender,text)SELECT id,1,
                 CASE WHEN id%3=0 THEN 'JOIN #legacy' ELSE 'PRIVMSG #legacy :legacy token' END,
                 '2024-01-01T00:00:00.000Z','',CASE WHEN id%3!=0 THEN 'legacy token' END FROM m;
-            INSERT INTO Message(id,target,raw,time,sender,text)VALUES(601,2,'JOIN #events','2024-01-01T00:00:00.000Z','',NULL);
+            INSERT INTO Message(id,target,raw,time,sender,text)VALUES(2401,2,'JOIN #events','2024-01-01T00:00:00.000Z','',NULL);
+            CREATE TABLE MessageIdHighWater(id INTEGER PRIMARY KEY CHECK(id=0),last_id INTEGER NOT NULL);
+            INSERT INTO MessageIdHighWater(id,last_id)VALUES(0,7);
             INSERT INTO DeliveryReceipt(network,target,client,internal_msgid)VALUES(1,'#legacy',NULL,'cursor');
             INSERT INTO ReadReceipt(network,target,timestamp)VALUES(1,'#legacy','2024-01-01T00:00:00.000Z');
             PRAGMA user_version=31;").unwrap();
+    }
+    // The first chunk commits, but its response is lost
+    cloud.state.lock().unwrap().fault = Some(("INSERT INTO MessageNext".into(), Fault::HttpAfter));
+    assert!(cloud.open().is_err());
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let (progress, copied, high_water): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT message FROM TursoMessageRebuild),(SELECT count(*) FROM MessageNext),
+                (SELECT last_id FROM MessageIdHighWater)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((progress, copied, high_water), (1000, 1000, 2401));
     }
     cloud.state.lock().unwrap().fault =
         Some(("INSERT INTO MessageFTSNext".into(), Fault::HttpAfter));
@@ -2118,29 +2144,35 @@ fn tenant_user_removal_and_sparse_search_resume_preserve_existing_data() {
             1,
             "#legacy",
             &MessageOptions {
-                limit: 1000,
+                limit: 5000,
                 text: "legacy".into(),
                 ..Default::default()
             }
         )
         .unwrap()
         .len(),
-        400
+        1600
     );
     assert_eq!(
         db.list_messages(
             1,
             "#legacy",
             &MessageOptions {
-                limit: 1000,
+                limit: 5000,
                 events: true,
                 ..Default::default()
             }
         )
         .unwrap()
         .len(),
-        600
+        2400
     );
+    // Reserved IDs continue after the legacy messages, not the stale row
+    let id = db
+        .store_messages(1, "#legacy", &[msg!("PRIVMSG", "#legacy", "new")])
+        .unwrap()[0];
+    assert_eq!(id, 2402);
+    assert_eq!(db.get_message_last_id(1, "#legacy").unwrap(), id);
     let conn = rusqlite::Connection::open(&path).unwrap();
     for table in [
         "User",
@@ -2148,6 +2180,11 @@ fn tenant_user_removal_and_sparse_search_resume_preserve_existing_data() {
         "WebPushConfig",
         "TursoSearchMigration",
         "MessageFTSNext",
+        "TursoMessageRebuild",
+        "MessageNext",
+        "MessageTextIndex",
+        "MessageEventIndex",
+        "Message_target_index",
         "MessageFTS_docsize",
     ] {
         let exists: bool = conn

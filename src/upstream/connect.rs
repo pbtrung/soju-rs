@@ -149,6 +149,10 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         let res = tokio::select! {
             res = reader.read_message_limited() => res,
             _ = tokio::time::sleep_until(register_deadline), if !registered.is_cancelled() => {
+                // Registration may have completed after this select! began
+                if registered.is_cancelled() {
+                    continue;
+                }
                 conn.close();
                 Err(anyhow!("registration timed out"))
             }

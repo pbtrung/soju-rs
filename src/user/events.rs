@@ -123,7 +123,15 @@ impl User {
                 | Event::UpstreamConnectionError { .. } => false,
                 _ => true,
             };
-            if !capacity && !bypass {
+            // Keep each connection's input in order: e.g. a client's PART or
+            // QUIT must not overtake its deferred PRIVMSG.
+            let keepalive = matches!(&ev,
+                Event::UpstreamMessage { msg, .. } | Event::DownstreamMessage { msg, .. }
+                    if matches!(msg.command.as_str(), "PING" | "PONG"));
+            let queued_source = !keepalive
+                && event_source(&ev)
+                    .is_some_and(|s| deferred.iter().any(|d| event_source(d) == Some(s)));
+            if !capacity && (!bypass || queued_source) {
                 deferred.push_back(ev);
                 continue;
             }
@@ -504,5 +512,18 @@ impl User {
         if !self.downstreams[i].impersonating {
             self.bump_downstream_interaction_time();
         }
+    }
+}
+
+/// Identifies the connection an event was read from: (upstream, ID).
+fn event_source(ev: &Event) -> Option<(bool, u64)> {
+    match ev {
+        Event::UpstreamMessage { conn_id, .. } | Event::UpstreamClosed { conn_id, .. } => {
+            Some((true, *conn_id))
+        }
+        Event::DownstreamMessage { dc_id, .. } | Event::DownstreamDisconnected { dc_id, .. } => {
+            Some((false, *dc_id))
+        }
+        _ => None,
     }
 }

@@ -17,7 +17,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 struct Flight {
     rows: Arc<Vec<MessageInsert>>,
-    reply: Option<mpsc::Receiver<Result<()>>>,
+    reply: Option<mpsc::Receiver<Result<usize>>>,
     retry_at: Instant,
     failures: u32,
 }
@@ -160,9 +160,14 @@ impl BatchStore {
         if let Some(result) = result {
             flight.reply = None;
             match result {
-                Ok(()) => {
+                Ok(rejected) => {
                     b.index.remove(&flight.rows)?;
                     b.flight = None;
+                    if rejected > 0 {
+                        return Err(anyhow!(
+                            "Turso rejected {rejected} buffered messages; they were not stored"
+                        ));
+                    }
                 }
                 Err(err) => {
                     flight.failures += 1;

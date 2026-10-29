@@ -484,6 +484,10 @@ fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
                     uc.logger,
                     "server refused to acknowledge the SASL capability"
                 );
+                // CAP LS held back CAP END for authentication
+                if !uc.registered {
+                    uc.send_message(msg!("CAP", "END"));
+                }
                 return Ok(());
             }
             match auth.mechanism.as_str() {

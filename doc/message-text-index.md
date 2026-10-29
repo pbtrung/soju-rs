@@ -10,6 +10,9 @@ In v0.99.22 (schema 32), `MessageTextIndex` remains in use and the old full
 playback merges the disjoint indexes. The measurements below document the
 earlier change; see [the current optimization audit](turso-query-optimization.md).
 Commands using ANALYZE below are for local SQLite, not Turso Cloud.
+From v0.99.23 (schema 33), Turso user databases no longer have these indexes:
+their `Message` table is clustered by `(target, time, id)`, see
+[Turso Cloud storage](turso.md#message-table-layout). Local SQLite keeps them.
 
 Checked against soju-rs commit `dbb2c7c` (2026-10-24).
 

@@ -1,6 +1,6 @@
 //! Real engine counters; driven only against a disposable localhost server.
 use super::{http::Http, *};
-use crate::database::{MessageInsert, MessageWriter};
+use crate::database::{MessageInsert, MessageOptions, MessageWriter};
 use crate::msg;
 
 fn rows(start: i64, events: bool) -> Vec<MessageInsert> {
@@ -208,19 +208,19 @@ fn real_engine_query_cost() {
     observe(
         &http,
         "after_text_200_cold_target",
-        || writer.write(&rows(1, false)),
+        || writer.write(&rows(1, false)).map(|n| assert_eq!(n, 0)),
         &mut output,
     );
     observe(
         &http,
         "after_identical_retry_200",
-        || writer.write(&rows(1, false)),
+        || writer.write(&rows(1, false)).map(|n| assert_eq!(n, 0)),
         &mut output,
     );
     observe(
         &http,
         "after_events_200",
-        || writer.write(&rows(201, true)),
+        || writer.write(&rows(201, true)).map(|n| assert_eq!(n, 0)),
         &mut output,
     );
     db.conn().execute_batch(receipt_fixture).unwrap();
@@ -277,6 +277,83 @@ fn real_engine_query_cost() {
         },
         &mut output,
     );
+    let db = &db;
+    let history = |target: &'static str, options: MessageOptions| {
+        move || -> Result<()> {
+            db.list_messages(1, target, &options)?;
+            Ok(())
+        }
+    };
+    let latest = |events| MessageOptions {
+        limit: 50,
+        events,
+        take_last: true,
+        ..Default::default()
+    };
+    observe(
+        &http,
+        "after_event_history_50_of_1000",
+        history("#target2", latest(true)),
+        &mut output,
+    );
+    observe(
+        &http,
+        "after_text_history_50_behind_1000_events",
+        history("#bench", latest(false)),
+        &mut output,
+    );
+    let mut last_id = 0;
+    observe(
+        &http,
+        "after_last_text_id",
+        || {
+            last_id = db.get_message_last_id(1, "#bench")?;
+            Ok(())
+        },
+        &mut output,
+    );
+    assert_eq!(last_id, 200);
+    observe(
+        &http,
+        "after_backlog_after_last_id",
+        history(
+            "#bench",
+            MessageOptions {
+                after_id: last_id,
+                limit: 1000,
+                take_last: true,
+                ..Default::default()
+            },
+        ),
+        &mut output,
+    );
+    observe(
+        &http,
+        "after_backlog_10_new",
+        history(
+            "#bench",
+            MessageOptions {
+                after_id: last_id - 10,
+                limit: 1000,
+                take_last: true,
+                ..Default::default()
+            },
+        ),
+        &mut output,
+    );
+    observe(
+        &http,
+        "after_search_1_of_200",
+        history(
+            "#bench",
+            MessageOptions {
+                text: "fixture 150".into(),
+                limit: 50,
+                ..Default::default()
+            },
+        ),
+        &mut output,
+    );
     db.conn()
         .execute_batch("INSERT INTO MessageFTS(MessageFTS,rank)VALUES('integrity-check',1)")
         .unwrap();
@@ -285,7 +362,22 @@ fn real_engine_query_cost() {
             .as_u64()
             .unwrap()
     };
+    println!(
+        "SOJU_QUERY_COST {}",
+        json!({"measurements":output,"fixture_messages":100400})
+    );
     assert_eq!(value("after_identical_retry_200", "rows_written"), 0);
+    // One clustered row per event; text adds its ID index and search entry
+    assert!(value("after_events_200", "rows_written") <= 200);
+    assert!(value("after_text_200_cold_target", "rows_written") <= 602);
+    for case in ["after_event_history_50_of_1000", "after_search_1_of_200"] {
+        assert!(value(case, "rows_read") <= 60, "{case}");
+    }
+    // Text-only history steps over newer events in the clustered table
+    assert!(value("after_text_history_50_behind_1000_events", "rows_read") <= 1300);
+    assert!(value("after_last_text_id", "rows_read") <= 2);
+    assert!(value("after_backlog_after_last_id", "rows_read") <= 6);
+    assert!(value("after_backlog_10_new", "rows_read") <= 50);
     assert_eq!(
         value("after_unchanged_200_of_2000_receipts", "rows_written"),
         0
@@ -304,9 +396,5 @@ fn real_engine_query_cost() {
     assert!(
         value("after_expiry_zero_of_100400", "rows_read")
             < value("before_expiry_zero_of_100400", "rows_read") / 10
-    );
-    println!(
-        "SOJU_QUERY_COST {}",
-        json!({"measurements":output,"fixture_messages":100400})
     );
 }

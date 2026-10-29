@@ -142,13 +142,17 @@ def main():
                    "path uses the production MessageWriter. Cold-target resolution is included;",
                    "subsequent writes reuse its bounded target cache. Network/target foreign keys",
                    "remain enforced. An identical retry must write zero rows.", "",
-                   "The optimized expiry measurement includes recording the highest message ID.",
-                   "The old HAVING-based high-water statement is rejected by this engine's HTTP",
-                   "SQL parser, so the baseline conservatively measures only its expiry scan.",
-                   "The SQLite full-scan high-water comparison is documented separately. The",
-                   "one-time migration case is measured separately; it preserves all 100,400",
-                   "messages and passes FTS integrity checks. Setup, cleanup and validation",
-                   "queries are outside the measured intervals.", ""]
+                   "Baselines use the frozen v0.99.21 schema and insert SQL. The optimized",
+                   "cases use the clustered schema-33 tenant Message table: PRIMARY KEY",
+                   "(target, time, id) WITHOUT ROWID, plus a text-only (target, id) index.",
+                   "Tenants reserve every message ID through one high-water row, so expiry",
+                   "no longer records the highest ID. The one-time migration case upgrades the",
+                   "schema-31 fixture, including the clustered copy and sparse FTS rebuild; it",
+                   "preserves all 100,400 messages and passes FTS integrity checks.", "",
+                   "The read cases run after the expiry fixture adds 1,000 newer events to",
+                   "each target. Text-only history steps over those events: the clustered",
+                   "layout trades these cheaper reads for one fewer index write per message.",
+                   "Setup, cleanup and validation queries are outside the measured intervals.", ""]
         report += sqlite_evidence(root)
         text = "\n".join(report)
         print(text)
