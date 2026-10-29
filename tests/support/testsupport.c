@@ -1,6 +1,7 @@
 #include "testsupport.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -49,6 +50,8 @@ static const struct alloc_hooks cmocka_hooks = {
 #endif
 
 int t_run(const char *name, const struct CMUnitTest *tests, size_t n) {
+	// Like soju (src/main/soju.c): writes to closed peers fail with EPIPE
+	signal(SIGPIPE, SIG_IGN);
 #ifdef SOJU_MODE_DEBUG
 	alloc_set_hooks(&cmocka_hooks);
 #endif

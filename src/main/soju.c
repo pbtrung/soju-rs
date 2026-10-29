@@ -1,5 +1,6 @@
 // soju, a user-friendly IRC bouncer. The server itself is ported in later
 // phases (PLAN.md section 5); for now only -version and -build-info work.
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -7,6 +8,9 @@
 #include "version.h"
 
 int main(int argc, char *argv[]) {
+	// A peer which closed its end mustn't kill us when we write to it (the
+	// Rust runtime ignores SIGPIPE too); writes fail with EPIPE instead
+	signal(SIGPIPE, SIG_IGN);
 	for (int i = 1; i < argc; i++) {
 		const char *a = argv[i];
 		if (strcmp(a, "-version") == 0 || strcmp(a, "--version") == 0) {

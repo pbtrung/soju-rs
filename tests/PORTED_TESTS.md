@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 72 of 165 unit tests (phases 0–2); 0 of 17 scenarios.
+Ported so far: 86 of 165 unit tests (phases 0–3); 0 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -21,7 +21,7 @@ Also compared against the Rust code by the differential harness
 | `src/bin/sojuctl.rs` | `turso_bootstrap_validates_before_connecting` | pending: phase 10 |
 | `src/bin/sojuctl.rs` | `quoting` | pending: phase 10 |
 | `src/bin/sojuctl.rs` | `quoting_roundtrip` | pending: phase 10 |
-| `src/certfp.rs` | `generate_all` | pending: phase 7 |
+| `src/certfp.rs` | `generate_all` | `test_net_misc.c`: `test_generate_all` |
 | `src/config.rs` | `turso_config` | `test_config_config.c`: `test_turso_config` |
 | `src/config.rs` | `full_config` | `test_config_config.c`: `test_full_config` |
 | `src/config.rs` | `defaults` | `test_config_config.c`: `test_defaults` |
@@ -29,15 +29,15 @@ Also compared against the Rust code by the differential harness
 | `src/config.rs` | `durations` | `test_config_config.c`: `test_durations` |
 | `src/config.rs` | `log_alias` | `test_config_config.c`: `test_log_alias` |
 | `src/config.rs` | `fs_message_store_unsupported` | `test_config_config.c`: `test_fs_message_store_unsupported` |
-| `src/conn.rs` | `stream_roundtrip` | pending: phase 3 |
-| `src/conn.rs` | `rate_limited` | pending: phase 3 |
-| `src/conn.rs` | `queued_line` | pending: phase 3 |
-| `src/conn.rs` | `stream_wire_format` | pending: phase 3 |
-| `src/conn.rs` | `websocket_wire_format` | pending: phase 3 |
-| `src/conn.rs` | `queue_budget` | pending: phase 3 |
-| `src/conn.rs` | `input_in_flight` | pending: phase 3 |
-| `src/conn.rs` | `view` | pending: phase 3 |
-| `src/conn.rs` | `line_parsing` | pending: phase 3 |
+| `src/conn.rs` | `stream_roundtrip` | `test_net_conn.c`: `test_stream_roundtrip` |
+| `src/conn.rs` | `rate_limited` | `test_net_conn.c`: `test_rate_limited` |
+| `src/conn.rs` | `queued_line` | `test_net_conn.c`: `test_queued_line` |
+| `src/conn.rs` | `stream_wire_format` | `test_net_conn.c`: `test_stream_wire_format` |
+| `src/conn.rs` | `websocket_wire_format` | pending: phase 8 (WebSocket) |
+| `src/conn.rs` | `queue_budget` | `test_net_conn.c`: `test_queue_budget` |
+| `src/conn.rs` | `input_in_flight` | `test_net_conn.c`: `test_input_in_flight` |
+| `src/conn.rs` | `view` | `test_net_conn.c`: `test_view` |
+| `src/conn.rs` | `line_parsing` | `test_net_conn.c`: `test_line_parsing` |
 | `src/database/connection.rs` | `stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin` | pending: phase 2 |
 | `src/database/mod.rs` | `network_url` | `test_net_url.c`: `test_network_url` |
 | `src/database/mod.rs` | `host_port` | `test_net_url.c`: `test_host_port` |
@@ -102,7 +102,7 @@ Also compared against the Rust code by the differential harness
 | `src/downstream/sasl.rs` | `sasl_mechanisms` | pending: phase 4 |
 | `src/flags.rs` | `parse` | `test_config_flags.c`: `test_parse` |
 | `src/flags.rs` | `errors` | `test_config_flags.c`: `test_errors` |
-| `src/identd.rs` | `query` | pending: phase 3 |
+| `src/identd.rs` | `query` | `test_net_misc.c`: `test_query` |
 | `src/irc/mod.rs` | `parse_basic` | `test_irc_message.c`: `test_parse_basic` |
 | `src/irc/mod.rs` | `parse_tags` | `test_irc_message.c`: `test_parse_tags` |
 | `src/irc/mod.rs` | `parse_many_tags` | `test_irc_message.c`: `test_parse_many_tags` |
@@ -125,9 +125,9 @@ Also compared against the Rust code by the differential harness
 | `src/msgstore/memory.rs` | `ring` | pending: phase 6 |
 | `src/msgstore/memory.rs` | `delete_network` | pending: phase 6 |
 | `src/msgstore/mod.rs` | `go_compat` | `test_msgstore_msgid.c`: `test_go_compat` |
-| `src/proxyproto.rs` | `no_header` | pending: phase 3 |
-| `src/proxyproto.rs` | `v1` | pending: phase 3 |
-| `src/proxyproto.rs` | `v2` | pending: phase 3 |
+| `src/proxyproto.rs` | `no_header` | `test_net_misc.c`: `test_no_header` |
+| `src/proxyproto.rs` | `v1` | `test_net_misc.c`: `test_v1` |
+| `src/proxyproto.rs` | `v2` | `test_net_misc.c`: `test_v2` |
 | `src/rate.rs` | `backoff` | `test_net_rate.c`: `test_backoff` |
 | `src/rate.rs` | `limiter` | `test_net_rate.c`: `test_limiter` |
 | `src/scfg.rs` | `basic` | `test_config_scfg.c`: `test_basic` |
@@ -138,7 +138,7 @@ Also compared against the Rust code by the differential harness
 | `src/service/mod.rs` | `lookup` | pending: phase 7 |
 | `src/service/mod.rs` | `help_listing` | pending: phase 7 |
 | `src/service/mod.rs` | `durations` | pending: phase 7 |
-| `src/tls.rs` | `pinned_cert` | pending: phase 3 |
+| `src/tls.rs` | `pinned_cert` | `test_net_misc.c`: `test_pinned_cert` |
 | `src/upstream/mod.rs` | `errno_messages` | pending: phase 5 |
 | `src/upstream/mod.rs` | `labels` | pending: phase 5 |
 | `src/upstream/mod.rs` | `registration_errors` | pending: phase 5 |

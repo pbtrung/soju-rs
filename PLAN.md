@@ -706,6 +706,9 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
 9. Threads: one libuv loop per CPU, a single loop on a single CPU, like
    soju-rs's choice between Tokio's `current_thread` and `multi_thread`
    runtimes (rule 1).
+10. NUL bytes in received lines become U+FFFD (soju-rs keeps them; C
+    strings can't hold them). Values decoded from data where NUL may occur
+    (e.g. message ID targets) are kept length-aware instead.
 
 ## 8. Changes on `main` since v0.99.15
 
