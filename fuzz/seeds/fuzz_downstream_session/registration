@@ -1,0 +1,7 @@
+CAP LS 302
+NICK fuzz
+USER fuzz 0 * :Fuzzer
+CAP REQ :sasl labeled-response batch
+AUTHENTICATE PLAIN
+AUTHENTICATE AGZ1enoAcHc=
+CAP END

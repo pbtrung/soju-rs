@@ -199,3 +199,9 @@ Also compared against the Rust code by the differential harness
 - `monitor_invalid_targets`: pending
 - `multiplex`: pending
 - `multiplex_unsupported`: pending
+
+Phase 4 C-only coverage: `test_downstream.test_welcome_sync_multiplex`
+checks welcome, dynamic ISUPPORT, tagged virtual welcomes, independent
+labels, detach, late routing and parent teardown. `fuzz_downstream_session`
+exercises CAP/SASL registration, authentication completion and virtual
+connection creation/destruction with a full loop/DB teardown per input.

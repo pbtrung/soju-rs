@@ -1,0 +1,6 @@
+
+CAP REQ :batch labeled-response
+@label=a;soju.im/network=1 PING x
+
+@soju.im/network=1 TEST
+

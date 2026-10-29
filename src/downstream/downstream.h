@@ -1,7 +1,5 @@
 // Downstream connections from IRC clients (soju-rs downstream/*): state,
-// capabilities, SASL, labeled responses and batches, and registration up
-// to the point the connection is handed to its user. Welcome and sync,
-// which need the user's networks, come with the user (phase 6).
+// capabilities, SASL, labels, batches, welcome and synchronization.
 //
 // A downstream belongs to its connection's loop. Asynchronous work
 // (authentication) finds it again by ID (PLAN.md 2.1 rule 2).
@@ -87,6 +85,10 @@ struct downstream_events {
 	// Registration is complete (dc->username is the authenticated user);
 	// the callee takes over dc, or closes it
 	void (*registered)(struct downstream *dc, void *data);
+	// Registered input (takes msg). Call downstream_input_done after the
+	// user's event has been handled, including when its target disappeared.
+	void (*message)(struct downstream *dc, struct irc_msg *msg, void *data);
+	void (*closed)(struct downstream *dc, void *data);
 	void *data;
 };
 
@@ -132,6 +134,8 @@ struct downstream {
 	bool impersonating;
 	bool busy; // an asynchronous registration step is running
 	bool closed;
+	int64_t user_id;
+	struct sloop *user_loop; // routing only; no user object crosses loops
 };
 
 // Serves a new connection (takes the reference on c)
@@ -140,6 +144,31 @@ void downstream_serve(struct server *srv, struct conn *c, const struct conn_info
 // The downstream with this ID on the current loop, or nullptr
 [[nodiscard]] struct downstream *downstream_lookup(uint64_t id);
 void downstream_close(struct downstream *dc);
+// Dispatches owned input, also used by multiplex and the session fuzzer.
+void downstream_receive_take(struct downstream *dc, struct irc_msg *msg);
+void downstream_input_done(struct downstream *dc);
+void downstream_begin_command(struct downstream *dc, const struct irc_msg *msg);
+void downstream_end_command(struct downstream *dc);
+void downstream_registration_done(struct downstream *dc);
+// A virtual connection inherits capabilities and identity, with independent
+// labels, batches and multiline state. It holds its own connection reference.
+[[nodiscard]] struct downstream *downstream_attach(struct downstream *parent, int64_t network_id);
+[[nodiscard]] struct downstream *downstream_find_attached(uint64_t parent_id, int64_t network_id);
+void downstream_detach(struct downstream *dc);
+
+// Borrowed state snapshot supplied by the user on the connection's loop.
+struct downstream_sync {
+	const char *nick, *username, *hostname, *realname, *account;
+	const char *modes;
+	enum casemapping casemap;
+	bool admin, chathistory, has_network;
+	int64_t network_id;
+	const struct cap_registry *up_caps;
+	const struct isupport *up_isupport;
+};
+void downstream_update_caps(struct downstream *dc, const struct downstream_sync *s);
+void downstream_sync(struct downstream *dc, const struct downstream_sync *s);
+void downstream_welcome(struct downstream *dc, const struct downstream_sync *s);
 
 // Sending (soju-rs downstream/send.rs)
 void downstream_send(struct downstream *dc, struct irc_msg *msg); // takes msg

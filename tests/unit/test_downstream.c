@@ -284,8 +284,53 @@ static void test_cap_labeled_and_errors(void **state) {
 	env_teardown(&e);
 }
 
-T_MAIN(cmocka_unit_test(test_usernames), cmocka_unit_test(test_nickserv),
-       cmocka_unit_test(test_network_attrs_roundtrip), cmocka_unit_test(test_sasl_mechanisms),
-       cmocka_unit_test(test_register_pass), cmocka_unit_test(test_register_wrong_password),
-       cmocka_unit_test(test_register_sasl_plain), cmocka_unit_test(test_register_sasl_failure),
-       cmocka_unit_test(test_cap_labeled_and_errors))
+static void test_welcome_sync_multiplex(void **state) {
+	(void)state;
+	struct env e;
+	env_setup(&e);
+	say(&e, "PASS secret\r\nNICK alice\r\nUSER alice 0 * :Alice\r\n");
+	run_until_registered(&e);
+	struct downstream_sync sync = {.nick = "alice",
+				       .username = "alice",
+				       .hostname = "host",
+				       .realname = "Alice",
+				       .account = "alice",
+				       .casemap = CASEMAPPING_ASCII,
+				       .admin = true};
+	downstream_welcome(e.dc, &sync);
+	expect(&e, ":localhost 001 alice :Welcome to soju, alice\r\n");
+	expect(&e, "CHANTYPES=");
+	cap_registry_set_enabled(&e.dc->caps, "soju.im/multiplex", true);
+	cap_registry_set_enabled(&e.dc->caps, "batch", true);
+	cap_registry_set_enabled(&e.dc->caps, "labeled-response", true);
+	struct downstream *child = downstream_attach(e.dc, 42);
+	assert_ptr_equal(downstream_find_attached(e.dc->id, 42), child);
+	assert_false(cap_registry_is_enabled(&child->caps, "soju.im/multiplex"));
+	sync.has_network = true;
+	sync.network_id = 42;
+	sync.nick = "upnick";
+	downstream_welcome(child, &sync);
+	expect(&e, "@soju.im/network=42 :localhost 001 upnick");
+	struct irc_msg *cmd = irc_msg_parse(STR_LIT("@label=child TEST"), nullptr);
+	downstream_begin_command(child, cmd);
+	irc_msg_free(cmd);
+	downstream_end_command(child);
+	expect(&e, "@label=child;soju.im/network=42 ACK");
+	downstream_detach(child);
+	assert_null(downstream_find_attached(e.dc->id, 42));
+	assert_false(conn_is_closed(e.dc->conn));
+	downstream_receive_take(e.dc, irc_msg_parse(STR_LIT("@soju.im/network=42 TEST"), nullptr));
+	expect(&e, "FAIL TEST NETWORK_NOT_ATTACHED 42 :Network not attached");
+	child = downstream_attach(e.dc, 43);
+	uint64_t child_id = child->id;
+	downstream_close(e.dc);
+	e.dc = nullptr;
+	assert_null(downstream_lookup(child_id));
+	env_teardown(&e);
+}
+
+T_MAIN(cmocka_unit_test(test_welcome_sync_multiplex), cmocka_unit_test(test_usernames),
+       cmocka_unit_test(test_nickserv), cmocka_unit_test(test_network_attrs_roundtrip),
+       cmocka_unit_test(test_sasl_mechanisms), cmocka_unit_test(test_register_pass),
+       cmocka_unit_test(test_register_wrong_password), cmocka_unit_test(test_register_sasl_plain),
+       cmocka_unit_test(test_register_sasl_failure), cmocka_unit_test(test_cap_labeled_and_errors))

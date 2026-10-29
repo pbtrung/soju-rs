@@ -1,16 +1,14 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–3 complete; phase 4 in progress**
-(`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 has the downstream
-connection up to registration: CAP 302, SASL (PLAIN with admin
-impersonation, EXTERNAL; OAUTHBEARER parsing, its validation is phase 9),
-PASS, labeled responses, batches, the send path, ISUPPORT, and internal
-authentication through the DB thread and CPU-job limiter. Still open in
-phase 4: welcome, sync and the user-level capability updates (they take
-the user's networks, so they land with the user structures of phases
-5–6), and `fuzz_downstream_session`. Other open items: phase 1's long
-fuzzing budget and dedicated L5 harnesses; phase 2's migration check uses
-upstream's version 0 and 30 schemas rather than a Go soju v0.11 database.
+Status: **phases 0–4 implemented; phases 5–6 next**
+(`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
+state synchronization, dynamic capabilities, multiplex connection views,
+and the stateful downstream session fuzzer. Network selection, channel
+replay and backlog delivery are integrated by the user actor in phase 6.
+Other open items: phase 1's long fuzzing budget and dedicated L5 harnesses;
+phase 2's migration check uses upstream's version 0 and 30 schemas rather
+than a Go soju v0.11 database. The full phase-exit matrix and long fuzzing
+budgets remain separate from the per-commit checks below.
 Source of truth for behaviour: soju-rs `main` at v0.99.23 (`c350574`), ~33k
 lines of Rust in 90 files (plan first written against v0.99.15, `02acf7d`;
 section 8 lists what changed on `main` since then). This branch (`c-port`) starts empty; the Rust tree
@@ -727,3 +725,10 @@ starts from `c350574` (v0.99.23).
 | `e0957f3` | `soju.im/multiplex` | goals, phase 4, L2/L3/L5 |
 | `e3a3349` | `MessageTextIndex` (schema 31) | phase 2 |
 | `d478f60`…`c350574` | Turso Cloud storage, write batching, schemas 32–33, clustered tenant `Message`, SASL NAK and registration-timer fixes | goals, deps, layout, phase 9b, L4 |
+
+## Implementation validation: phases 4–6
+
+Phase 4: welcome/sync and multiplex lifecycle socket tests, downstream
+session seed replay, GCC/Clang debug and ASan/UBSan/LSan suites, clang-tidy,
+and a 60-second libFuzzer run. Long fuzzing and the full target/mode matrix
+are still required by the phase exit criteria.

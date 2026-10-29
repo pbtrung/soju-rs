@@ -19,6 +19,10 @@
 // Downstreams of this loop by ID (rule 2: asynchronous completions look
 // their downstream up here)
 static thread_local struct strmap *table;
+static void on_closed(struct conn *c, const struct err *err, void *data);
+static struct downstream *downstream_new(struct server *srv, struct conn *c,
+					 const struct conn_info *info,
+					 const struct downstream_events *events);
 
 static void id_key(char *buf, size_t n, uint64_t id) {
 	snprintf(buf, n, "%llu", (unsigned long long)id);
@@ -175,8 +179,10 @@ static void downstream_free(struct downstream *dc) {
 	table_remove(dc);
 	conn_view_free(dc->view);
 	if (dc->conn != nullptr) {
-		conn_shutdown(dc->conn);
-		conn_set_callbacks(dc->conn, &(struct conn_callbacks){0}, nullptr);
+		if (!dc->has_parent) {
+			conn_shutdown(dc->conn);
+			conn_set_callbacks(dc->conn, &(struct conn_callbacks){0}, nullptr);
+		}
 		conn_unref(dc->conn);
 	}
 	uv_close((uv_handle_t *)&dc->register_timer, on_timer_closed);
@@ -187,7 +193,38 @@ void downstream_close(struct downstream *dc) {
 		return;
 	}
 	dc->closed = true;
+	if (!dc->has_parent && table != nullptr) {
+		// Closing children removes table entries, so collect IDs first.
+		VEC(uint64_t) ids = {0};
+		void *v;
+		for (size_t it = 0; strmap_next(table, &it, nullptr, &v);) {
+			struct downstream *child = v;
+			if (child->has_parent && child->parent_id == dc->id) {
+				vec_push(&ids, child->id);
+			}
+		}
+		for (size_t i = 0; i < ids.len; i++) {
+			struct downstream *child = downstream_lookup(ids.data[i]);
+			if (child != nullptr) {
+				downstream_close(child);
+			}
+		}
+		vec_free(&ids);
+	}
+	if (dc->events.closed != nullptr) {
+		dc->events.closed(dc, dc->events.data);
+	}
 	downstream_free(dc);
+}
+
+void downstream_registration_done(struct downstream *dc) {
+	registration_free(dc->reg);
+	dc->reg = nullptr;
+}
+
+void downstream_end_command(struct downstream *dc) {
+	downstream_flush_batch(dc);
+	downstream_drop_label(dc);
 }
 
 // Sending
@@ -942,6 +979,10 @@ static void begin_message(struct downstream *dc, const struct irc_msg *msg) {
 	}
 }
 
+void downstream_begin_command(struct downstream *dc, const struct irc_msg *msg) {
+	begin_message(dc, msg);
+}
+
 // Sends an IRC error to the client; returns the fatal error, if any
 static char *finish_message(struct downstream *dc, struct result res) {
 	if (res.fatal != nullptr) {
@@ -1566,9 +1607,12 @@ static void handle_message_unregistered(struct downstream *dc, struct irc_msg *m
 
 // Pending input while busy: processed in order once the async step ends
 static void on_message(struct conn *c, struct irc_msg *msg, void *data) {
-	(void)c;
 	struct downstream *dc = data;
-	if (dc->closed || dc->registered) {
+	if (dc->registered && !dc->closed) {
+		downstream_receive_take(dc, msg);
+		return;
+	}
+	if (dc->closed) {
 		irc_msg_free(msg);
 		conn_input_done(dc->conn);
 		return;
@@ -1588,6 +1632,136 @@ static void on_message(struct conn *c, struct irc_msg *msg, void *data) {
 	}
 	conn_input_done(c);
 	maybe_register(dc);
+}
+
+void downstream_input_done(struct downstream *dc) {
+	if (dc->conn != nullptr) {
+		conn_input_done(dc->conn);
+	}
+}
+
+void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
+	if (dc->closed) {
+		irc_msg_free(msg);
+		downstream_input_done(dc);
+		return;
+	}
+	const char *tag = irc_tags_get(&msg->tags, "soju.im/network");
+	if (!dc->has_parent && tag != nullptr &&
+	    cap_registry_is_enabled(&dc->caps, "soju.im/multiplex")) {
+		long long id;
+		struct downstream *child = str_parse_i64(str_from(tag), &id)
+						   ? downstream_find_attached(dc->id, id)
+						   : nullptr;
+		if (child == nullptr) {
+			if (!cstr_eq(msg->command, "PING") && !cstr_eq(msg->command, "PONG")) {
+				downstream_begin_command(dc, msg);
+				downstream_send(dc, IRC_MSG("FAIL", msg->command,
+							    "NETWORK_NOT_ATTACHED", tag,
+							    "Network not attached"));
+				downstream_end_command(dc);
+			}
+			irc_msg_free(msg);
+			downstream_input_done(dc);
+			return;
+		}
+		irc_tags_remove(&msg->tags, "soju.im/network");
+		dc = child;
+	}
+	atomic_fetch_add(&dc->srv->metrics.downstream_in_messages_total, 1);
+	if (cstr_eq(msg->command, "CAP")) {
+		begin_message(dc, msg);
+		AUTOFREE char *fatal = finish_message(dc, handle_cap(dc, msg));
+		if (fatal != nullptr) {
+			fail_connection(dc, fatal);
+		}
+	} else if (cstr_eq(msg->command, "QUIT")) {
+		downstream_close(dc);
+	} else if (dc->events.message != nullptr) {
+		dc->events.message(dc, msg, dc->events.data);
+		return;
+	} else {
+		begin_message(dc, msg);
+		downstream_send(
+			dc, IRC_MSG(ERR_UNKNOWNCOMMAND, dc->nick, msg->command, "Unknown command"));
+		downstream_end_command(dc);
+	}
+	irc_msg_free(msg);
+	downstream_input_done(dc);
+}
+
+struct downstream *downstream_find_attached(uint64_t parent_id, int64_t network_id) {
+	if (table == nullptr) {
+		return nullptr;
+	}
+	void *v;
+	for (size_t it = 0; strmap_next(table, &it, nullptr, &v);) {
+		struct downstream *dc = v;
+		if (dc->has_parent && dc->parent_id == parent_id && dc->network_id == network_id &&
+		    !dc->closed) {
+			return dc;
+		}
+	}
+	return nullptr;
+}
+
+static void view_closed(void *data) {
+	struct downstream *dc = data;
+	downstream_close(dc);
+}
+
+void downstream_detach(struct downstream *dc) {
+	if (dc->view != nullptr) {
+		conn_view_close_quietly(dc->view);
+	}
+	downstream_close(dc);
+}
+
+struct downstream *downstream_attach(struct downstream *parent, int64_t network_id) {
+	struct downstream *old = downstream_find_attached(parent->id, network_id);
+	if (old != nullptr) {
+		downstream_detach(old);
+	}
+	struct conn_info info = {.remote_addr = parent->remote_addr,
+				 .has_remote_ip = parent->has_remote_ip,
+				 .remote_ip = parent->remote_ip,
+				 .peer_cert = parent->has_peer_cert ? &parent->peer_cert : nullptr};
+	conn_ref(parent->conn);
+	struct downstream *dc = downstream_new(parent->srv, parent->conn, &info, &parent->events);
+	dc->has_parent = true;
+	dc->parent_id = parent->id;
+	dc->has_network = true;
+	dc->network_id = network_id;
+	dc->registered = true;
+	dc->user_id = parent->user_id;
+	dc->user_loop = parent->user_loop;
+	dc->impersonating = parent->impersonating;
+	dc->cap_version = parent->cap_version;
+	uv_timer_stop(&dc->register_timer);
+	replace_str(&dc->client_name, parent->client_name);
+	replace_str(&dc->nick, parent->nick);
+	replace_str(&dc->nick_cm, parent->nick_cm);
+	replace_str(&dc->username, parent->username);
+	replace_str(&dc->realname, parent->realname);
+	if (parent->away != nullptr) {
+		dc->away = xstrdup(parent->away);
+	}
+	cap_registry_free(&dc->caps);
+	cap_registry_init(&dc->caps);
+	const char *key;
+	void *v;
+	for (size_t it = 0; strmap_next(&parent->caps.available, &it, &key, &v);) {
+		cap_registry_set_available(&dc->caps, key, v);
+	}
+	for (size_t it = 0; strmap_next(&parent->caps.enabled, &it, &key, nullptr);) {
+		if (!cstr_eq(key, "soju.im/multiplex") &&
+		    !cstr_eq(key, "soju.im/bouncer-networks-notify")) {
+			cap_registry_set_enabled(&dc->caps, key, true);
+		}
+	}
+	AUTOFREE char *net = xasprintf("%lld", (long long)network_id);
+	dc->view = conn_view_new(parent->conn, "soju.im/network", net, view_closed, dc);
+	return dc;
 }
 
 static void resume(struct downstream *dc) {
@@ -1614,8 +1788,9 @@ static void on_register_timeout(uv_timer_t *t) {
 	reply_and_close(dc, m);
 }
 
-void downstream_serve(struct server *srv, struct conn *c, const struct conn_info *info,
-		      const struct downstream_events *events) {
+static struct downstream *downstream_new(struct server *srv, struct conn *c,
+					 const struct conn_info *info,
+					 const struct downstream_events *events) {
 	struct downstream *dc = xcalloc(1, sizeof(*dc));
 	REF_TRACK(&dc->ref, "downstream");
 	dc->id = atomic_fetch_add(&srv->next_downstream_id, 1);
@@ -1690,6 +1865,12 @@ void downstream_serve(struct server *srv, struct conn *c, const struct conn_info
 	uv_timer_init(conn_stream(c)->loop, &dc->register_timer);
 	dc->register_timer.data = dc;
 	table_add(dc);
+	return dc;
+}
+
+void downstream_serve(struct server *srv, struct conn *c, const struct conn_info *info,
+		      const struct downstream_events *events) {
+	struct downstream *dc = downstream_new(srv, c, info, events);
 	conn_set_callbacks(c, &(struct conn_callbacks){.message = on_message, .closed = on_closed},
 			   dc);
 	if (atomic_load(&srv->shutting_down)) {
