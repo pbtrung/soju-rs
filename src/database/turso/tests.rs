@@ -740,9 +740,10 @@ fn user_schema_migration_preserves_messages() {
             |r| r.get(0),
         )
         .unwrap();
+    assert_tenant_message_text_index(&cloud, &name);
     drop(db);
     {
-        let path = cloud.state.lock().unwrap().root.join(name);
+        let path = cloud.state.lock().unwrap().root.join(&name);
         let conn = rusqlite::Connection::open(path).unwrap();
         conn.execute_batch(
             "DROP INDEX MessageTextIndex; DROP TABLE SojuSchemaVersion; PRAGMA user_version = 30;",
@@ -762,6 +763,40 @@ fn user_schema_migration_preserves_messages() {
         .unwrap(),
         messages
     );
+    assert_tenant_message_text_index(&cloud, &name);
+}
+
+fn assert_tenant_message_text_index(cloud: &Cloud, name: &str) {
+    let path = cloud.state.lock().unwrap().root.join(name);
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='MessageTextIndex'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(sql.contains("ON Message(target, time) WHERE text IS NOT NULL"));
+    for query in [
+        "SELECT m.raw FROM Message m, MessageTarget t
+         WHERE m.target=t.id AND t.network=1 AND t.target='#a' AND m.text IS NOT NULL
+         ORDER BY m.time DESC, m.id DESC LIMIT 10",
+        "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id
+         AND text IS NOT NULL ORDER BY time DESC LIMIT 1) latest
+         FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+    ] {
+        let plan = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|p| p.contains("MessageTextIndex")),
+            "{plan:?}"
+        );
+    }
 }
 
 fn linked_name(db: &crate::database::Database, user: i64) -> String {
@@ -1634,6 +1669,90 @@ async fn background_commits_keep_the_same_user_event_loop_responsive() {
             .unwrap()
     );
     srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn production_message_path_commits_chathistory_limit_lines_per_http_batch() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    use crate::user::Event;
+    let cloud = Cloud::new();
+    let (db, _, net, mut unused) = buffered_store(&cloud, 200);
+    unused.close().unwrap();
+    drop(unused);
+    let db = Arc::try_unwrap(db)
+        .ok()
+        .unwrap_or_else(|| panic!("database still referenced"));
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    config.basic.chat_history_limit = 200;
+    srv.set_config(config);
+    srv.start().unwrap();
+    let handle = srv.get_user("buffered").unwrap();
+    let net_id = net.id;
+    let (sent, wait_sent) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |u| {
+        let ni = u.networks.iter().position(|n| n.id() == net_id).unwrap();
+        for i in 0..400 {
+            assert!(
+                !crate::upstream::append_log(
+                    u,
+                    ni,
+                    "#buffered",
+                    &timed_message(&format!("production line {i}"), i),
+                )
+                .is_empty()
+            );
+        }
+        let _ = sent.send(());
+    })));
+    wait_sent.await.unwrap();
+    srv.shutdown().await;
+    assert_eq!(
+        srv.db
+            .list_messages(
+                net_id,
+                "#buffered",
+                &MessageOptions {
+                    limit: 1000,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .len(),
+        400
+    );
+    let state = cloud.state.lock().unwrap();
+    let mut sizes = Vec::new();
+    for body in &state.requests {
+        for request in body["requests"].as_array().into_iter().flatten() {
+            assert!(
+                !request["stmt"]["sql"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("INSERT INTO Message(")),
+                "message INSERT sent outside an HTTP batch: {body}"
+            );
+            let Some(steps) = request["batch"]["steps"].as_array() else {
+                continue;
+            };
+            let lines = steps
+                .iter()
+                .filter(|s| {
+                    s["stmt"]["sql"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("INSERT INTO Message(")
+                })
+                .count();
+            if lines > 0 {
+                assert_eq!(steps.first().unwrap()["stmt"]["sql"], "BEGIN IMMEDIATE");
+                assert_eq!(steps.last().unwrap()["stmt"]["sql"], "COMMIT");
+                sizes.push(lines);
+            }
+        }
+    }
+    assert_eq!(sizes, vec![200, 200]);
 }
 
 #[tokio::test(flavor = "current_thread")]

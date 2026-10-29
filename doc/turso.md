@@ -13,6 +13,12 @@ and read receipts, Web Push subscriptions, messages, and the full-text search
 index live in the user's database. User databases contain a password-free
 account row as a foreign-key anchor. No local database file is needed.
 
+The tenant `User` row has a synthetic username such as `user-42` and a NULL
+password; authentication uses only the controller. It exists because the
+shared schema's `Network.user` and `WebPushSubscription.user` foreign keys
+reference `User.id`. Do not drop this table from a user database: removing
+it requires a schema migration and changes to those references.
+
 ## Configuration
 
 Create a Turso organization and group first, then configure:
@@ -126,6 +132,13 @@ batch line target (default 1000, range 100–1000); config reload updates the
 target. A one-second timer flushes partial batches on quiet connections.
 The filling buffer is also dispatched at an 8 MiB message-data budget.
 
+Each message still has its own SQL INSERT statement, but those statements
+share one HTTP batch with one BEGIN and one COMMIT. Individual INSERTs in
+cloud query logs do not imply individual commits. For example, 400 short
+messages arriving together with `chathistory-limit 200` use two message
+transactions. A quiet connection receiving one message per second or less
+can produce one-message transactions because of the partial-flush timer.
+
 One buffer accepts messages while an independent background writer commits
 the other. Commits use conditional Hrana batches, including BEGIN and
 COMMIT, so a statement error cannot leave a partial transaction. Large
@@ -144,6 +157,12 @@ index using the same filters and FTS tokenizer. Reads use a separate HTTP
 stream, sharing the writer's replication watermark, and merge results
 without duplicates. Normal database queries still wait for their own HTTP
 responses; they do not wait for the background writer's client-side lock.
+
+Fresh user databases and schema upgrades include
+`MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL`.
+Text-only history and latest-target queries can use this partial index to
+skip JOIN/PART and other event rows. Turso creates the index without ANALYZE
+or VACUUM.
 
 If both buffers fill, incoming message events retain their socket input
 permits and wait for space; control commands can still run. This applies

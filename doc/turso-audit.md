@@ -91,6 +91,17 @@ v0.99.21 validation: formatting and Clippy passed; all 193 tests passed
 
 ## Validation and limits
 
+Post-release verification exercises `upstream::append_log` on a running
+Turso user's event loop with `chathistory-limit 200`: 400 short messages
+produce exactly two HTTP message batches, each with 200 INSERTs and one
+BEGIN/COMMIT pair. No message INSERT is sent as a standalone execute
+request. Existing timer coverage verifies that a quiet connection can
+instead flush a single message after one second. The schema-upgrade
+regression also inspects fresh and upgraded tenant databases for the
+partial MessageTextIndex and checks text-only history and latest-target
+query plans. Formatting, strict Clippy and all 194 tests passed (157
+library, 3 sojuctl, 34 bouncer integration tests).
+
 Run the required checks:
 
 ```sh
