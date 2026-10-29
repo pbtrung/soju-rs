@@ -318,6 +318,16 @@ fn serve(mut stream: TcpStream, shared: &Arc<Mutex<State>>) {
     stream.write_all(&bytes).unwrap();
 }
 
+fn message_insert_lines(stmt: &Json) -> usize {
+    if !stmt["sql"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("INSERT INTO Message("))
+    {
+        return 0;
+    }
+    stmt["args"].as_array().map_or(1, |args| args.len() / 4)
+}
+
 fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
     assert!(state.databases.contains_key(name));
     let mut conn = if let Some(baton) = body["baton"].as_str() {
@@ -335,7 +345,7 @@ fn pipeline(state: &mut State, name: &str, body: &Json) -> Json {
             "execute" => execute(&mut conn, &request["stmt"]).map(|r| json!({"type":"execute", "result":r})),
             "batch" => {
                 let steps = request["batch"]["steps"].as_array().unwrap();
-                let lines = steps.iter().filter(|s| s["stmt"]["sql"].as_str().unwrap().starts_with("INSERT INTO Message(")).count();
+                let lines: usize = steps.iter().map(|s| message_insert_lines(&s["stmt"])).sum();
                 if state.max_batch_lines.is_some_and(|max| lines > max) {
                     let mut errors = vec![Json::Null; steps.len()];
                     errors[0] = json!({"code":"TRANSACTION_TIMEOUT", "message":"mock processing budget"});
@@ -744,11 +754,28 @@ fn user_schema_migration_preserves_messages() {
     drop(db);
     {
         let path = cloud.state.lock().unwrap().root.join(&name);
+        std::fs::remove_file(&path).unwrap();
         let conn = rusqlite::Connection::open(path).unwrap();
-        conn.execute_batch(
-            "DROP INDEX MessageTextIndex; DROP TABLE SojuSchemaVersion; PRAGMA user_version = 30;",
+        conn.execute_batch(include_str!("../../../tests/fixtures/turso-schema-31.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO User(id,username,created_at) VALUES(?,?,'')",
+            params![alice.id, format!("user-{}", alice.id)],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO Network(id,user,addr)VALUES(?,?,?)",
+            params![net.id, alice.id, net.addr],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO MessageTarget(id,network,target)VALUES(1,?,'#a')",
+            [net.id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO Message(id,target,raw,time,sender,text)VALUES(1,1,?,'2024-01-01T00:00:00.000Z','','old message')",[messages[0].to_string()]).unwrap();
+        conn.execute_batch("DROP INDEX MessageTextIndex; PRAGMA user_version = 30;")
+            .unwrap();
     }
     let db = cloud.database().unwrap();
     assert_eq!(
@@ -873,7 +900,7 @@ fn invalid_links_and_changed_groups_cannot_delete_other_databases() {
 #[test]
 fn tenant_owner_mismatch_stops_startup() {
     for sql in [
-        "UPDATE User SET username = 'different-owner'",
+        "UPDATE TursoOwner SET user = user + 1",
         "UPDATE TursoOwner SET controller = 'different-controller'",
     ] {
         let cloud = Cloud::new();
@@ -947,7 +974,7 @@ fn commit_closes_stream_on_hosted_and_legacy_servers() {
         assert!(state.streams.is_empty());
         let commit = state.requests.last().unwrap();
         let requests = commit["requests"].as_array().unwrap();
-        assert_eq!(requests[0]["sql"], "COMMIT");
+        assert_eq!(requests[0]["stmt"]["sql"], "COMMIT");
         assert_eq!(requests.last().unwrap()["type"], "close");
         drop(state);
         assert_eq!(
@@ -1029,7 +1056,7 @@ fn malformed_commit_responses_fail_without_replaying_writes() {
                 .requests
                 .iter()
                 .flat_map(|r| r["requests"].as_array().unwrap())
-                .filter(|r| r["sql"] == "COMMIT")
+                .filter(|r| r["stmt"]["sql"] == "COMMIT")
                 .count(),
             2 // Controller initialization and the explicit Audit transaction.
         );
@@ -1142,7 +1169,7 @@ async fn slow_storage_does_not_freeze_the_user_runtime_or_user_directory() {
     assert!(start.elapsed() < Duration::from_millis(250));
     wait_done.await.unwrap().unwrap();
     cloud.state.lock().unwrap().delay =
-        Some(("CREATE TABLE User".into(), Duration::from_millis(400)));
+        Some(("CREATE TABLE Network".into(), Duration::from_millis(400)));
     let creator = srv.clone();
     let creating = tokio::task::spawn_blocking(move || creator.create_user(User::new("bob")));
     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1428,11 +1455,8 @@ fn a_slow_commit_does_not_block_the_other_buffer_or_history_reads() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|s| s["stmt"]["sql"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("INSERT INTO Message("))
-                .count(),
+                .map(|s| message_insert_lines(&s["stmt"]))
+                .sum::<usize>(),
             3
         );
     }
@@ -1736,15 +1760,7 @@ async fn production_message_path_commits_chathistory_limit_lines_per_http_batch(
             let Some(steps) = request["batch"]["steps"].as_array() else {
                 continue;
             };
-            let lines = steps
-                .iter()
-                .filter(|s| {
-                    s["stmt"]["sql"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("INSERT INTO Message(")
-                })
-                .count();
+            let lines: usize = steps.iter().map(|s| message_insert_lines(&s["stmt"])).sum();
             if lines > 0 {
                 assert_eq!(steps.first().unwrap()["stmt"]["sql"], "BEGIN IMMEDIATE");
                 assert_eq!(steps.last().unwrap()["stmt"]["sql"], "COMMIT");
@@ -1811,6 +1827,10 @@ async fn partial_message_batches_flush_on_the_timer() {
 fn a_deleted_network_is_not_resurrected_by_buffered_writes() {
     let cloud = Cloud::new();
     let (db, account, net, mut store) = buffered_store(&cloud, 100);
+    store
+        .append(&net, "#buffered", &timed_message("warm cache", 0))
+        .unwrap();
+    store.close().unwrap();
     let mut other = Network::new("ircs://other.example.org");
     db.store_network(account.id, &mut other).unwrap();
     store
@@ -1975,7 +1995,7 @@ fn initialize_an_existing_empty_controller_with_read_only_user_version() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     let admin = user(&db, "alice");
     assert!(db.get_user("alice").unwrap().unwrap().admin);
     assert!(db.list_networks(admin.id).unwrap().is_empty());
@@ -2019,6 +2039,146 @@ fn existing_legacy_controller_imports_its_schema_version_and_keeps_accounts() {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-        1
+        2
     );
+}
+
+#[test]
+fn tenant_user_removal_and_sparse_search_resume_preserve_existing_data() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let account = user(&db, "alice");
+    let name = linked_name(&db, account.id);
+    drop(db);
+    let path = cloud.state.lock().unwrap().root.join(&name);
+    std::fs::remove_file(&path).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!("../../../tests/fixtures/turso-schema-31.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO User(id,username,created_at)VALUES(?,?,'')",
+            params![account.id, format!("user-{}", account.id)],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO Network(id,user,addr,pass,sasl_mechanism,sasl_plain_username,sasl_plain_password)VALUES(1,?,'irc.legacy','network-secret','PLAIN','login','sasl-secret')",[account.id]).unwrap();
+        conn.execute("INSERT INTO WebPushSubscription(id,created_at,updated_at,user,network,endpoint,key_auth)VALUES(1,'2024-01-01T00:00:00.000Z','2024-01-01T00:00:00.000Z',?,1,'https://push.example','push-secret')",[account.id]).unwrap();
+        conn.execute_batch("INSERT INTO Channel(id,network,name,key)VALUES(1,1,'#legacy','channel-secret');
+            INSERT INTO MessageTarget(id,network,target,pinned)VALUES(1,1,'#legacy',1),(2,1,'#events',0);
+            WITH RECURSIVE m(id)AS(VALUES(1) UNION ALL SELECT id+1 FROM m WHERE id<600)
+            INSERT INTO Message(id,target,raw,time,sender,text)SELECT id,1,
+                CASE WHEN id%3=0 THEN 'JOIN #legacy' ELSE 'PRIVMSG #legacy :legacy token' END,
+                '2024-01-01T00:00:00.000Z','',CASE WHEN id%3!=0 THEN 'legacy token' END FROM m;
+            INSERT INTO Message(id,target,raw,time,sender,text)VALUES(601,2,'JOIN #events','2024-01-01T00:00:00.000Z','',NULL);
+            INSERT INTO DeliveryReceipt(network,target,client,internal_msgid)VALUES(1,'#legacy',NULL,'cursor');
+            INSERT INTO ReadReceipt(network,target,timestamp)VALUES(1,'#legacy','2024-01-01T00:00:00.000Z');
+            PRAGMA user_version=31;").unwrap();
+    }
+    cloud.state.lock().unwrap().fault =
+        Some(("INSERT INTO MessageFTSNext".into(), Fault::HttpAfter));
+    assert!(cloud.open().is_err());
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let progress: i64 = conn
+            .query_row(
+                "SELECT message FROM TursoSearchMigration WHERE id=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(progress > 0);
+        let still_present: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='User')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(still_present);
+    }
+    let db = cloud.database().unwrap();
+    assert!(db.get_user("alice").unwrap().unwrap().admin);
+    let networks = db.list_networks(account.id).unwrap();
+    assert_eq!(networks[0].pass, "network-secret");
+    assert_eq!(networks[0].sasl.plain_password, "sasl-secret");
+    assert_eq!(db.list_channels(1).unwrap()[0].key, "channel-secret");
+    assert_eq!(
+        db.list_web_push_subscriptions(account.id, 1).unwrap()[0]
+            .keys
+            .auth,
+        "push-secret"
+    );
+    assert_eq!(
+        db.list_delivery_receipts(1).unwrap()[0].internal_msg_id,
+        "cursor"
+    );
+    assert!(db.get_read_receipt(1, "#legacy").unwrap().is_some());
+    assert_eq!(
+        db.list_messages(
+            1,
+            "#legacy",
+            &MessageOptions {
+                limit: 1000,
+                text: "legacy".into(),
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .len(),
+        400
+    );
+    assert_eq!(
+        db.list_messages(
+            1,
+            "#legacy",
+            &MessageOptions {
+                limit: 1000,
+                events: true,
+                ..Default::default()
+            }
+        )
+        .unwrap()
+        .len(),
+        600
+    );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    for table in [
+        "User",
+        "DeviceCertificate",
+        "WebPushConfig",
+        "TursoSearchMigration",
+        "MessageFTSNext",
+        "MessageFTS_docsize",
+    ] {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?)",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!exists, "{table} survived migration");
+    }
+    assert!(
+        conn.prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+    conn.execute(
+        "INSERT INTO MessageFTS(MessageFTS,rank)VALUES('integrity-check',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    assert!(
+        conn.execute("UPDATE Network SET user=user+1 WHERE id=1", [])
+            .is_err()
+    );
+    drop(conn);
+    drop(db);
+    assert!(cloud.database().is_ok());
 }

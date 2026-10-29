@@ -73,6 +73,9 @@ tenant_methods! {
 }
 
 impl Database {
+    pub fn observed_turso_usage(&self) -> Option<(u64, u64)> {
+        self.cloud.as_ref().map(|c| c.observed_usage())
+    }
     pub(crate) fn message_writer(&self, user_id: i64) -> Result<MessageWriter> {
         Ok(MessageWriter::new(
             self.user_db(user_id)?.conn().fork_remote()?,

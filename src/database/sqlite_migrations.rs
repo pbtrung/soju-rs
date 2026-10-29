@@ -213,4 +213,5 @@ pub const MIGRATIONS: &[&str] = &[
         CREATE INDEX IF NOT EXISTS MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
         ANALYZE MessageTextIndex;
     "#,
+    include_str!("query_indexes.sql"),
 ];

@@ -2,7 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, named_params, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, named_params};
 
 use super::{Database, lossy_string, time_from_sql, time_to_sql};
 use crate::database::{MessageOptions, MessageTarget, MessageTargetLast, strip_ansi};
@@ -76,7 +76,7 @@ impl Database {
         let conn = self.conn();
         if mt.id != 0 {
             conn.execute(
-                "UPDATE MessageTarget SET pinned = :pinned, muted = :muted, blocked = :blocked WHERE id = :id",
+                "UPDATE MessageTarget SET pinned = :pinned, muted = :muted, blocked = :blocked WHERE id = :id AND (pinned IS NOT :pinned OR muted IS NOT :muted OR blocked IS NOT :blocked)",
                 named_params! {
                     ":pinned": mt.pinned,
                     ":muted": mt.muted,
@@ -167,15 +167,15 @@ impl Database {
         network_id: i64,
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
-        let mut inner = String::from(
-            "SELECT time
-            FROM Message
-            WHERE target = MessageTarget.id ",
-        );
-        if !options.events {
-            inner.push_str("AND text IS NOT NULL ");
-        }
-        inner.push_str("ORDER BY time DESC LIMIT 1");
+        let inner = if options.events {
+            "SELECT max(latest) FROM (
+                SELECT max(time) latest FROM Message WHERE target=MessageTarget.id AND text IS NULL
+                UNION ALL
+                SELECT max(time) latest FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL
+            )"
+        } else {
+            "SELECT time FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
+        };
 
         let mut query = format!(
             "SELECT target, ({inner}) latest
@@ -249,7 +249,7 @@ impl Database {
         options: &MessageOptions,
     ) -> Result<Vec<crate::database::MessageRow>> {
         let mut query = String::from(
-            "SELECT m.id, m.time, m.raw
+            "SELECT m.id AS id, m.time AS time, m.raw AS raw
             FROM Message AS m, MessageTarget AS t
             WHERE m.target = t.id AND t.network = :network AND t.target = :target ",
         );
@@ -288,16 +288,22 @@ impl Database {
             );
             binds.push((":text", &text));
         }
-        if !options.events {
+        if options.events && options.text.is_empty() {
+            // Merge two disjoint ordered indexes, avoiding a second timestamp
+            // index entry on every text message. LIMIT applies to their union.
+            let text_query = format!("{query}AND m.text IS NOT NULL ");
+            query.push_str("AND m.text IS NULL UNION ALL ");
+            query.push_str(&text_query);
+        } else {
             query.push_str("AND m.text IS NOT NULL ");
         }
         // Messages often share a time, e.g. the lines of a multiline
         // message: order them as they were stored. The (target, time) index
         // entries end with the row ID, so this doesn't need an extra sort.
         if options.take_last {
-            query.push_str("ORDER BY m.time DESC, m.id DESC ");
+            query.push_str("ORDER BY time DESC, id DESC ");
         } else {
-            query.push_str("ORDER BY m.time ASC, m.id ASC ");
+            query.push_str("ORDER BY time ASC, id ASC ");
         }
         query.push_str("LIMIT :limit");
         binds.push((":limit", &limit));
@@ -329,17 +335,23 @@ impl Database {
     /// queries run in between. Expired messages are mostly the oldest, with
     /// the lowest IDs: each chunk finds them at the start of the table.
     pub fn delete_messages_before(&self, before: DateTime<Utc>, limit: usize) -> Result<usize> {
+        if limit == 0 {
+            return Ok(0);
+        }
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         record_message_id_high_water(&tx)?;
         let n = tx.execute(
             "DELETE FROM Message WHERE id IN (
-                SELECT id FROM Message WHERE time < ? LIMIT ?
+                SELECT id FROM (
+                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id
+                    WHERE m.text IS NULL AND m.time<:before
+                    UNION ALL
+                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id
+                    WHERE m.text IS NOT NULL AND m.time<:before
+                ) LIMIT :limit
             )",
-            params![
-                xirc::format_server_time(before),
-                i64::try_from(limit).unwrap_or(i64::MAX)
-            ],
+            named_params!{":before":xirc::format_server_time(before),":limit":i64::try_from(limit).unwrap_or(i64::MAX)},
         )?;
         tx.commit()?;
         Ok(n)
@@ -355,8 +367,9 @@ impl Database {
 pub(super) fn record_message_id_high_water(conn: &super::Connection) -> Result<()> {
     conn.execute(
         "INSERT INTO MessageIdHighWater(id, last_id)
-        SELECT 0, max(id) FROM Message HAVING max(id) IS NOT NULL
-        ON CONFLICT(id) DO UPDATE SET last_id = max(last_id, excluded.last_id)",
+        SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1
+        ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id
+        WHERE last_id<excluded.last_id",
         [],
     )?;
     Ok(())

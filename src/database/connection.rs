@@ -436,9 +436,17 @@ impl Connection {
             .ok_or_else(|| error("incomplete Turso batch errors"))?;
         for (result, err) in results.iter().zip(errors) {
             if !err.is_null() {
+                let foreign_key = err["code"] == "SQLITE_CONSTRAINT_FOREIGNKEY"
+                    || err["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("FOREIGN KEY constraint failed"));
                 return Err(error(format!(
                     "Turso message batch failed ({})",
-                    err["code"].as_str().unwrap_or("UNKNOWN")
+                    if foreign_key {
+                        "SQLITE_CONSTRAINT_FOREIGNKEY"
+                    } else {
+                        err["code"].as_str().unwrap_or("UNKNOWN")
+                    }
                 )));
             }
             if !result.is_object() {
@@ -544,7 +552,11 @@ impl Connection {
             TransactionBehavior::Exclusive => "BEGIN EXCLUSIVE",
             _ => "BEGIN IMMEDIATE",
         };
-        if let Err(e) = self.execute_batch(begin) {
+        let result = match self {
+            Self::Remote(c) => c.execute(begin, []).map(|_| ()),
+            Self::Local(c) => c.execute_batch(begin),
+        };
+        if let Err(e) = result {
             if let Self::Remote(c) = self {
                 c.discard_stream();
                 c.transaction.set(false);
@@ -578,7 +590,10 @@ impl Transaction<'_> {
                 // already release it once COMMIT succeeds, so a null baton
                 // here is expected. Keep transaction poisoning active until
                 // every response has been validated; never replay COMMIT.
-                c.request_with_stream(json!({"type":"sequence", "sql":"COMMIT"}), false)?;
+                c.request_with_stream(
+                    json!({"type":"execute", "stmt":{"sql":"COMMIT","want_rows":false}}),
+                    false,
+                )?;
             }
         }
         self.committed = true;

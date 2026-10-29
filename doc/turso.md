@@ -10,14 +10,12 @@ account settings and permissions, authentication certificates, and the link
 and provisioning state for each user database. It also keeps the bouncer's
 Web Push signing identity. Networks, upstream credentials, channels, delivery
 and read receipts, Web Push subscriptions, messages, and the full-text search
-index live in the user's database. User databases contain a password-free
-account row as a foreign-key anchor. No local database file is needed.
-
-The tenant `User` row has a synthetic username such as `user-42` and a NULL
-password; authentication uses only the controller. It exists because the
-shared schema's `Network.user` and `WebPushSubscription.user` foreign keys
-reference `User.id`. Do not drop this table from a user database: removing
-it requires a schema migration and changes to those references.
+index live in the user's database. Tenant databases contain `TursoOwner`
+with the controller name and owner ID; they have no `User` table or login
+password hash. `Network.user` and `WebPushSubscription.user` reference
+`TursoOwner.user`. Account authentication and certificates use the
+controller. Local SQLite retains its combined account/data schema.
+No local database file is needed for cloud storage.
 
 ## Configuration
 
@@ -64,7 +62,7 @@ commits a write but its response is lost, the operation reports failure and
 its outcome is uncertain. Check the saved state before repeating it. A failed
 transaction is discarded instead of continuing on a new auto-commit stream.
 
-Use v0.99.21 or later with hosted Turso. It closes a transaction's stream in
+Use v0.99.22 or later with hosted Turso. It closes a transaction's stream in
 the same pipeline as COMMIT, accepting the null baton returned after a
 successful commit. v0.99.20 could incorrectly report `Turso closed the stream
 during a transaction` after creating the controller schema. Keep the same
@@ -124,6 +122,39 @@ user databases that should be removable through soju.
 Deletion validates the link and group again before calling the Platform API;
 it refuses to delete the controller or a database moved to another group.
 
+## Upgrading to v0.99.22
+
+Back up the controller and all user databases before upgrading. The controller
+schema becomes version 2 and tenant/local schemas become version 32. Earlier
+binaries cannot reopen the upgraded schemas; rollback requires compatible
+backups of both the controller and its user databases.
+
+Startup migrates existing tenants automatically. It validates ownership,
+retargets the network/subscription foreign keys, and removes the old password-free
+User anchor and unused authentication tables. Unexpected authentication records
+in a tenant stop migration instead of being silently discarded. Do not manually
+drop User or change database names.
+
+The FTS replacement copies text rows in transactions of at most 200 rows,
+committing a cursor with each chunk. It resumes after interruption or an
+ambiguous response. Timeouts reduce the chunk size. The old search index is
+replaced only after copying completes. Rebuilding indexes incurs one-time
+reads/writes and can delay startup on large histories; allow sufficient startup
+probe time. Messages and their IDs are retained. No VACUUM is run.
+
+## Measuring row usage
+
+The metrics endpoint includes `soju_turso_rows_read_total` and
+`soju_turso_rows_written_total`, summed from received Hrana responses. They
+include controller and tenant SQL and reset when soju restarts. Requests whose
+responses are lost, errors without counters, and server-side/background work
+cannot be reconstructed from these counters; they are not billing totals.
+
+See the [query optimization audit](turso-query-optimization.md) and
+[reproducible engine measurements](turso-query-evidence.md). Fewer HTTP requests
+do not imply fewer row reads or writes: constraints, indexes, FTS, and retries
+all matter. Resaving unchanged receipts and records now avoids redundant writes.
+
 ## Background message batches
 
 Turso buffers incoming logical IRC messages, including logged events, per
@@ -132,9 +163,10 @@ batch line target (default 1000, range 100–1000); config reload updates the
 target. A one-second timer flushes partial batches on quiet connections.
 The filling buffer is also dispatched at an 8 MiB message-data budget.
 
-Each message still has its own SQL INSERT statement, but those statements
-share one HTTP batch with one BEGIN and one COMMIT. Individual INSERTs in
-cloud query logs do not imply individual commits. For example, 400 short
+Messages use multi-row VALUES inserts of up to 100 lines per SQL statement,
+sharing one HTTP batch with one BEGIN and one COMMIT. Target IDs are resolved
+once and kept in a bounded cache; foreign keys remain enabled. An identical
+retry does not UPDATE the existing rows or repeat their FTS writes. For example, 400 short
 messages arriving together with `chathistory-limit 200` use two message
 transactions. A quiet connection receiving one message per second or less
 can produce one-message transactions because of the partial-flush timer.
@@ -161,8 +193,11 @@ responses; they do not wait for the background writer's client-side lock.
 Fresh user databases and schema upgrades include
 `MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL`.
 Text-only history and latest-target queries can use this partial index to
-skip JOIN/PART and other event rows. Turso creates the index without ANALYZE
-or VACUUM.
+skip JOIN/PART and other event rows. A disjoint `MessageEventIndex` covers
+rows whose text is NULL. Event playback merges both ordered indexes; a text
+row no longer needs two timestamp-index entries. Sparse FTS indexes text
+rows only, with `columnsize=0` because search does not use token-count
+ranking. Turso creates these indexes without ANALYZE or VACUUM.
 
 If both buffers fill, incoming message events retain their socket input
 permits and wait for space; control commands can still run. This applies

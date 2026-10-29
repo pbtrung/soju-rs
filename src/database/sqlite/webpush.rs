@@ -107,7 +107,7 @@ impl Database {
                 "UPDATE WebPushSubscription
                 SET updated_at = :now, key_auth = :key_auth, key_p256dh = :key_p256dh,
                     key_vapid = :key_vapid
-                WHERE id = :id",
+                WHERE id = :id AND (updated_at IS NOT :now OR key_auth IS NOT :key_auth OR key_p256dh IS NOT :key_p256dh OR key_vapid IS NOT :key_vapid)",
                 named_params! {
                     ":now": now,
                     ":key_auth": sub.keys.auth,

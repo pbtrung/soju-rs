@@ -5,6 +5,12 @@ CREATE INDEX IF NOT EXISTS MessageTextIndex ON Message(target, time) WHERE text 
 ANALYZE;
 ```
 
+In v0.99.22 (schema 32), `MessageTextIndex` remains in use and the old full
+`MessageIndex` is replaced by `MessageEventIndex WHERE text IS NULL`. Event
+playback merges the disjoint indexes. The measurements below document the
+earlier change; see [the current optimization audit](turso-query-optimization.md).
+Commands using ANALYZE below are for local SQLite, not Turso Cloud.
+
 Checked against soju-rs commit `dbb2c7c` (2026-10-24).
 
 Implemented in soju-rs v0.99.18 (schema version 31). Fresh databases include

@@ -1,13 +1,14 @@
 //! Stable message IDs, atomic HTTP writes, and an in-memory history overlay.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, ensure};
 use chrono::Utc;
-use rusqlite::named_params;
+use rusqlite::types::Value;
+use rusqlite::{OptionalExtension, ToSql, named_params};
 
 use super::connection::{Connection, statement};
 use super::{MessageOptions, MessageTargetLast, sqlite, strip_ansi};
@@ -59,14 +60,124 @@ impl MessageInsert {
 }
 
 pub(crate) struct MessageWriter {
-    conn: Mutex<Connection>,
+    conn: Mutex<WriterConnection>,
     max_lines: AtomicUsize,
+}
+
+struct TargetId {
+    id: i64,
+    create: bool,
+}
+
+struct WriterConnection {
+    conn: Connection,
+    targets: HashMap<(i64, String), TargetId>,
+}
+
+impl WriterConnection {
+    fn statements(&mut self, messages: &[MessageInsert]) -> Result<Vec<serde_json::Value>> {
+        if self.targets.len() > 4096 {
+            self.targets.clear();
+        }
+        let mut statements = Vec::new();
+        let mut targets = HashMap::new();
+        for m in messages {
+            let key = (m.network, m.target.clone());
+            if targets.contains_key(&key) {
+                continue;
+            }
+            if !self.targets.contains_key(&key) {
+                let saved: Option<Option<i64>> = self.conn.query_row(
+                    "SELECT t.id FROM Network n LEFT JOIN MessageTarget t ON t.network=n.id AND t.target=:target WHERE n.id=:network",
+                    named_params!{":network":m.network,":target":m.target}, |r|r.get(0),
+                ).optional()?;
+                let Some(saved) = saved else {
+                    targets.insert(key, None);
+                    continue;
+                };
+                self.targets.insert(
+                    key.clone(),
+                    TargetId {
+                        id: saved.unwrap_or_else(|| {
+                            ((rand::random::<u64>() & (i64::MAX as u64 >> 1)) as i64).max(1)
+                        }),
+                        create: saved.is_none(),
+                    },
+                );
+            }
+            let target = &self.targets[&key];
+            if target.create {
+                statements.push(statement(
+                    "INSERT INTO MessageTarget(id,network,target) SELECT :id,:network,:target
+                     WHERE EXISTS(SELECT 1 FROM Network WHERE id=:network)
+                     ON CONFLICT(network,target) DO NOTHING",
+                    named_params! {":id":target.id,":network":m.network,":target":m.target},
+                )?);
+            }
+            targets.insert(key, Some(target.id));
+        }
+        let rows: Vec<_> = messages
+            .iter()
+            .filter_map(|m| targets[&(m.network, m.target.clone())].map(|target| (m, target)))
+            .collect();
+        // Stay below even the older SQLite 999-parameter limit. These SQL
+        // statements still share one atomic HTTP batch/COMMIT.
+        for chunk in rows.chunks(100) {
+            let mut sql =
+                String::from("INSERT INTO Message(id,target,raw,time,sender,text) VALUES ");
+            let mut values = Vec::with_capacity(chunk.len() * 4);
+            for (i, (m, target)) in chunk.iter().enumerate() {
+                if i != 0 {
+                    sql.push(',');
+                }
+                sql.push_str(&format!(
+                    "({}, {}, CAST(? AS TEXT), ?, ?, CAST(? AS TEXT))",
+                    m.id, target
+                ));
+                values.extend([
+                    Value::Blob(m.raw.as_bytes().to_vec()),
+                    Value::Text(m.time.clone()),
+                    Value::Text(m.sender.clone()),
+                    m.text
+                        .as_ref()
+                        .map_or(Value::Null, |t| Value::Blob(t.as_bytes().to_vec())),
+                ]);
+            }
+            // An identical retry performs no UPDATE or FTS writes. A different
+            // row with the same ID deliberately violates NOT NULL and aborts.
+            sql.push_str(" ON CONFLICT(id) DO UPDATE SET raw=NULL WHERE NOT (
+                Message.target=excluded.target AND Message.raw=excluded.raw AND Message.time=excluded.time
+                AND Message.sender=excluded.sender AND Message.text IS excluded.text)");
+            let params: Vec<&dyn ToSql> = values.iter().map(|v| v as &dyn ToSql).collect();
+            statements.push(statement(&sql, params.as_slice())?);
+        }
+        Ok(statements)
+    }
+
+    fn write(&mut self, messages: &[MessageInsert]) -> rusqlite::Result<()> {
+        let statements = self
+            .statements(messages)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        if statements.is_empty() {
+            return Ok(());
+        }
+        self.conn.atomic_batch(statements)?;
+        for m in messages {
+            if let Some(target) = self.targets.get_mut(&(m.network, m.target.clone())) {
+                target.create = false;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MessageWriter {
     pub(super) fn new(conn: Connection) -> Self {
         Self {
-            conn: Mutex::new(conn),
+            conn: Mutex::new(WriterConnection {
+                conn,
+                targets: HashMap::new(),
+            }),
             max_lines: AtomicUsize::new(usize::MAX),
         }
     }
@@ -76,7 +187,8 @@ impl MessageWriter {
     pub fn reserve(&self, count: usize) -> Result<RangeInclusive<i64>> {
         let count = i64::try_from(count)?;
         ensure!(count > 0, "empty message ID reservation");
-        let conn = self.conn.lock().unwrap();
+        let state = self.conn.lock().unwrap();
+        let conn = &state.conn;
         let end: i64 = conn.query_row(
             "INSERT INTO MessageIdHighWater(id, last_id)
              SELECT 0, max(coalesce((SELECT max(id) FROM Message), 0),
@@ -102,37 +214,26 @@ impl MessageWriter {
         if messages.is_empty() {
             return Ok(());
         }
-        let mut statements = Vec::with_capacity(messages.len() * 2);
-        let mut targets = HashSet::new();
-        for m in messages {
-            if targets.insert((m.network, &m.target)) {
-                statements.push(statement(
-                    "INSERT INTO MessageTarget(network, target)
-                     SELECT :network, :target WHERE EXISTS(SELECT 1 FROM Network WHERE id=:network)
-                     ON CONFLICT(network, target) DO NOTHING",
-                    named_params! {":network":m.network, ":target":m.target},
-                )?);
-            }
-            // Retrying a lost COMMIT response is safe with reserved IDs.
-            // An ID collision with different contents fails the NOT NULL
-            // constraint instead of silently replacing someone else's row.
-            statements.push(statement(
-                "INSERT INTO Message(id, target, raw, time, sender, text)
-                 SELECT :id, id, CAST(:raw AS TEXT), :time, :sender, CAST(:text AS TEXT)
-                 FROM MessageTarget WHERE network=:network AND target=:target
-                 ON CONFLICT(id) DO UPDATE SET raw = CASE
-                   WHEN Message.target=excluded.target AND Message.raw=excluded.raw
-                    AND Message.time=excluded.time AND Message.sender=excluded.sender
-                    AND Message.text IS excluded.text THEN Message.raw ELSE NULL END",
-                named_params! {":id":m.id, ":network":m.network, ":target":m.target,
-                ":raw":m.raw.as_bytes(), ":time":m.time, ":sender":m.sender,
-                ":text":m.text.as_ref().map(|text| text.as_bytes())},
-            )?);
-        }
         // atomic_batch checks the exact serialized pipeline size before
         // sending. Split on body limits and processing timeouts; stable IDs
         // make this safe even if the failed request actually committed.
-        let result = self.conn.lock().unwrap().atomic_batch(statements);
+        let result = {
+            let mut state = self.conn.lock().unwrap();
+            let result = state.write(messages);
+            if result.as_ref().err().is_some_and(|e| {
+                let text = e.to_string();
+                text.contains("SQLITE_CONSTRAINT_FOREIGNKEY")
+                    || text.contains("FOREIGN KEY constraint failed")
+            }) {
+                // Deletion can invalidate cached target IDs between batches.
+                // The failed batch rolled back. Resolve again, omit removed
+                // networks, and replay only these idempotent message rows.
+                state.targets.clear();
+                state.write(messages)
+            } else {
+                result
+            }
+        };
         match result {
             Ok(()) => Ok(()),
             Err(err) => {

@@ -391,7 +391,28 @@ impl Server {
     }
 
     pub fn render_metrics(&self) -> String {
-        self.metrics.render(self.users.lock().unwrap().len())
+        let mut metrics = self.metrics.render(self.users.lock().unwrap().len());
+        if let Some((read, written)) = self.db.observed_turso_usage() {
+            use std::fmt::Write;
+            for (name, value, help) in [
+                (
+                    "soju_turso_rows_read_total",
+                    read,
+                    "Rows read reported by received Turso SQL responses",
+                ),
+                (
+                    "soju_turso_rows_written_total",
+                    written,
+                    "Rows written reported by received Turso SQL responses",
+                ),
+            ] {
+                let _ = writeln!(
+                    metrics,
+                    "# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}"
+                );
+            }
+        }
+        metrics
     }
 
     async fn disable_inactive_users(&self) -> Result<()> {

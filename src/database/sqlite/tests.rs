@@ -582,7 +582,7 @@ fn migrations() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 31);
+    assert_eq!(SCHEMA_VERSION, 32);
 }
 
 #[test]
@@ -686,20 +686,17 @@ fn message_text_index_query_plans() {
             conn.execute_batch("ANALYZE;").unwrap();
         }
         for events in [false, true] {
-            let filter = if events { "" } else { "AND text IS NOT NULL" };
-            let message_filter = if events { "" } else { "AND m.text IS NOT NULL" };
+            let filter = if events {
+                "text IS NULL"
+            } else {
+                "text IS NOT NULL"
+            };
             for query in [
                 format!(
-                    "SELECT target, (SELECT time FROM Message
-                        WHERE target = MessageTarget.id {filter}
-                        ORDER BY time DESC LIMIT 1) latest
-                    FROM MessageTarget WHERE network = 1 ORDER BY latest DESC LIMIT 10"
+                    "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id AND {filter} ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10"
                 ),
                 format!(
-                    "SELECT m.raw FROM Message m, MessageTarget t
-                    WHERE m.target = t.id AND t.network = 1 AND t.target = '#channel1'
-                        {message_filter}
-                    ORDER BY m.time DESC, m.id DESC LIMIT 5"
+                    "SELECT m.raw FROM Message m,MessageTarget t WHERE m.target=t.id AND t.network=1 AND t.target='#channel1' AND m.{filter} ORDER BY m.time DESC,m.id DESC LIMIT 5"
                 ),
             ] {
                 let plan = conn
@@ -709,14 +706,14 @@ fn message_text_index_query_plans() {
                     .unwrap()
                     .collect::<rusqlite::Result<Vec<_>>>()
                     .unwrap();
-                let expected_index = if events {
-                    "MessageIndex"
+                let index = if events {
+                    "MessageEventIndex"
                 } else {
                     "MessageTextIndex"
                 };
                 assert!(
-                    plan.iter().any(|detail| detail.contains(expected_index)),
-                    "expected {expected_index} (analyze={analyze}): {plan:?}"
+                    plan.iter().any(|detail| detail.contains(index)),
+                    "expected {index} (analyze={analyze}): {plan:?}"
                 );
             }
         }
@@ -729,4 +726,143 @@ fn newer_schema_rejected() {
     conn.execute_batch("PRAGMA user_version = 999").unwrap();
     let err = Database::setup(conn).err().unwrap();
     assert!(err.to_string().contains("older than schema"));
+}
+
+#[test]
+fn unchanged_records_and_receipts_do_not_write() {
+    let db = db();
+    let mut user = User::new("cost-test");
+    db.store_user(&mut user).unwrap();
+    let mut network = Network::new("irc.cost-test");
+    db.store_network(user.id, &mut network).unwrap();
+    let mut channel = Channel {
+        name: "#cost".into(),
+        ..Default::default()
+    };
+    db.store_channel(network.id, &mut channel).unwrap();
+    let mut target = db.get_message_target(network.id, "#cost").unwrap();
+    db.store_message_target(network.id, &mut target).unwrap();
+    let mut receipt = ReadReceipt {
+        target: "#cost".into(),
+        timestamp: Some(Utc::now()),
+        ..Default::default()
+    };
+    db.store_read_receipt(network.id, &mut receipt).unwrap();
+    let mut cert = DeviceCertificate {
+        label: "cost".into(),
+        fingerprint: vec![17; 64],
+        last_used: Some(Utc::now()),
+        ..Default::default()
+    };
+    db.store_device_certificate(user.id, &mut cert).unwrap();
+    let mut delivered = vec![DeliveryReceipt {
+        target: "#cost".into(),
+        internal_msg_id: "same".into(),
+        ..Default::default()
+    }];
+    db.store_client_delivery_receipts(network.id, "", &mut delivered)
+        .unwrap();
+    let cursor = delivered[0].id;
+    let before: i64 = db
+        .conn()
+        .query_row("SELECT total_changes()", [], |r| r.get(0))
+        .unwrap();
+    db.store_user(&mut user).unwrap();
+    db.store_user_keep_password(&user).unwrap();
+    db.store_network(user.id, &mut network).unwrap();
+    db.store_channel(network.id, &mut channel).unwrap();
+    db.store_message_target(network.id, &mut target).unwrap();
+    db.store_read_receipt(network.id, &mut receipt).unwrap();
+    db.store_device_certificate(user.id, &mut cert).unwrap();
+    db.store_client_delivery_receipts(network.id, "", &mut delivered)
+        .unwrap();
+    let after: i64 = db
+        .conn()
+        .query_row("SELECT total_changes()", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(delivered[0].id, cursor);
+    delivered[0].internal_msg_id = "changed".into();
+    delivered.push(DeliveryReceipt {
+        target: "#new".into(),
+        internal_msg_id: "new".into(),
+        ..Default::default()
+    });
+    db.store_client_delivery_receipts(network.id, "", &mut delivered)
+        .unwrap();
+    assert_eq!(delivered[0].id, cursor);
+    assert_ne!(delivered[1].id, 0);
+    delivered.remove(0);
+    db.store_client_delivery_receipts(network.id, "", &mut delivered)
+        .unwrap();
+    assert_eq!(db.list_delivery_receipts(network.id).unwrap().len(), 1);
+}
+
+#[test]
+fn sparse_fts_preserves_updates_and_event_history_ordering() {
+    let db = db();
+    let mut user = User::new("fts-test");
+    db.store_user(&mut user).unwrap();
+    let mut network = Network::new("irc.fts-test");
+    db.store_network(user.id, &mut network).unwrap();
+    let at = |m: Message| m.with_tag("time", "2024-01-01T00:00:00.000Z");
+    let messages = vec![
+        at(msg!("PRIVMSG", "#cost", "hello")),
+        at(msg!("JOIN", "#cost")),
+        at(msg!("NOTICE", "#cost", "world")),
+    ];
+    let ids = db.store_messages(network.id, "#cost", &messages).unwrap();
+    for (events, wanted) in [
+        (true, messages.clone()),
+        (false, vec![messages[0].clone(), messages[2].clone()]),
+    ] {
+        for take_last in [false, true] {
+            let actual = db
+                .list_messages(
+                    network.id,
+                    "#cost",
+                    &MessageOptions {
+                        limit: 2,
+                        events,
+                        take_last,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let expected = if take_last {
+                wanted[wanted.len() - 2..].to_vec()
+            } else {
+                wanted[..2].to_vec()
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+    let conn = db.conn();
+    conn.execute("UPDATE Message SET text=NULL WHERE id=?", [ids[0]])
+        .unwrap();
+    conn.execute("UPDATE Message SET text='fresh' WHERE id=?", [ids[1]])
+        .unwrap();
+    conn.execute("UPDATE Message SET id=999 WHERE id=?", [ids[1]])
+        .unwrap();
+    let id: i64 = conn
+        .query_row(
+            "SELECT rowid FROM MessageFTS WHERE MessageFTS MATCH 'fresh'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(id, 999);
+    let n: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM MessageFTS WHERE MessageFTS MATCH 'hello'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
+    conn.execute(
+        "INSERT INTO MessageFTS(MessageFTS,rank)VALUES('integrity-check',1)",
+        [],
+    )
+    .unwrap();
 }

@@ -163,6 +163,9 @@ The following directives are supported:
 	  account directory and a separate database per user. Omit the _db_
 	  directive and configure the _turso-_ directives below. Databases and
 	  schemas are provisioned automatically before accepting connections.
+	  User databases reference a single TursoOwner record; login users and
+	  certificates are stored only in the controller. Schema upgrades may
+	  rebuild indexes in resumable chunks before opening the listeners.
 	- _memory_ stores messages in memory. For each channel/user, only the
 	  latest 4K messages are kept in memory, older messages are discarded. This
 	  driver is very basic and doesn't support features such as the

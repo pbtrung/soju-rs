@@ -34,8 +34,6 @@ CREATE TABLE Network (
 	UNIQUE(user, name)
 );
 
-CREATE INDEX Network_user_index ON Network(user);
-
 CREATE TABLE Channel (
 	id INTEGER PRIMARY KEY,
 	network INTEGER NOT NULL,
@@ -51,8 +49,6 @@ CREATE TABLE Channel (
 	UNIQUE(network, name)
 );
 
-CREATE INDEX Channel_network_index ON Channel(network);
-
 CREATE TABLE DeviceCertificate (
 	id INTEGER PRIMARY KEY,
 	user INTEGER NOT NULL,
@@ -62,6 +58,8 @@ CREATE TABLE DeviceCertificate (
 	last_ip TEXT NOT NULL,
 	FOREIGN KEY(user) REFERENCES User(id)
 );
+
+CREATE INDEX DeviceCertificate_user_index ON DeviceCertificate(user);
 
 CREATE TABLE DeliveryReceipt (
 	id INTEGER PRIMARY KEY,
@@ -73,7 +71,7 @@ CREATE TABLE DeliveryReceipt (
 	UNIQUE(network, target, client)
 );
 
-CREATE INDEX DeliveryReceipt_network_index ON DeliveryReceipt(network);
+CREATE INDEX DeliveryReceipt_client_index ON DeliveryReceipt(network, client);
 
 CREATE TABLE ReadReceipt (
 	id INTEGER PRIMARY KEY,
@@ -83,8 +81,6 @@ CREATE TABLE ReadReceipt (
 	FOREIGN KEY(network) REFERENCES Network(id),
 	UNIQUE(network, target)
 );
-
-CREATE INDEX ReadReceipt_network_index ON ReadReceipt(network);
 
 CREATE TABLE WebPushConfig (
 	id INTEGER PRIMARY KEY,
@@ -109,8 +105,7 @@ CREATE TABLE WebPushSubscription (
 	UNIQUE(network, endpoint)
 );
 
-CREATE INDEX WebPushSubscription_user_index ON WebPushSubscription(user);
-CREATE INDEX WebPushSubscription_network_index ON WebPushSubscription(network);
+CREATE INDEX WebPushSubscription_user_network_index ON WebPushSubscription(user, network);
 
 CREATE TABLE Message (
 	id INTEGER PRIMARY KEY,
@@ -122,7 +117,7 @@ CREATE TABLE Message (
 	FOREIGN KEY(target) REFERENCES MessageTarget(id)
 );
 
-CREATE INDEX MessageIndex ON Message(target, time);
+CREATE INDEX MessageEventIndex ON Message(target, time) WHERE text IS NULL;
 CREATE INDEX MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
 CREATE INDEX Message_target_index ON Message(target);
 
@@ -137,20 +132,4 @@ CREATE TABLE MessageTarget (
 	UNIQUE(network, target)
 );
 
-CREATE INDEX MessageTarget_network_index ON MessageTarget(network);
-
-CREATE VIRTUAL TABLE MessageFTS USING fts5 (
-	text,
-	content=Message,
-	content_rowid=id
-);
-CREATE TRIGGER MessageFTSInsert AFTER INSERT ON Message BEGIN
-	INSERT INTO MessageFTS(rowid, text) VALUES (new.id, new.text);
-END;
-CREATE TRIGGER MessageFTSDelete AFTER DELETE ON Message BEGIN
-	INSERT INTO MessageFTS(MessageFTS, rowid, text) VALUES ('delete', old.id, old.text);
-END;
-CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message BEGIN
-	INSERT INTO MessageFTS(MessageFTS, rowid, text) VALUES ('delete', old.id, old.text);
-	INSERT INTO MessageFTS(rowid, text) VALUES (new.id, new.text);
-END;
+CREATE INDEX MessageTarget_flags_index ON MessageTarget(network) WHERE pinned OR muted OR blocked;

@@ -16,6 +16,7 @@ use super::sqlite_migrations::MIGRATIONS;
 mod messages;
 mod networks;
 mod receipts;
+mod turso;
 mod users;
 mod webpush;
 
@@ -23,6 +24,8 @@ mod webpush;
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
 const SCHEMA: &str = include_str!("../sqlite_schema.sql");
+const TENANT_SCHEMA: &str = include_str!("../turso/tenant_schema.sql");
+const FTS_SCHEMA: &str = include_str!("../message_fts.sql");
 
 /// Times are stored as text in the server-time layout, which sorts
 /// lexicographically.
@@ -75,27 +78,28 @@ pub struct Database {
 }
 
 impl Database {
-    pub(super) fn open_remote(conn: Connection, controller: bool) -> Result<Database> {
+    pub(super) fn open_remote_controller(conn: Connection) -> Result<Database> {
         conn.initialize_remote_schema_version()?;
         let db = Database {
             conn: Mutex::new(conn),
         };
-        if controller {
+        {
             let mut conn = db.conn();
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let version = tx.schema_version()?;
             match version {
                 0 => {
                     tx.execute_batch(include_str!("../turso/controller_schema.sql"))?;
-                    tx.set_schema_version(1)?;
                 }
                 1 => {}
+                2 => {}
                 _ => bail!("unsupported Turso controller schema version {version}"),
             }
+            tx.execute_batch("CREATE INDEX IF NOT EXISTS DeviceCertificate_user_index ON DeviceCertificate(user);")?;
+            if version < 2 {
+                tx.set_schema_version(2)?;
+            }
             tx.commit()?;
-        } else {
-            db.upgrade()?;
-            db.conn().execute_batch("CREATE TABLE IF NOT EXISTS MessageIdHighWater (id INTEGER PRIMARY KEY CHECK (id = 0), last_id INTEGER NOT NULL);")?;
         }
         Ok(db)
     }
@@ -168,8 +172,13 @@ impl Database {
             return Ok(());
         }
         if version == 0 {
-            tx.execute_batch(SCHEMA)
-                .map_err(|e| anyhow!("failed to initialize schema: {e}"))?;
+            tx.execute_batch(if tx.is_remote() {
+                TENANT_SCHEMA
+            } else {
+                SCHEMA
+            })
+            .map_err(|e| anyhow!("failed to initialize schema: {e}"))?;
+            tx.execute_batch(FTS_SCHEMA)?;
         } else {
             for (i, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
                 // Turso's hosted SQL allowlist rejects ANALYZE. The partial
@@ -182,6 +191,11 @@ impl Database {
                 tx.execute_batch(&migration)
                     .map_err(|e| anyhow!("failed to execute migration #{i}: {e}"))?;
             }
+            if !tx.is_remote() && version < 32 {
+                tx.execute_batch("DROP TRIGGER MessageFTSInsert; DROP TRIGGER MessageFTSDelete; DROP TRIGGER MessageFTSUpdate; DROP TABLE MessageFTS;")?;
+                tx.execute_batch(FTS_SCHEMA)?;
+                tx.execute_batch("INSERT INTO MessageFTS(rowid, text) SELECT id, text FROM Message WHERE text IS NOT NULL;")?;
+            }
         }
         tx.set_schema_version(SCHEMA_VERSION)
             .map_err(|e| anyhow!("failed to bump schema version: {e}"))?;
@@ -191,11 +205,18 @@ impl Database {
 
     pub fn stats(&self) -> Result<DatabaseStats> {
         let conn = self.conn();
+        let users = if conn.is_remote() {
+            "0"
+        } else {
+            "(SELECT COUNT(*) FROM User)"
+        };
         Ok(conn.query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM User) AS users,
+            &format!(
+                "SELECT
+                {users} AS users,
                 (SELECT COUNT(*) FROM Network) AS networks,
-                (SELECT COUNT(*) FROM Channel) AS channels",
+                (SELECT COUNT(*) FROM Channel) AS channels"
+            ),
             [],
             |r| {
                 Ok(DatabaseStats {

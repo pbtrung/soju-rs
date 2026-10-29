@@ -94,7 +94,7 @@ impl Database {
                     sasl_mechanism = :sasl_mechanism, sasl_plain_username = :sasl_plain_username, sasl_plain_password = :sasl_plain_password,
                     sasl_external_cert = :sasl_external_cert, sasl_external_key = :sasl_external_key,
                     auto_away = :auto_away, enabled = :enabled
-                WHERE id = :id",
+                WHERE id = :id AND (name IS NOT :name OR addr IS NOT :addr OR nick IS NOT :nick OR username IS NOT :username OR realname IS NOT :realname OR certfp IS NOT :certfp OR pass IS NOT :pass OR connect_commands IS NOT :connect_commands OR sasl_mechanism IS NOT :sasl_mechanism OR sasl_plain_username IS NOT :sasl_plain_username OR sasl_plain_password IS NOT :sasl_plain_password OR sasl_external_cert IS NOT :sasl_external_cert OR sasl_external_key IS NOT :sasl_external_key OR auto_away IS NOT :auto_away OR enabled IS NOT :enabled)",
                 [fields, named_params! {":id": network.id}].concat().as_slice(),
             )?;
         } else {
@@ -176,7 +176,7 @@ impl Database {
                 SET network = :network, name = :name, key = :key, detached = :detached,
                     detached_internal_msgid = :detached_internal_msgid, relay_detached = :relay_detached,
                     reattach_on = :reattach_on, detach_after = :detach_after, detach_on = :detach_on
-                WHERE id = :id",
+                WHERE id = :id AND (network IS NOT :network OR name IS NOT :name OR key IS NOT :key OR detached IS NOT :detached OR detached_internal_msgid IS NOT :detached_internal_msgid OR relay_detached IS NOT :relay_detached OR reattach_on IS NOT :reattach_on OR detach_after IS NOT :detach_after OR detach_on IS NOT :detach_on)",
                 [fields, named_params! {":id": ch.id}].concat().as_slice(),
             )?;
         } else {

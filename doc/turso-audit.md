@@ -89,6 +89,51 @@ need no reset or migration for this fix.
 v0.99.21 validation: formatting and Clippy passed; all 193 tests passed
 (156 library, 3 sojuctl, and 34 bouncer integration tests).
 
+## Query-cost and tenant-schema follow-up (v0.99.22)
+
+The [optimization plan](turso-query-optimization.md) was written before the
+implementation. The [evidence report](turso-query-evidence.md) records real
+libSQL counters and reproducible native plans; no live cloud credentials
+were used. The benchmark runs the production writer/receipt/expiry methods
+against a pinned, disposable localhost engine and asserts the improvements.
+
+- Multi-row VALUES and a bounded target-ID cache reduce repeated lookups.
+  Foreign keys remain enabled; an invalidated cached target rolls back the
+  batch, refreshes routing and omits removed networks on its safe retry.
+- Identical message retries no longer update rows or run FTS triggers.
+  Different contents at a reserved ID still abort rather than overwrite.
+- Text/event timestamp indexes are disjoint. Event playback merges both
+  ordered ranges; cursor ordering and ties remain covered by regressions.
+- Sparse FTS uses columnsize=0 and indexes text rows only. Chunked migration
+  saves progress in the same transaction as each range. Cursor predicates
+  prevent duplicate indexing after an ambiguous response. Tests interrupt
+  migration after a committed chunk and verify resumed FTS integrity.
+- Expiry seeks per-target timestamp ranges. Saving the high-water ID now
+  seeks one row instead of aggregating the entire message table.
+- Receipt deltas preserve unchanged IDs and write only changes. Repeated
+  account, network, channel, certificate, target and read-receipt updates
+  skip equal values. Unique-index prefixes replace redundant indexes;
+  selective certificate, receipt, subscription and target-flag indexes are
+  added where their query plans justify them.
+- Tenant User, DeviceCertificate and WebPushConfig tables are removed.
+  Networks/subscriptions reference TursoOwner.user. Ownership validation
+  precedes migration; unexpected tenant authentication records stop it.
+  A regression preserves upstream credentials, channels, subscriptions,
+  receipts and history through migration and restart. FK checks cover the
+  rebuilt tables instead of scanning every message at startup.
+- Controller schema 2 and tenant/local schema 32 reject older binaries.
+  Migration may incur substantial one-time usage and startup time; backups
+  and a sufficiently long startup probe are documented.
+- Observed row-usage metrics sum received execute and batch responses.
+  They exclude unobserved/lost responses and are explicitly not invoice
+  totals. BEGIN/COMMIT execute responses avoid extra SELECT 1 probes while
+  preserving the replication watermark and stream validation.
+
+v0.99.22 validation: formatting and strict Clippy passed; all 198 ordinary
+tests passed (161 library, 3 sojuctl, 34 bouncer integration), plus the
+separately invoked real-engine benchmark. Its ignored test is driven by
+`python3 scripts/bench-query-cost.py`.
+
 ## Validation and limits
 
 Post-release verification exercises `upstream::append_log` on a running

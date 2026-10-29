@@ -4,7 +4,76 @@ use anyhow::Result;
 use rusqlite::{OptionalExtension, TransactionBehavior, named_params, params};
 
 use super::{Database, lossy_string, null_string, time_from_sql, time_to_sql};
+use crate::database::connection::{Connection, statement};
 use crate::database::{DeliveryReceipt, ReadReceipt};
+use std::collections::{HashMap, HashSet};
+
+enum Change {
+    Delete(i64),
+    Update(i64, usize),
+    Insert(usize),
+}
+
+fn changes(
+    conn: &Connection,
+    network: i64,
+    client: &str,
+    receipts: &[DeliveryReceipt],
+) -> Result<(Vec<Change>, Vec<i64>)> {
+    let saved=conn.prepare("SELECT id,target,internal_msgid FROM DeliveryReceipt WHERE network=? AND client IS ? ORDER BY id")?
+        .query_map(params![network,null_string(client)],|r|Ok((r.get::<_,i64>(0)?,lossy_string(r,1)?,lossy_string(r,2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut existing = HashMap::new();
+    let mut changes = Vec::new();
+    let mut ids = vec![0; receipts.len()];
+    for (id, target, message) in saved {
+        if let Some((previous, _)) = existing.insert(target, (id, message)) {
+            changes.push(Change::Delete(previous));
+        }
+    }
+    for (i, receipt) in receipts.iter().enumerate() {
+        if let Some((id, message)) = existing.remove(&receipt.target) {
+            ids[i] = id;
+            if message != receipt.internal_msg_id {
+                changes.push(Change::Update(id, i));
+            }
+        } else {
+            changes.push(Change::Insert(i));
+        }
+    }
+    changes.extend(existing.into_values().map(|(id, _)| Change::Delete(id)));
+    Ok((changes, ids))
+}
+
+fn execute_changes(
+    conn: &Connection,
+    network: i64,
+    client: &str,
+    receipts: &[DeliveryReceipt],
+    changes: &[Change],
+    ids: &mut [i64],
+) -> Result<()> {
+    for change in changes {
+        match *change {
+            Change::Delete(id) => {
+                conn.execute("DELETE FROM DeliveryReceipt WHERE id=?", [id])?;
+            }
+            Change::Update(id, i) => {
+                conn.execute(
+                    "UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?",
+                    params![receipts[i].internal_msg_id, id],
+                )?;
+            }
+            Change::Insert(i) => {
+                conn.execute("INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) VALUES(?,?,?,?,?)",params![if ids[i]==0{None}else{Some(ids[i])},network,receipts[i].target,null_string(client),receipts[i].internal_msg_id])?;
+                if ids[i] == 0 {
+                    ids[i] = conn.last_insert_rowid();
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 impl Database {
     pub fn list_delivery_receipts(&self, network_id: i64) -> Result<Vec<DeliveryReceipt>> {
@@ -26,6 +95,60 @@ impl Database {
     }
 
     pub fn store_client_delivery_receipts(
+        &self,
+        network_id: i64,
+        client: &str,
+        receipts: &mut [DeliveryReceipt],
+    ) -> Result<()> {
+        // Preserve the old NULL-client duplicate semantics for unusual
+        // callers. The normal delivered-target map contains unique targets.
+        let unique: HashSet<_> = receipts.iter().map(|r| &r.target).collect();
+        if unique.len() != receipts.len() {
+            return self.replace_duplicate_delivery_receipts(network_id, client, receipts);
+        }
+        let mut conn = self.conn();
+        let ids = if conn.is_remote() {
+            // This connection's mutex serializes receipt writers in the one
+            // bouncer instance supported per controller. Background message
+            // writers never mutate receipts. Commit only the resulting delta.
+            let (changes, mut ids) = changes(&conn, network_id, client, receipts)?;
+            let mut statements = Vec::new();
+            for change in &changes {
+                statements.push(match *change {
+                    Change::Delete(id)=>statement("DELETE FROM DeliveryReceipt WHERE id=?",[id])?,
+                    Change::Update(id,i)=>statement("UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?",params![receipts[i].internal_msg_id,id])?,
+                    Change::Insert(i)=>{
+                        ids[i]=super::new_row_id(&conn).unwrap();
+                        statement("INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) VALUES(?,?,?,?,?)",params![ids[i],network_id,receipts[i].target,null_string(client),receipts[i].internal_msg_id])?
+                    },
+                });
+            }
+            if !statements.is_empty()
+                && let Err(error) = conn.atomic_batch(statements)
+            {
+                if !error.to_string().contains("HTTP body budget") {
+                    return Err(error.into());
+                }
+                // The size check rejected the body before any HTTP send.
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                execute_changes(&tx, network_id, client, receipts, &changes, &mut ids)?;
+                tx.commit()?;
+            }
+            ids
+        } else {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let (changes, mut ids) = changes(&tx, network_id, client, receipts)?;
+            execute_changes(&tx, network_id, client, receipts, &changes, &mut ids)?;
+            tx.commit()?;
+            ids
+        };
+        for (receipt, id) in receipts.iter_mut().zip(ids) {
+            receipt.id = id;
+        }
+        Ok(())
+    }
+
+    fn replace_duplicate_delivery_receipts(
         &self,
         network_id: i64,
         client: &str,
@@ -78,7 +201,7 @@ impl Database {
         let ts = time_to_sql(receipt.timestamp);
         if receipt.id != 0 {
             conn.execute(
-                "UPDATE ReadReceipt SET timestamp = :timestamp WHERE id = :id",
+                "UPDATE ReadReceipt SET timestamp = :timestamp WHERE id = :id AND (timestamp IS NOT :timestamp)",
                 named_params! {":timestamp": ts, ":id": receipt.id},
             )?;
         } else {

@@ -40,9 +40,14 @@ fn database_name() -> String {
 }
 
 #[cfg(test)]
+mod cost_tests;
+#[cfg(test)]
 mod tests;
 
 impl Turso {
+    pub fn observed_usage(&self) -> (u64, u64) {
+        self.http.observed_usage()
+    }
     pub fn open(config: &config::Turso) -> Result<Self> {
         Self::open_at(config, "https://api.turso.tech/v1".into(), None)
     }
@@ -58,10 +63,11 @@ impl Turso {
             true,
         )?;
         let controller = Arc::new(
-            sqlite::Database::open_remote(
-                Connection::remote(http.clone(), url, config.group_token.clone()),
-                true,
-            )
+            sqlite::Database::open_remote_controller(Connection::remote(
+                http.clone(),
+                url,
+                config.group_token.clone(),
+            ))
             .context("initialize Turso controller")?,
         );
         let cloud = Self {
@@ -187,50 +193,13 @@ impl Turso {
             pending,
         )?;
         let db = Arc::new(
-            sqlite::Database::open_remote(
+            sqlite::Database::open_remote_tenant(
                 Connection::remote(self.http.clone(), url, self.config.group_token.clone()),
-                false,
+                &self.config.controller,
+                id,
             )
             .with_context(|| format!("initialize user database {name}"))?,
         );
-        // User is only a foreign-key anchor here. Passwords stay exclusively
-        // in the controller; all network and message data stays in this DB.
-        {
-            let mut conn = db.conn();
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let anchor = format!("user-{id}");
-            let other_users: i64 = tx.query_row(
-                "SELECT count(*) FROM User WHERE id != ? OR username != ? OR password IS NOT NULL",
-                params![id, anchor],
-                |r| r.get(0),
-            )?;
-            if other_users != 0 {
-                bail!("Turso user database {name} belongs to a different account");
-            }
-            tx.execute_batch("CREATE TABLE IF NOT EXISTS TursoOwner (
-                id INTEGER PRIMARY KEY CHECK (id = 0), controller TEXT NOT NULL, user INTEGER NOT NULL
-            )")?;
-            let owner: Option<(String, i64)> = tx
-                .query_row(
-                    "SELECT controller, user FROM TursoOwner WHERE id = 0",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            if let Some((controller, user)) = owner {
-                if controller != self.config.controller || user != id {
-                    bail!("Turso user database {name} has a different controller or owner");
-                }
-            } else {
-                tx.execute(
-                    "INSERT INTO TursoOwner(id, controller, user) VALUES (0, ?, ?)",
-                    params![self.config.controller, id],
-                )?;
-            }
-            tx.execute("INSERT INTO User(id, username, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
-                params![id, anchor, crate::xirc::format_server_time(chrono::Utc::now())])?;
-            tx.commit()?;
-        }
         if pending {
             self.controller.conn().execute(
                 "UPDATE UserDatabase SET state = 'ready' WHERE user = ?",
@@ -354,7 +323,7 @@ impl Turso {
         // Persist the tombstone before deleting anything. Startup completes a
         // failed deletion instead of recreating the user's database.
         self.controller.conn().execute(
-            "UPDATE UserDatabase SET state = 'deleting' WHERE user = ?",
+            "UPDATE UserDatabase SET state = 'deleting' WHERE user = ? AND state!='deleting'",
             [id],
         )?;
         // A broad Platform API token must never delete a database that has
