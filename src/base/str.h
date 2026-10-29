@@ -92,6 +92,8 @@ void strbuf_append_char(struct strbuf *sb, char c);
 [[gnu::format(printf, 2, 0)]] void strbuf_vprintf(struct strbuf *sb, const char *fmt, va_list ap);
 // Shortens the string to n bytes (n <= len)
 void strbuf_truncate(struct strbuf *sb, size_t n);
+// Removes the first n bytes (n <= len)
+void strbuf_drop_front(struct strbuf *sb, size_t n);
 // Empties the string, keeping the buffer
 void strbuf_reset(struct strbuf *sb);
 // The NUL-terminated contents, valid until the next modification

@@ -165,6 +165,13 @@ static void on_ready(struct conn *c, void *data) {
 			c = nullptr;
 		}
 		break;
+	case LISTENER_HTTP:
+	case LISTENER_PROMETHEUS:
+		if (l->h.http != nullptr) {
+			l->h.http(c, &info, l->kind == LISTENER_PROMETHEUS, l->h.data);
+			c = nullptr;
+		}
+		break;
 	default:
 		break;
 	}
@@ -230,36 +237,19 @@ static void adopt(void *data) {
 		xfree(ho);
 		return;
 	}
-	if (l->kind == LISTENER_HTTP || l->kind == LISTENER_PROMETHEUS) {
-		// TLS for HTTPS is done by libwebsockets (phase 8)
-		struct conn_info info = {.remote_addr = xstrdup("@")};
-		if (ho->has_remote) {
-			struct strbuf a = STRBUF_INIT;
-			fmt_addr(&a, (const struct sockaddr *)&ho->remote);
-			xfree(info.remote_addr);
-			info.remote_addr = strbuf_take(&a);
-			info.has_remote_ip =
-				sockaddr_ip((const struct sockaddr *)&ho->remote, &info.remote_ip);
-		}
-		if (l->h.http != nullptr) {
-			l->h.http(s, &info, l->kind == LISTENER_PROMETHEUS, l->h.data);
-		} else {
-			uv_close((uv_handle_t *)s, free_handle);
-		}
-		xfree(info.remote_addr);
-		listener_unref(l);
-		xfree(ho);
-		return;
-	}
 	struct accepted *a = xcalloc(1, sizeof(*a));
 	a->l = l;
 	a->has_remote = ho->has_remote;
 	a->remote = ho->remote;
 	xfree(ho);
+	// HTTP listeners don't read PROXY headers: proxies forward addresses
+	// in HTTP headers instead
+	bool http = l->kind == LISTENER_HTTP || l->kind == LISTENER_PROMETHEUS;
 	struct conn_options opts = {
 		.tls_server = l->tls ? l->tls_ctx : nullptr,
-		.proxy = true,
+		.proxy = !http,
 		.setup_timeout_ms = DOWNSTREAM_REGISTER_TIMEOUT_MS,
+		.framing = http ? CONN_FRAMING_RAW : CONN_FRAMING_LINES,
 	};
 	struct conn_callbacks cb = {.ready = on_ready, .closed = on_closed_early};
 	(void)conn_new(s, &opts, &l->log, &cb, a);

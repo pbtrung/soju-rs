@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 113 of 165 unit tests (phases 0–7); 17 of 17 scenarios.
+Ported so far: 116 of 165 unit tests (phases 0–8); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -33,7 +33,7 @@ Also compared against the Rust code by the differential harness
 | `src/conn.rs` | `rate_limited` | `test_net_conn.c`: `test_rate_limited` |
 | `src/conn.rs` | `queued_line` | `test_net_conn.c`: `test_queued_line` |
 | `src/conn.rs` | `stream_wire_format` | `test_net_conn.c`: `test_stream_wire_format` |
-| `src/conn.rs` | `websocket_wire_format` | pending: phase 8 (WebSocket) |
+| `src/conn.rs` | `websocket_wire_format` | `test_net_conn_ws.c`: `test_websocket_wire_format` |
 | `src/conn.rs` | `queue_budget` | `test_net_conn.c`: `test_queue_budget` |
 | `src/conn.rs` | `input_in_flight` | `test_net_conn.c`: `test_input_in_flight` |
 | `src/conn.rs` | `view` | `test_net_conn.c`: `test_view` |
@@ -118,9 +118,9 @@ Also compared against the Rust code by the differential harness
 | `src/ircutil.rs` | `member_prefix` | `test_irc_ircutil.c`: `test_member_prefix` |
 | `src/listen.rs` | `uris` | `test_net_listen_uri.c`: `test_uris` |
 | `src/listen.rs` | `forwarded` | `test_http_forwarded.c`: `test_forwarded` |
-| `src/listen.rs` | `websocket_large_lines` | pending: phase 8 |
+| `src/listen.rs` | `websocket_large_lines` | `test_net_conn_ws.c`: `test_websocket_large_lines` |
 | `src/listen.rs` | `client_cert_header` | `test_http_forwarded.c`: `test_client_cert_header` |
-| `src/metrics.rs` | `render` | pending: phase 8 |
+| `src/metrics.rs` | `render` | `test_http.c`: `test_render` |
 | `src/msgstore/bare.rs` | `roundtrip` | `test_msgstore_msgid.c`: `test_roundtrip` |
 | `src/msgstore/memory.rs` | `ring` | `test_user.c`: `test_ring` |
 | `src/msgstore/memory.rs` | `delete_network` | `test_user.c`: `test_delete_network` |

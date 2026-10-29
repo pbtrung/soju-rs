@@ -6,60 +6,9 @@
 
 #include "base/alloc.h"
 #include "base/utf8.h"
-
-enum stage {
-	STAGE_START, // no setup step: opens on the next loop iteration
-	STAGE_TLS, // TLS handshake
-	STAGE_PROXY, // PROXY header
-	STAGE_OPEN, // IRC lines
-};
-
-struct conn {
-	struct ref_node ref;
-	uv_stream_t *stream;
-	uv_timer_t write_timer, rate_timer, setup_timer;
-	struct logger log;
-	struct conn_callbacks cb;
-	void *cb_data;
-	struct tls_session tls;
-	struct strbuf peer_cert;
-	struct proxy_header proxy_header;
-	struct strbuf pre; // bytes of the PROXY step
-	struct strbuf lines; // plaintext not yet split into lines
-	size_t in_flight;
-
-	// Outgoing
-	strvec queue; // lines without CRLF, oldest first
-	size_t queue_head; // index of the first unsent line
-	size_t queued_bytes;
-	struct strbuf write_buf;
-	uv_write_t write_req;
-	uv_shutdown_t shutdown_req;
-	// rate limiting
-	const bool *rate_flag;
-	struct rate_limiter limiter;
-	char *rate_line; // dequeued, waiting for the limiter
-
-	unsigned refs;
-	unsigned handles_open; // handles not yet through their close callback
-	enum stage stage;
-	bool proxy;
-	bool has_tls;
-	bool has_peer_cert;
-	bool eof;
-	bool closed; // no more reading nor callbacks
-	bool closed_notified;
-	bool handles_closing;
-	bool reading;
-	bool writing;
-	bool shutdown_requested;
-	bool shutting_down;
-	bool rate_enabled;
-	bool rate_waiting;
-};
+#include "net/conn_internal.h"
 
 static void process(struct conn *c);
-static void flush_writes(struct conn *c);
 static void close_handles(struct conn *c);
 
 void io_error_str(struct strbuf *out, int uv_err) {
@@ -84,6 +33,8 @@ static void conn_free(struct conn *c) {
 	proxy_header_free(&c->proxy_header);
 	strbuf_free(&c->pre);
 	strbuf_free(&c->lines);
+	ws_reader_finish(&c->ws);
+	strbuf_free(&c->raw_out);
 	strvec_free(&c->queue);
 	strbuf_free(&c->write_buf);
 	xfree(c->rate_line);
@@ -149,7 +100,7 @@ static void close_handles(struct conn *c) {
 
 // Stops everything: reading, timers, queued writes. err is reported to
 // the closed callback.
-static void fail(struct conn *c, const struct err *err) {
+void conn_fail(struct conn *c, const struct err *err) {
 	if (c->closed) {
 		return;
 	}
@@ -164,7 +115,7 @@ static void fail(struct conn *c, const struct err *err) {
 	conn_unref(c);
 }
 
-[[gnu::format(printf, 2, 3)]] static void fail_msg(struct conn *c, const char *fmt, ...) {
+void conn_fail_msg(struct conn *c, const char *fmt, ...) {
 	struct err e = {0};
 	va_list ap;
 	va_start(ap, fmt);
@@ -172,12 +123,12 @@ static void fail(struct conn *c, const struct err *err) {
 	strbuf_vprintf(&sb, fmt, ap);
 	va_end(ap);
 	e.msg = strbuf_take(&sb);
-	fail(c, &e);
+	conn_fail(c, &e);
 	xfree(e.msg);
 }
 
 void conn_close(struct conn *c) {
-	fail(c, nullptr);
+	conn_fail(c, nullptr);
 }
 
 bool conn_is_closed(const struct conn *c) {
@@ -185,7 +136,8 @@ bool conn_is_closed(const struct conn *c) {
 }
 
 size_t conn_queued(const struct conn *c) {
-	return c->queue.len - c->queue_head + (c->rate_line != nullptr ? 1 : 0);
+	return c->queue.len - c->queue_head + (c->rate_line != nullptr ? 1 : 0) +
+	       (c->raw_out.len > 0 ? 1 : 0);
 }
 
 const struct proxy_header *conn_proxy_header(const struct conn *c) {
@@ -283,7 +235,7 @@ static void on_written(uv_write_t *req, int status) {
 			}
 		}
 	} else {
-		flush_writes(c);
+		conn_flush_writes(c);
 	}
 	conn_unref(c);
 }
@@ -303,20 +255,13 @@ static void write_raw(struct conn *c) {
 	uv_timer_start(&c->write_timer, on_write_timeout, CONN_WRITE_TIMEOUT_MS, 0);
 }
 
-// Appends a line (with CRLF) to write_buf, encrypting it with TLS
-static bool add_line(struct conn *c, const char *line) {
-	log_debug(&c->log, "sent: %s", line);
+// Appends plaintext to write_buf, encrypting it with TLS
+static bool add_bytes(struct conn *c, const char *p, size_t n) {
 	if (!c->has_tls) {
-		strbuf_append_cstr(&c->write_buf, line);
-		strbuf_append(&c->write_buf, "\r\n", 2);
+		strbuf_append(&c->write_buf, p, n);
 		return true;
 	}
-	struct strbuf plain = STRBUF_INIT;
-	strbuf_append_cstr(&plain, line);
-	strbuf_append(&plain, "\r\n", 2);
-	enum tls_status st = tls_session_write(&c->tls, plain.buf, plain.len);
-	strbuf_free(&plain);
-	if (st == TLS_ERROR) {
+	if (tls_session_write(&c->tls, p, n) == TLS_ERROR) {
 		log_info(&c->log, "failed to write message: %s", c->tls.error);
 		return false;
 	}
@@ -324,10 +269,30 @@ static bool add_line(struct conn *c, const char *line) {
 	return true;
 }
 
+// Appends a line (framed: with CRLF, or in a WebSocket message) to
+// write_buf
+static bool add_line(struct conn *c, const char *line) {
+	log_debug(&c->log, "sent: %s", line);
+	AUTO_STRBUF struct strbuf plain = STRBUF_INIT;
+	conn_frame_line(c, line, &plain);
+	return add_bytes(c, plain.buf, plain.len);
+}
+
+// Moves the raw bytes queued to write_buf
+static bool add_raw(struct conn *c) {
+	if (c->raw_out.len == 0) {
+		return true;
+	}
+	c->queued_bytes -= c->raw_out.len;
+	bool ok = add_bytes(c, c->raw_out.buf, c->raw_out.len);
+	strbuf_reset(&c->raw_out);
+	return ok;
+}
+
 static void on_rate_timer(uv_timer_t *t) {
 	struct conn *c = t->data;
 	c->rate_waiting = false;
-	flush_writes(c);
+	conn_flush_writes(c);
 }
 
 static bool rate_limited(const struct conn *c) {
@@ -344,7 +309,7 @@ static char *dequeue(struct conn *c) {
 	return line;
 }
 
-static void flush_writes(struct conn *c) {
+void conn_flush_writes(struct conn *c) {
 	if (c->writing || c->rate_waiting || c->handles_closing || c->shutting_down) {
 		return;
 	}
@@ -358,6 +323,10 @@ static void flush_writes(struct conn *c) {
 			}
 			return;
 		}
+	}
+	if (!add_raw(c)) {
+		conn_close(c);
+		return;
 	}
 	if (rate_limited(c)) {
 		if (c->rate_line == nullptr && c->queue_head < c->queue.len) {
@@ -404,10 +373,21 @@ static void flush_writes(struct conn *c) {
 			}
 		}
 	}
+	if (c->write_buf.len == 0 && c->shutdown_requested && c->queue_head == c->queue.len &&
+	    c->rate_line == nullptr) {
+		// A WebSocket peer gets a close frame first
+		AUTO_STRBUF struct strbuf frame = STRBUF_INIT;
+		if (conn_frame_close(c, &frame) && !add_bytes(c, frame.buf, frame.len)) {
+			conn_close(c);
+			return;
+		}
+		if (c->write_buf.len == 0) {
+			finish_shutdown(c);
+			return;
+		}
+	}
 	if (c->write_buf.len > 0) {
 		write_raw(c);
-	} else if (c->shutdown_requested && c->queue_head == c->queue.len) {
-		finish_shutdown(c);
 	}
 }
 
@@ -472,7 +452,27 @@ static void enqueue_line(struct conn *c, char *line) {
 	}
 	c->queued_bytes += size;
 	strvec_push_take(&c->queue, line);
-	flush_writes(c);
+	conn_flush_writes(c);
+}
+
+void conn_send_raw(struct conn *c, const void *p, size_t n) {
+	if (c->closed || c->shutdown_requested) {
+		return;
+	}
+	if (c->queued_bytes + n > MAX_QUEUED_BYTES) {
+		log_info(&c->log, "closing connection: too many messages waiting to be sent");
+		conn_close(c);
+		return;
+	}
+	c->queued_bytes += n;
+	strbuf_append(&c->raw_out, n > 0 ? p : "", n);
+	conn_flush_writes(c);
+}
+
+void conn_set_framing(struct conn *c, enum conn_framing f) {
+	c->framing = f;
+	ws_reader_finish(&c->ws);
+	ws_reader_init(&c->ws, f == CONN_FRAMING_WEBSOCKET);
 }
 
 void conn_send(struct conn *c, const struct irc_msg *msg) {
@@ -489,7 +489,7 @@ void conn_shutdown(struct conn *c) {
 		return;
 	}
 	c->shutdown_requested = true;
-	flush_writes(c);
+	conn_flush_writes(c);
 }
 
 // Reading
@@ -549,13 +549,13 @@ static void process_lines(struct conn *c) {
 			c->lines.len > 0 ? memchr(c->lines.buf, '\n', c->lines.len) : nullptr;
 		if (nl == nullptr) {
 			if (c->lines.len > MAX_LINE_LENGTH) {
-				fail_msg(c, "line too long");
+				conn_fail_msg(c, "line too long");
 			}
 			return;
 		}
 		size_t len = (size_t)(nl - c->lines.buf) + 1;
 		if (len > MAX_LINE_LENGTH) {
-			fail_msg(c, "line too long");
+			conn_fail_msg(c, "line too long");
 			return;
 		}
 		struct irc_msg *msg;
@@ -564,7 +564,7 @@ static void process_lines(struct conn *c) {
 		memmove(c->lines.buf, c->lines.buf + len, c->lines.len - len);
 		strbuf_truncate(&c->lines, c->lines.len - len);
 		if (!ok) {
-			fail(c, e);
+			conn_fail(c, e);
 			err_free(e);
 			return;
 		}
@@ -572,17 +572,21 @@ static void process_lines(struct conn *c) {
 			// It's valid for a message to be empty, ignore these
 			continue;
 		}
-		if (log_debug_enabled(&c->log)) {
-			AUTOFREE char *s = irc_msg_to_string(msg);
-			log_printf(&c->log, "received: %s", s);
-		}
-		c->in_flight++;
-		if (c->cb.message != nullptr) {
-			c->cb.message(c, msg, c->cb_data);
-		} else {
-			irc_msg_free(msg);
-			c->in_flight--;
-		}
+		conn_deliver(c, msg);
+	}
+}
+
+void conn_deliver(struct conn *c, struct irc_msg *msg) {
+	if (log_debug_enabled(&c->log)) {
+		AUTOFREE char *s = irc_msg_to_string(msg);
+		log_printf(&c->log, "received: %s", s);
+	}
+	c->in_flight++;
+	if (c->cb.message != nullptr) {
+		c->cb.message(c, msg, c->cb_data);
+	} else {
+		irc_msg_free(msg);
+		c->in_flight--;
 	}
 }
 
@@ -592,7 +596,7 @@ static void become_open(struct conn *c) {
 	if (c->cb.ready != nullptr) {
 		c->cb.ready(c, c->cb_data);
 	}
-	flush_writes(c);
+	conn_flush_writes(c);
 }
 
 static void process(struct conn *c) {
@@ -606,7 +610,7 @@ static void process(struct conn *c) {
 		case PROXY_NEED_MORE:
 			return;
 		case PROXY_ERROR:
-			fail(c, e);
+			conn_fail(c, e);
 			err_free(e);
 			return;
 		case PROXY_NONE:
@@ -619,13 +623,31 @@ static void process(struct conn *c) {
 		strbuf_free(&c->pre);
 		become_open(c);
 	}
-	if (c->stage == STAGE_OPEN) {
-		process_lines(c);
-		if (!c->closed && c->eof && c->in_flight == 0) {
-			// EOF; a line without its end is dropped
-			conn_close(c);
+	// The raw callback may switch to another framing: process the rest of
+	// the input with it
+	enum conn_framing f;
+	do {
+		if (c->stage != STAGE_OPEN || c->closed) {
+			return;
 		}
-	}
+		f = c->framing;
+		switch (f) {
+		case CONN_FRAMING_LINES:
+			process_lines(c);
+			if (!c->closed && c->eof && c->in_flight == 0) {
+				// EOF; a line without its end is dropped
+				conn_close(c);
+			}
+			break;
+		case CONN_FRAMING_RAW:
+			conn_process_raw(c);
+			break;
+		case CONN_FRAMING_WEBSOCKET:
+		case CONN_FRAMING_WEBSOCKET_CLIENT:
+			conn_process_websocket(c);
+			break;
+		}
+	} while (c->framing != f);
 }
 
 static void plaintext(struct conn *c, const char *p, size_t n) {
@@ -660,7 +682,7 @@ static void tls_input(struct conn *c, const char *p, size_t n) {
 		enum tls_status st = tls_session_handshake(&c->tls);
 		flush_tls_output(c);
 		if (st == TLS_ERROR) {
-			fail_msg(c, "%s", c->tls.error);
+			conn_fail_msg(c, "%s", c->tls.error);
 			return;
 		}
 		if (!c->tls.handshake_done) {
@@ -677,7 +699,7 @@ static void tls_input(struct conn *c, const char *p, size_t n) {
 	strbuf_free(&plain);
 	flush_tls_output(c);
 	if (st == TLS_ERROR) {
-		fail_msg(c, "%s", c->tls.error);
+		conn_fail_msg(c, "%s", c->tls.error);
 	} else if (st == TLS_CLOSED) {
 		c->eof = true;
 	}
@@ -710,7 +732,7 @@ static void on_read(uv_stream_t *s, ssize_t nread, const uv_buf_t *buf) {
 	} else if (nread < 0) {
 		struct strbuf e = STRBUF_INIT;
 		io_error_str(&e, (int)nread);
-		fail_msg(c, "%s", strbuf_cstr(&e));
+		conn_fail_msg(c, "%s", strbuf_cstr(&e));
 		strbuf_free(&e);
 	}
 	xfree(buf->base);
@@ -762,6 +784,8 @@ struct conn *conn_new(uv_stream_t *stream, const struct conn_options *opts,
 	c->write_timer.data = c->rate_timer.data = c->setup_timer.data = c;
 	c->handles_open = 4;
 	c->proxy = opts->proxy;
+	c->framing = opts->framing;
+	ws_reader_init(&c->ws, c->framing == CONN_FRAMING_WEBSOCKET);
 	if (opts->rate != nullptr) {
 		c->rate_enabled = true;
 		c->rate_flag = opts->rate->enabled;
@@ -782,7 +806,7 @@ struct conn *conn_new(uv_stream_t *stream, const struct conn_options *opts,
 		uv_timer_start(&c->setup_timer, on_setup_timeout, opts->setup_timeout_ms, 0);
 	}
 	if (!ok) {
-		fail_msg(c, "failed to create a TLS session");
+		conn_fail_msg(c, "failed to create a TLS session");
 		return c;
 	}
 	if (c->has_tls && opts->tls_client != nullptr) {
@@ -791,7 +815,7 @@ struct conn *conn_new(uv_stream_t *stream, const struct conn_options *opts,
 		enum tls_status st = tls_session_handshake(&c->tls);
 		flush_tls_output(c);
 		if (st == TLS_ERROR) {
-			fail_msg(c, "%s", c->tls.error);
+			conn_fail_msg(c, "%s", c->tls.error);
 		}
 		conn_unref(c);
 	}

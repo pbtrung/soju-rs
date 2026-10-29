@@ -32,9 +32,9 @@ struct listener_handlers {
 	// c. info is valid during the call.
 	void (*irc)(struct conn *c, const struct conn_info *info, void *data);
 	void (*admin)(struct conn *c, const struct conn_info *info, void *data);
-	// Raw HTTP streams (phase 8); nullptr: such connections are closed
-	void (*http)(uv_stream_t *stream, const struct conn_info *info, bool prometheus,
-		     void *data);
+	// HTTP connections, after the TLS handshake (raw framing; the callee
+	// takes the reference on c). nullptr: such connections are closed.
+	void (*http)(struct conn *c, const struct conn_info *info, bool prometheus, void *data);
 	struct identd *identd;
 	// Whether PROXY headers from a peer are trusted (remote_ip nullptr for
 	// Unix sockets). Called on any loop.

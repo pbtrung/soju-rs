@@ -1,6 +1,6 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–7 implemented; phase 8 next**
+Status: **phases 0–8 implemented; phase 9 next**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
 and the stateful downstream session fuzzer. The user actor integrates network selection,
@@ -712,6 +712,16 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
 10. NUL bytes in received lines become U+FFFD (soju-rs keeps them; C
     strings can't hold them). Values decoded from data where NUL may occur
     (e.g. message ID targets) are kept length-aware instead.
+11. The HTTP server and WebSocket are **in-tree** (phase 8), not
+    libwebsockets: `http/request.c` (HTTP/1.1 request heads),
+    `http/websocket.c` (RFC 6455 framing) and `server/http.c` (routes),
+    on top of `net/conn` with raw and WebSocket framings. HTTP and IRC
+    connections then share one TLS layer, write queue, byte cap, input
+    backpressure and lifetime model (rule 8), and a WebSocket connection is
+    an ordinary `struct conn` for the downstream code. lws's adoption API
+    can't take bytes already read and would need one context per loop for
+    rule 1. Both parsers have fuzz harnesses (`fuzz_ws_frame`,
+    `fuzz_http_request`).
 
 ## 8. Changes on `main` since v0.99.15
 
@@ -756,3 +766,21 @@ high-water marks across deletes so deferred work cannot reach a replacement
 account or network. All three Rust service unit tests and both remaining server
 scenarios are ported, alongside command, global-callback and admin race tests.
 GCC/Clang debug, ASan/UBSan/LSan and TSan suites and clang-tidy pass.
+
+## Implementation validation: phase 8
+
+HTTP listeners (`wss`/`https`, `ws+insecure`/`http+insecure`, Unix and
+Prometheus) go through `net/conn` like IRC ones: TLS with ALPN `http/1.1`,
+no PROXY header (like soju-rs), raw framing for HTTP/1.1 and WebSocket
+framing after the upgrade (decision 11). Routes: `/socket` (handshake checks
+and error texts of soju-rs, Origin check, `text.ircv3.net` subprotocol,
+Forwarded/X-Forwarded-For and `Client-Cert` from trusted proxies), `/icon`
+and the Prometheus metrics. Keep-alive and pipelining work; request bodies
+are skipped; the header read timeout is 30 s, including idle keep-alive
+connections. WebSocket frames and messages are limited to 32 KiB, pings are
+answered, a normal close frame is an EOF answered with a close frame,
+other status codes are errors. The three remaining phase 8 Rust tests are
+ported, with C-only codec, parser, framing-switch and end-to-end HTTP tests
+(an IRC session over WebSocket against the server fixture, in all four
+integration configurations). GCC/Clang debug and ASan/UBSan/LSan suites,
+clang-tidy, and 60-second libFuzzer runs of both new harnesses pass.

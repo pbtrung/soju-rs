@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "base/alloc.h"
+#include "server/http.h"
 
 static void pool_run(void *data) {
 	loop_pool_run(data);
@@ -238,6 +239,33 @@ static void accept_client(void *data) {
 			 &(struct conn_info){.remote_addr = (char *)(uintptr_t)"127.0.0.1:1234"},
 			 nullptr);
 	xfree(ev);
+}
+struct http_accepted {
+	struct server *srv;
+	int fd;
+	bool prometheus;
+};
+static void accept_http(void *data) {
+	struct http_accepted *ev = data;
+	uv_pipe_t *pipe = xcalloc(1, sizeof(*pipe));
+	uv_pipe_init(&loop_current()->uv, pipe, 0);
+	uv_pipe_open(pipe, ev->fd);
+	struct conn *conn =
+		conn_new((uv_stream_t *)pipe, &(struct conn_options){.framing = CONN_FRAMING_RAW},
+			 &ev->srv->log, nullptr, nullptr);
+	struct conn_info info = {.remote_addr = (char *)(uintptr_t)"127.0.0.1:1234",
+				 .has_remote_ip = true};
+	assert_true(ipaddr_parse(STR_LIT("127.0.0.1"), &info.remote_ip));
+	http_serve(ev->srv, conn, &info, ev->prometheus);
+	xfree(ev);
+}
+int fixture_connect_http(struct server_fixture *e, bool prometheus) {
+	int fds[2];
+	assert_int_equal(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+	struct http_accepted *ev = xmalloc(sizeof(*ev));
+	*ev = (struct http_accepted){.srv = &e->srv, .fd = fds[0], .prometheus = prometheus};
+	loop_post(&e->loops.loops[e->next_conn++ % e->loops.n], accept_http, nullptr, ev);
+	return fds[1];
 }
 struct test_peer *fixture_connect(struct server_fixture *e) {
 	int fds[2];

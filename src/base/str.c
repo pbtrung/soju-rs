@@ -267,6 +267,14 @@ void strbuf_truncate(struct strbuf *sb, size_t n) {
 	}
 }
 
+void strbuf_drop_front(struct strbuf *sb, size_t n) {
+	if (n == 0 || sb->buf == nullptr) {
+		return;
+	}
+	memmove(sb->buf, sb->buf + n, sb->len - n);
+	strbuf_truncate(sb, sb->len - n);
+}
+
 void strbuf_reset(struct strbuf *sb) {
 	strbuf_truncate(sb, 0);
 }

@@ -23,6 +23,8 @@ void fixture_finish(struct server_fixture *e);
 [[nodiscard]] struct test_peer *fixture_upstream(struct server_fixture *e, const char *caps,
 						 const char *isupport);
 [[nodiscard]] struct test_peer *fixture_connect(struct server_fixture *e);
+// An HTTP connection to the server (from 127.0.0.1): the client's socket
+[[nodiscard]] int fixture_connect_http(struct server_fixture *e, bool prometheus);
 void fixture_register(struct server_fixture *e, struct test_peer *p, bool network,
 		      const char *caps);
 void peer_send(struct test_peer *p, const char *line);

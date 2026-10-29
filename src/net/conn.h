@@ -2,6 +2,11 @@
 // optionally behind a PROXY header (soju-rs conn.rs, plus the TLS and PROXY
 // steps of listen.rs).
 //
+// Framing: IRC lines ending with CRLF, raw bytes (HTTP), or IRC lines in
+// WebSocket messages (one message per line, without CRLF). An HTTP
+// connection starts raw and switches to WebSocket framing after the
+// upgrade.
+//
 // A connection belongs to one loop. Before IRC lines flow it may go through
 // a TLS handshake and a PROXY header; then the "ready" callback runs, and
 // "message" for each line read. Writes are queued, batched, rate limited if
@@ -42,6 +47,13 @@ static constexpr size_t MAX_INPUT_IN_FLIGHT = 64;
 
 struct conn;
 
+enum conn_framing {
+	CONN_FRAMING_LINES,
+	CONN_FRAMING_RAW, // bytes go to the raw callback
+	CONN_FRAMING_WEBSOCKET, // server side
+	CONN_FRAMING_WEBSOCKET_CLIENT, // client side (tests): masked frames
+};
+
 struct conn_callbacks {
 	// The TLS handshake and PROXY header are done; lines will follow. May be
 	// nullptr.
@@ -52,6 +64,11 @@ struct conn_callbacks {
 	// The connection is closed (by the peer, an error, or us); err is
 	// nullptr for EOF or a local close. Called once.
 	void (*closed)(struct conn *c, const struct err *err, void *data);
+	// CONN_FRAMING_RAW: bytes were read. The callee removes what it used
+	// from the front of in. eof: the peer won't send more (the callee
+	// closes the connection when done). May be nullptr: the connection is
+	// closed at EOF.
+	void (*raw)(struct conn *c, struct strbuf *in, bool eof, void *data);
 };
 
 // Rate limiting of outgoing messages: one message every delay_ns with a
@@ -70,6 +87,7 @@ struct conn_options {
 	// Timeout of the TLS and PROXY steps (0: none)
 	uint64_t setup_timeout_ms;
 	const struct conn_rate *rate; // nullptr: no rate limiting
+	enum conn_framing framing;
 };
 
 // Takes ownership of stream (an initialized uv_tcp_t or uv_pipe_t on the
@@ -91,6 +109,12 @@ void conn_unref(struct conn *c);
 // Queues a message (borrowed). Dropped once closed; closes the connection
 // if more than MAX_QUEUED_BYTES would be queued.
 void conn_send(struct conn *c, const struct irc_msg *msg);
+// Queues bytes as is, written before the messages not sent yet (raw
+// framing: HTTP responses)
+void conn_send_raw(struct conn *c, const void *p, size_t n);
+// Changes the framing; input already read but not used is reinterpreted
+// (e.g. WebSocket frames right after an HTTP upgrade request)
+void conn_set_framing(struct conn *c, enum conn_framing f);
 // Closes the connection immediately. Safe to call several times.
 void conn_close(struct conn *c);
 // Closes gracefully, after writing the queued messages

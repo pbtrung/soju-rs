@@ -44,6 +44,7 @@ struct server_metrics {
 	atomic_uint_fast64_t upstream_out_messages_total, upstream_in_messages_total;
 	atomic_uint_fast64_t downstream_out_messages_total, downstream_in_messages_total;
 	atomic_uint_fast64_t upstream_connect_errors_total;
+	atomic_uint_fast64_t worker_panics_total; // always 0: kept for the metric
 };
 
 struct server {
