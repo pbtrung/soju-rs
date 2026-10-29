@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 150 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
+Ported so far: 161 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -74,24 +74,24 @@ Also compared against the Rust code by the differential harness
 | `src/database/turso/tests.rs` | `failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed` | `test_db_turso.c`: `test_failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed` |
 | `src/database/turso/tests.rs` | `malformed_commit_responses_fail_without_replaying_writes` | `test_db_turso.c`: `test_malformed_commit_responses_fail_without_replaying_writes` |
 | `src/database/turso/tests.rs` | `binary_values_named_parameters_and_replication_index` | `test_db_turso.c`: `test_binary_values_named_parameters_and_replication_index` |
-| `src/database/turso/tests.rs` | `slow_http_request_does_not_block_an_independent_stream` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `slow_http_request_does_not_block_an_independent_stream` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit` |
 | `src/database/turso/tests.rs` | `slow_storage_does_not_freeze_the_user_runtime_or_user_directory` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `cross_tenant_network_update_cannot_poison_routes_after_restart` | `test_db_turso.c`: `test_cross_tenant_network_update_cannot_poison_routes_after_restart` |
-| `src/database/turso/tests.rs` | `startup_and_recurring_expiry_never_send_file_maintenance_sql` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `buffered_history_search_targets_and_shutdown_include_pending_lines` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `startup_and_recurring_expiry_never_send_file_maintenance_sql` | `test_db_turso.c`: `test_message_ids_survive_expiry_and_deleted_network_writes` |
+| `src/database/turso/tests.rs` | `buffered_history_search_targets_and_shutdown_include_pending_lines` | `test_db_turso.c`: `test_msgstore_history_merges_committed_and_pending_rows` |
 | `src/database/turso/tests.rs` | `a_slow_commit_does_not_block_the_other_buffer_or_history_reads` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit` |
 | `src/database/turso/tests.rs` | `atomic_message_batches_rollback_and_reject_conflicting_reserved_ids` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
 | `src/database/turso/tests.rs` | `retry_lost_batch_commit_response_without_duplicate_lines` | `test_db_turso.c`: `test_message_batch_overlay_retry_and_commit` |
 | `src/database/turso/tests.rs` | `encoded_json_body_budget_splits_long_escaped_lines` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
 | `src/database/turso/tests.rs` | `split_and_retry_host_body_and_processing_limits` | `test_db_turso.c`: `test_message_writer_splits_host_limits_and_isolates_conflicts` |
-| `src/database/turso/tests.rs` | `reserved_message_ids_are_not_reused_after_restart_or_expiry` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `background_commits_keep_the_same_user_event_loop_responsive` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `production_message_path_commits_chathistory_limit_lines_per_http_batch` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `partial_message_batches_flush_on_the_timer` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `a_deleted_network_is_not_resurrected_by_buffered_writes` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `a_large_logical_multiline_message_fits_the_encoded_body_budget` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `pending_and_committed_history_merge_in_timestamp_and_id_order` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `failed_background_batches_retain_both_buffers_until_recovery` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `reserved_message_ids_are_not_reused_after_restart_or_expiry` | `test_db_turso.c`: `test_message_ids_survive_expiry_and_deleted_network_writes` |
+| `src/database/turso/tests.rs` | `background_commits_keep_the_same_user_event_loop_responsive` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit` |
+| `src/database/turso/tests.rs` | `production_message_path_commits_chathistory_limit_lines_per_http_batch` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit`, `test_msgstore_history_merges_committed_and_pending_rows` |
+| `src/database/turso/tests.rs` | `partial_message_batches_flush_on_the_timer` | `test_db_turso.c`: `test_partial_batch_flushes_when_polled_after_interval` |
+| `src/database/turso/tests.rs` | `a_deleted_network_is_not_resurrected_by_buffered_writes` | `test_db_turso.c`: `test_message_ids_survive_expiry_and_deleted_network_writes` |
+| `src/database/turso/tests.rs` | `a_large_logical_multiline_message_fits_the_encoded_body_budget` | `test_db_turso.c`: `test_large_logical_message_stays_within_encoded_body_budget` |
+| `src/database/turso/tests.rs` | `pending_and_committed_history_merge_in_timestamp_and_id_order` | `test_db_turso.c`: `test_msgstore_history_merges_committed_and_pending_rows` |
+| `src/database/turso/tests.rs` | `failed_background_batches_retain_both_buffers_until_recovery` | `test_db_turso.c`: `test_failed_background_batch_recovers_with_overlay_intact` |
 | `src/database/turso/tests.rs` | `initialize_an_existing_empty_controller_with_read_only_user_version` | `test_db_turso_migration.c`: `test_initialize_an_existing_empty_controller_with_read_only_user_version` |
 | `src/database/turso/tests.rs` | `existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` | `test_db_turso_migration.c`: `test_existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` |
 | `src/database/turso/tests.rs` | `tenant_user_removal_and_sparse_search_resume_preserve_existing_data` | `test_db_turso_migration.c`: `test_tenant_user_removal_and_sparse_search_resume_preserve_existing_data` |

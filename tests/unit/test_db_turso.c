@@ -10,6 +10,7 @@
 #include "db/internal.h"
 #include "db/turso.h"
 #include "db/writer.h"
+#include "msgstore/msgstore.h"
 #include "msgstore/turso.h"
 #include "turso_mock.h"
 
@@ -325,6 +326,22 @@ static size_t batch_query(struct db *db, int64_t network, db_message_row_vec *ro
 	return rows->len;
 }
 
+static size_t message_batch_lines(yyjson_val *stmt) {
+	const char *sql = yyjson_get_str(yyjson_obj_get(stmt, "sql"));
+	yyjson_val *args = yyjson_obj_get(stmt, "args");
+	if (sql == nullptr || strncmp(sql, "INSERT INTO Message(", 20) != 0 ||
+	    !yyjson_is_arr(args)) {
+		return 0;
+	}
+	return yyjson_arr_size(args) / 4;
+}
+
+static void close_timer(uv_timer_t *timer) {
+	bool *fired = timer->data;
+	*fired = true;
+	uv_close((uv_handle_t *)timer, nullptr);
+}
+
 static void test_message_batch_overlay_retry_and_commit(void **state) {
 	(void)state;
 	struct turso_mock *m = turso_mock_start();
@@ -457,6 +474,13 @@ static void test_message_batch_keeps_appending_during_slow_commit(void **state) 
 	m->st.delay_before_sql = xstrdup("INSERT INTO Message(");
 	m->st.delay_before_ms = 500;
 	pthread_mutex_unlock(&m->mu);
+	uv_loop_t loop;
+	assert_int_equal(uv_loop_init(&loop), 0);
+	uv_timer_t timer;
+	assert_int_equal(uv_timer_init(&loop, &timer), 0);
+	bool timer_fired = false;
+	timer.data = &timer_fired;
+	assert_int_equal(uv_timer_start(&timer, close_timer, 50, 0), 0);
 	uint64_t start = uv_hrtime();
 	for (size_t i = 0; i < 6; i++) {
 		char text[32];
@@ -470,10 +494,300 @@ static void test_message_batch_keeps_appending_during_slow_commit(void **state) 
 	db_message_row_vec rows = {0};
 	assert_int_equal(batch_query(batch_store_index(batch), net.id, &rows), 6);
 	db_message_row_vec_free(&rows);
+	int64_t committed_id = -1;
+	assert_true(db_get_message_last_id(db, net.id, "#batch", &committed_id, nullptr));
+	assert_int_equal(committed_id, 0);
+	assert_true((uv_hrtime() - start) / 1000000 < 250);
+	assert_int_equal(uv_run(&loop, UV_RUN_DEFAULT), 0);
+	assert_true(timer_fired);
+	assert_int_equal(uv_loop_close(&loop), 0);
 	assert_true(batch_store_flush(batch, nullptr));
 	assert_int_equal(batch_query(db, net.id, &rows), 6);
 	db_message_row_vec_free(&rows);
+	// The application path commits exactly the configured history limit in
+	// each request, with no standalone Message INSERT request.
+	size_t batches = 0;
+	pthread_mutex_lock(&m->mu);
+	for (size_t i = 0; i < m->st.requests.len; i++) {
+		yyjson_doc *doc =
+			yyjson_read(m->st.requests.data[i], strlen(m->st.requests.data[i]), 0);
+		yyjson_val *requests = yyjson_obj_get(yyjson_doc_get_root(doc), "requests");
+		size_t ri, request_count;
+		yyjson_val *request;
+		yyjson_arr_foreach(requests, ri, request_count, request) {
+			if (!cstr_eq(yyjson_get_str(yyjson_obj_get(request, "type")), "batch")) {
+				yyjson_val *stmt = yyjson_obj_get(request, "stmt");
+				const char *sql = yyjson_get_str(yyjson_obj_get(stmt, "sql"));
+				assert_true(sql == nullptr ||
+					    strncmp(sql, "INSERT INTO Message(", 20) != 0);
+				continue;
+			}
+			yyjson_val *steps =
+				yyjson_obj_get(yyjson_obj_get(request, "batch"), "steps");
+			size_t si, sn, lines = 0;
+			yyjson_val *step;
+			yyjson_arr_foreach(steps, si, sn, step) {
+				lines += message_batch_lines(yyjson_obj_get(step, "stmt"));
+			}
+			if (lines != 0) {
+				assert_int_equal(lines, 3);
+				batches++;
+			}
+		}
+		yyjson_doc_free(doc);
+	}
+	pthread_mutex_unlock(&m->mu);
+	assert_int_equal(batches, 2);
 	batch_store_free(batch);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_msgstore_history_merges_committed_and_pending_rows(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://history.example.org");
+	struct irc_msg *committed[2] = {
+		batch_message("first shared", "2026-10-28T00:00:10.000Z"),
+		batch_message("second shared", "2026-10-28T00:00:20.000Z"),
+	};
+	i64vec committed_ids = {0};
+	assert_true(db_store_messages(db, net.id, "#batch", committed, 2, &committed_ids, nullptr));
+	vec_free(&committed_ids);
+	irc_msg_free(committed[0]);
+	irc_msg_free(committed[1]);
+	uv_loop_t loop;
+	assert_int_equal(uv_loop_init(&loop), 0);
+	struct db_thread *thread = nullptr;
+	assert_true(db_thread_start(&loop, db, 0, &thread, nullptr));
+	struct msgstore store;
+	msgstore_init(&store, thread);
+	struct log_root root = {0};
+	struct logger log;
+	log_init(&log, &root);
+	msgstore_start_batches(&store, &loop, &log, alice.id, 100);
+	struct irc_msg *early = batch_message("early shared", "2026-10-28T00:00:05.000Z");
+	struct irc_msg *tie = batch_message("tie shared", "2026-10-28T00:00:20.000Z");
+	char *first_id = nullptr, *last_id = nullptr;
+	assert_true(msgstore_append(&store, net.id, "#batch", early, &first_id, nullptr));
+	assert_true(msgstore_append(&store, net.id, "#batch", tie, &last_id, nullptr));
+	struct db_message_options options = {.limit = 2, .take_last = true};
+	irc_msg_vec history = {0};
+	assert_true(msgstore_query(&store, net.id, "#batch", &options, &history, nullptr));
+	assert_int_equal(history.len, 2);
+	assert_string_equal(irc_msg_trailing(history.data[0]), "second shared");
+	assert_string_equal(irc_msg_trailing(history.data[1]), "tie shared");
+	irc_msg_vec_free(&history);
+	options = (struct db_message_options){.limit = 10, .text = "shared"};
+	assert_true(msgstore_query(&store, net.id, "#batch", &options, &history, nullptr));
+	assert_int_equal(history.len, 4);
+	assert_string_equal(irc_msg_trailing(history.data[0]), "early shared");
+	irc_msg_vec_free(&history);
+	struct timestamp from_time, to_time;
+	assert_true(parse_server_time(STR_LIT("2026-10-28T00:00:00.000Z"), &from_time));
+	assert_true(parse_server_time(STR_LIT("2026-10-29T00:00:00.000Z"), &to_time));
+	struct db_time from = {.set = true, .t = from_time};
+	struct db_time to = {.set = true, .t = to_time};
+	options = (struct db_message_options){.limit = 10, .after_time = from, .before_time = to};
+	db_target_last_vec targets = {0};
+	assert_true(msgstore_targets(&store, net.id, &options, &targets, nullptr));
+	assert_int_equal(targets.len, 1);
+	assert_string_equal(targets.data[0].name, "#batch");
+	db_target_last_vec_free(&targets);
+	msgstore_destroy(&store); // drains the pending lines
+	db_thread_stop(thread);
+	assert_int_equal(uv_run(&loop, UV_RUN_DEFAULT), 0);
+	assert_int_equal(uv_loop_close(&loop), 0);
+	xfree(first_id);
+	xfree(last_id);
+	irc_msg_free(early);
+	irc_msg_free(tie);
+	log_free(&log);
+	db_network_free(&net);
+	db_user_free(&alice);
+	turso_mock_stop(m);
+}
+
+static void test_message_ids_survive_expiry_and_deleted_network_writes(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://expiry.example.org");
+	struct batch_store *batch = batch_store_new(db, alice.id, 1);
+	struct irc_msg *msg = batch_message("expires", "2026-10-28T00:00:01.000Z");
+	int64_t old_id = 0;
+	assert_true(batch_store_append(batch, net.id, "#batch", msg, &old_id, nullptr));
+	assert_true(batch_store_flush(batch, nullptr));
+	batch_store_free(batch);
+	size_t deleted = 0;
+	struct timestamp before = timestamp_now();
+	before.sec += 86400;
+	assert_true(db_delete_messages_before(db, before, 100, &deleted, nullptr));
+	assert_int_equal(deleted, 1);
+	assert_true(db_vacuum(db, nullptr));
+	assert_true(db_shrink_memory(db, nullptr));
+	double free_ratio = -1;
+	assert_true(db_free_page_ratio(db, &free_ratio, nullptr));
+	assert_true(free_ratio == 0.0);
+	batch = batch_store_new(db, alice.id, 1);
+	int64_t new_id = 0;
+	struct irc_msg *fresh = batch_message("after expiry", "2026-10-28T00:00:02.000Z");
+	assert_true(batch_store_append(batch, net.id, "#batch", fresh, &new_id, nullptr));
+	assert_true(new_id > old_id);
+	assert_true(db_delete_network(db, net.id, nullptr));
+	assert_true(batch_store_flush(batch, nullptr));
+	db_network_vec networks = {0};
+	assert_true(db_list_networks(db, alice.id, &networks, nullptr));
+	assert_int_equal(networks.len, 0);
+	db_network_vec_free(&networks);
+	pthread_mutex_lock(&m->mu);
+	for (size_t i = 0; i < m->st.requests.len; i++) {
+		const char *request = m->st.requests.data[i];
+		for (size_t j = 0; j < 6; j++) {
+			static const char *const forbidden[] = {"VACUUM",        "wal_checkpoint",
+								"shrink_memory", "freelist_count",
+								"page_count",    "ANALYZE "};
+			assert_null(strcasestr(request, forbidden[j]));
+		}
+	}
+	pthread_mutex_unlock(&m->mu);
+	batch_store_free(batch);
+	irc_msg_free(msg);
+	irc_msg_free(fresh);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_failed_background_batch_recovers_with_overlay_intact(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://retry.example.org");
+	AUTOFREE char *database = turso_mock_linked_name(db, alice.id);
+	struct batch_store *batch = batch_store_new(db, alice.id, 3);
+	assert_true(batch_store_prepare(batch, nullptr));
+	pthread_mutex_lock(&m->mu);
+	m->st.fail_sql = xstrdup(database);
+	pthread_mutex_unlock(&m->mu);
+	for (size_t i = 0; i < 6; i++) {
+		char text[32];
+		snprintf(text, sizeof(text), "retained %zu", i);
+		struct irc_msg *msg = batch_message(text, "2026-10-28T00:00:01.000Z");
+		int64_t id;
+		assert_true(batch_store_append(batch, net.id, "#batch", msg, &id, nullptr));
+		irc_msg_free(msg);
+	}
+	uint64_t deadline = uv_hrtime() + 3000000000ULL;
+	struct err *err = nullptr;
+	while (batch_store_poll(batch, &err)) {
+		assert_true(uv_hrtime() < deadline);
+		usleep(10000);
+	}
+	err_free(err);
+	struct db_message_options options = {.limit = 10};
+	db_message_row_vec pending = {0};
+	assert_true(db_list_message_rows(batch_store_index(batch), net.id, "#batch", &options,
+					 &pending, nullptr));
+	assert_int_equal(pending.len, 6);
+	db_message_row_vec_free(&pending);
+	pthread_mutex_lock(&m->mu);
+	xfree(m->st.fail_sql);
+	m->st.fail_sql = nullptr;
+	pthread_mutex_unlock(&m->mu);
+	assert_true(batch_store_flush(batch, nullptr));
+	db_message_row_vec committed = {0};
+	assert_int_equal(batch_query(db, net.id, &committed), 6);
+	db_message_row_vec_free(&committed);
+	batch_store_free(batch);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_partial_batch_flushes_when_polled_after_interval(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://timer.example.org");
+	struct batch_store *batch = batch_store_new(db, alice.id, 10);
+	struct irc_msg *msg = batch_message("quiet line", "2026-10-28T00:00:01.000Z");
+	int64_t id = 0;
+	assert_true(batch_store_append(batch, net.id, "#batch", msg, &id, nullptr));
+	uv_sleep(1050);
+	assert_true(batch_store_poll(batch, nullptr));
+	uint64_t deadline = uv_hrtime() + 3000000000ULL;
+	int64_t committed = 0;
+	while (committed == 0) {
+		assert_true(uv_hrtime() < deadline);
+		assert_true(db_get_message_last_id(db, net.id, "#batch", &committed, nullptr));
+		if (committed == 0) {
+			usleep(10000);
+		}
+	}
+	assert_int_equal(committed, id);
+	assert_int_equal(turso_mock_count(m, "INSERT INTO Message("), 1);
+	batch_store_free(batch);
+	irc_msg_free(msg);
+	db_network_free(&net);
+	db_user_free(&alice);
+	db_close(db);
+	turso_mock_stop(m);
+}
+
+static void test_large_logical_message_stays_within_encoded_body_budget(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user alice = turso_mock_user(db, "alice");
+	struct db_network net = network(db, alice.id, "ircs://large.example.org");
+	struct db_message_writer *writer = db_message_writer_new(db, alice.id, nullptr);
+	int64_t id, last;
+	assert_true(db_message_writer_reserve(writer, 1, &id, &last, nullptr));
+	const size_t text_len = (size_t)64 * 1024;
+	char *text = xmalloc(text_len + 1);
+	memset(text, '\1', text_len);
+	text[text_len] = '\0';
+	struct irc_msg *msg = batch_message(text, "2026-10-28T00:00:01.000Z");
+	struct db_message_insert row = {0};
+	assert_true(db_message_insert_init(&row, id, net.id, "#batch", msg, nullptr));
+	irc_msg_free(msg);
+	pthread_mutex_lock(&m->mu);
+	vec_clear(&m->st.request_sizes);
+	for (size_t i = 0; i < m->st.requests.len; i++) {
+		xfree(m->st.requests.data[i]);
+	}
+	vec_clear(&m->st.requests);
+	pthread_mutex_unlock(&m->mu);
+	size_t rejected = 0;
+	assert_true(db_message_writer_write(writer, &row, 1, &rejected, nullptr));
+	assert_int_equal(rejected, 0);
+	assert_int_equal(turso_mock_count(m, "BEGIN IMMEDIATE"), 1);
+	pthread_mutex_lock(&m->mu);
+	assert_true(m->st.request_sizes.len >= 1);
+	for (size_t i = 0; i < m->st.request_sizes.len; i++) {
+		assert_true(m->st.request_sizes.data[i] <= HRANA_BODY_BUDGET);
+	}
+	pthread_mutex_unlock(&m->mu);
+	irc_msg_vec messages = {0};
+	struct db_message_options options = {.limit = 1};
+	assert_true(db_list_messages(db, net.id, "#batch", &options, &messages, nullptr));
+	assert_int_equal(messages.len, 1);
+	assert_int_equal(strlen(irc_msg_trailing(messages.data[0])), text_len);
+	assert_memory_equal(irc_msg_trailing(messages.data[0]), text, text_len);
+	irc_msg_vec_free(&messages);
+	xfree(text);
+	db_message_insert_free(&row);
+	db_message_writer_free(writer);
 	db_network_free(&net);
 	db_user_free(&alice);
 	db_close(db);
@@ -788,5 +1102,10 @@ T_MAIN(cmocka_unit_test(test_provisioning_authentication_isolation_and_restart),
        cmocka_unit_test(test_message_batch_overlay_retry_and_commit),
        cmocka_unit_test(test_message_writer_splits_host_limits_and_isolates_conflicts),
        cmocka_unit_test(test_message_batch_keeps_appending_during_slow_commit),
+       cmocka_unit_test(test_msgstore_history_merges_committed_and_pending_rows),
+       cmocka_unit_test(test_message_ids_survive_expiry_and_deleted_network_writes),
+       cmocka_unit_test(test_failed_background_batch_recovers_with_overlay_intact),
+       cmocka_unit_test(test_partial_batch_flushes_when_polled_after_interval),
+       cmocka_unit_test(test_large_logical_message_stays_within_encoded_body_budget),
        cmocka_unit_test(test_cross_tenant_network_update_cannot_poison_routes_after_restart))
 // clang-format on
