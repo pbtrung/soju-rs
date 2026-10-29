@@ -12,7 +12,8 @@ struct turso;
 // (networks and what belongs to them) lives in the owning user's
 // database, which is the account connection too for local SQLite.
 struct db {
-	struct db_conn account;
+	struct db_conn local; // local SQLite
+	struct db_conn *account; // local, or the Turso controller
 	struct turso *cloud; // nullptr for local SQLite
 };
 
@@ -24,3 +25,11 @@ struct db {
 [[nodiscard]] struct db_conn *db_subscription_conn(struct db *db, int64_t id, struct err **err);
 
 [[nodiscard]] bool record_message_id_high_water(struct db_conn *c, struct err **err);
+
+// db.c: schemas and migrations of a connection (remote ones keep their
+// version in SojuSchemaVersion)
+[[nodiscard]] bool db_conn_upgrade(struct db_conn *c, struct err **err);
+[[nodiscard]] bool db_conn_schema_version(struct db_conn *c, int64_t *out, struct err **err);
+[[nodiscard]] bool db_conn_set_schema_version(struct db_conn *c, int64_t v, struct err **err);
+[[nodiscard]] const char *db_fts_schema(void);
+[[nodiscard]] const char *db_tenant_schema(void);

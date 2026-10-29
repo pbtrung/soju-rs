@@ -4,7 +4,7 @@
 #include "db/internal.h"
 
 bool db_list_webpush_configs(struct db *db, db_webpush_config_vec *out, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st = db_prepare(
 		dbc, "SELECT id, vapid_key_public, vapid_key_private FROM WebPushConfig", err);
 	if (st == nullptr) {
@@ -30,7 +30,7 @@ bool db_list_webpush_configs(struct db *db, db_webpush_config_vec *out, struct e
 }
 
 bool db_store_webpush_config(struct db *db, struct db_webpush_config *c, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	if (c->id != 0) {
 		return err_set(err, 0, "cannot update a WebPushConfig");
 	}
@@ -155,7 +155,12 @@ bool db_store_webpush_subscription(struct db *db, int64_t user_id, int64_t netwo
 		if (st == nullptr) {
 			return false;
 		}
-		bind_null(st, ":id");
+		int64_t id = db_new_row_id(dbc);
+		if (id != 0) {
+			bind_i64(st, ":id", id);
+		} else {
+			bind_null(st, ":id");
+		}
 		bind_i64(st, ":user", user_id);
 		if (network_id != 0) {
 			bind_i64(st, ":network", network_id);

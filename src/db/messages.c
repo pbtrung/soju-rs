@@ -3,6 +3,7 @@
 #include "base/alloc.h"
 #include "base/utf8.h"
 #include "db/internal.h"
+#include "db/turso.h"
 #include "db/utils.h"
 
 bool db_get_message_last_id(struct db *db, int64_t network_id, const char *name, int64_t *out,
@@ -184,17 +185,25 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 	if (dbc->insert_message == nullptr) {
 		// Message IDs are delivery receipt cursors: never reuse the IDs of
 		// deleted messages, see record_message_id_high_water
+		// Turso tenants can't seek max(id) of their clustered table: IDs
+		// are reserved like the background writer does
 		dbc->insert_message = db_prepare(
 			dbc,
-			"INSERT INTO Message(id, target, raw, time, sender, text)\n"
-			"                SELECT max(\n"
-			"                        coalesce((SELECT max(id) FROM Message), 0),\n"
-			"                        coalesce((SELECT last_id FROM "
-			"MessageIdHighWater), 0)\n"
-			"                    ) + 1,\n"
-			"                    id, :raw, :time, :sender, :text\n"
-			"                FROM MessageTarget as t\n"
-			"                WHERE network = :network AND target = :target",
+			dbc->remote
+				? "INSERT INTO Message(id, target, raw, time, sender, text)\n"
+				  "                SELECT :id, id, :raw, :time, :sender, :text\n"
+				  "                FROM MessageTarget WHERE network = :network AND "
+				  "target = :target"
+				: "INSERT INTO Message(id, target, raw, time, sender, text)\n"
+				  "                SELECT max(\n"
+				  "                        coalesce((SELECT max(id) FROM Message), "
+				  "0),\n"
+				  "                        coalesce((SELECT last_id FROM "
+				  "MessageIdHighWater), 0)\n"
+				  "                    ) + 1,\n"
+				  "                    id, :raw, :time, :sender, :text\n"
+				  "                FROM MessageTarget as t\n"
+				  "                WHERE network = :network AND target = :target",
 			err);
 		if (dbc->insert_message == nullptr) {
 			return false;
@@ -209,6 +218,25 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 	bool ok = db_step_done(st, err);
 	db_clear_bindings(st);
 	size_t start = ids->len;
+	int64_t first_id = 0;
+	if (ok && dbc->remote) {
+		struct db_stmt *reserve = db_prepare(
+			dbc,
+			"INSERT INTO MessageIdHighWater(id, last_id)\n"
+			"                VALUES (0, coalesce((SELECT last_id FROM "
+			"MessageIdHighWater "
+			"WHERE id = 0), 0) + :count)\n"
+			"                ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id\n"
+			"                RETURNING last_id",
+			err);
+		ok = reserve != nullptr;
+		if (ok) {
+			bind_i64(reserve, ":count", (int64_t)n);
+			ok = db_step(reserve) == SQLITE_ROW || db_sql_err(dbc, err);
+			first_id = ok ? col_i64(reserve, 0) - (int64_t)n + 1 : 0;
+			db_finalize(reserve);
+		}
+	}
 	st = dbc->insert_message;
 	for (size_t i = 0; ok && i < n; i++) {
 		char *time = nullptr, *text = nullptr;
@@ -217,6 +245,9 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 			break;
 		}
 		AUTOFREE char *raw = irc_msg_to_string(msgs[i]);
+		if (dbc->remote) {
+			bind_i64(st, ":id", first_id + (int64_t)i);
+		}
 		bind_i64(st, ":network", network_id);
 		bind_text(st, ":target", name);
 		bind_text(st, ":raw", raw);
@@ -232,7 +263,8 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 		xfree(time);
 		xfree(text);
 		if (ok) {
-			vec_push(ids, db_last_insert_rowid(dbc));
+			vec_push(ids,
+				 dbc->remote ? first_id + (int64_t)i : db_last_insert_rowid(dbc));
 		}
 	}
 	if (!ok || !db_commit(dbc, err)) {
@@ -251,16 +283,21 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 		return false;
 	}
 	const char *inner =
-		o->events
-			? "SELECT max(latest) FROM (\n"
-			  "                SELECT max(time) latest FROM Message WHERE "
-			  "target=MessageTarget.id AND text IS NULL\n"
-			  "                UNION ALL\n"
-			  "                SELECT max(time) latest FROM Message WHERE "
-			  "target=MessageTarget.id AND text IS NOT NULL\n"
-			  "            )"
-			: "SELECT time FROM Message WHERE target=MessageTarget.id AND text IS NOT "
-			  "NULL ORDER BY time DESC LIMIT 1";
+		o->events && dbc->remote
+			// Turso tenants cluster messages by target and time
+			? "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time "
+			  "DESC "
+			  "LIMIT 1"
+			: o->events ? "SELECT max(latest) FROM (\n"
+				      "                SELECT max(time) latest FROM Message WHERE "
+				      "target=MessageTarget.id AND text IS NULL\n"
+				      "                UNION ALL\n"
+				      "                SELECT max(time) latest FROM Message WHERE "
+				      "target=MessageTarget.id AND text IS NOT NULL\n"
+				      "            )"
+				    : "SELECT time FROM Message WHERE target=MessageTarget.id AND "
+				      "text IS NOT "
+				      "NULL ORDER BY time DESC LIMIT 1";
 	AUTO_STRBUF struct strbuf q = STRBUF_INIT;
 	strbuf_printf(&q,
 		      "SELECT target, (%s) latest\n"
@@ -371,7 +408,7 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 	}
 	if (text_only) {
 		strbuf_append_cstr(&q, "AND m.text IS NOT NULL ");
-	} else {
+	} else if (!dbc->remote) {
 		// Merge two disjoint ordered indexes, avoiding a second timestamp
 		// index entry on every text message. LIMIT applies to their union.
 		AUTOFREE char *text_query = xasprintf("%sAND m.text IS NOT NULL ", strbuf_cstr(&q));
@@ -471,9 +508,9 @@ bool record_message_id_high_water(struct db_conn *dbc, struct err **err) {
 			   err);
 }
 
-bool db_delete_messages_before(struct db *db, struct timestamp before, size_t limit,
-			       size_t *deleted, struct err **err) {
-	struct db_conn *dbc = &db->account;
+// One database's part of db_delete_messages_before
+static bool delete_before(struct db_conn *dbc, struct timestamp before, size_t limit,
+			  size_t *deleted, struct err **err) {
 	*deleted = 0;
 	if (limit == 0) {
 		return true;
@@ -486,17 +523,28 @@ bool db_delete_messages_before(struct db *db, struct timestamp before, size_t li
 	if (ok) {
 		st = db_prepare(
 			dbc,
-			"DELETE FROM Message WHERE id IN (\n"
-			"                SELECT id FROM (\n"
-			"                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m "
-			"ON m.target=t.id\n"
-			"                    WHERE m.text IS NULL AND m.time<:before\n"
-			"                    UNION ALL\n"
-			"                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m "
-			"ON m.target=t.id\n"
-			"                    WHERE m.text IS NOT NULL AND m.time<:before\n"
-			"                ) LIMIT :limit\n"
-			"            )",
+			// Seek each target's oldest messages in the clustered table
+			dbc->remote
+				? "DELETE FROM Message WHERE (target, time, id) IN (\n"
+				  "                    SELECT m.target, m.time, m.id FROM "
+				  "MessageTarget t\n"
+				  "                    CROSS JOIN Message m ON m.target = t.id\n"
+				  "                    WHERE m.time < :before LIMIT :limit\n"
+				  "                )"
+				: "DELETE FROM Message WHERE id IN (\n"
+				  "                SELECT id FROM (\n"
+				  "                    SELECT m.id FROM MessageTarget t CROSS JOIN "
+				  "Message m "
+				  "ON m.target=t.id\n"
+				  "                    WHERE m.text IS NULL AND m.time<:before\n"
+				  "                    UNION ALL\n"
+				  "                    SELECT m.id FROM MessageTarget t CROSS JOIN "
+				  "Message m "
+				  "ON m.target=t.id\n"
+				  "                    WHERE m.text IS NOT NULL AND "
+				  "m.time<:before\n"
+				  "                ) LIMIT :limit\n"
+				  "            )",
 			err);
 		ok = st != nullptr;
 	}
@@ -512,6 +560,23 @@ bool db_delete_messages_before(struct db *db, struct timestamp before, size_t li
 		db_rollback(dbc);
 		*deleted = 0;
 		return false;
+	}
+	return true;
+}
+
+bool db_delete_messages_before(struct db *db, struct timestamp before, size_t limit,
+			       size_t *deleted, struct err **err) {
+	if (db->cloud == nullptr) {
+		return delete_before(db->account, before, limit, deleted, err);
+	}
+	*deleted = 0;
+	for (size_t i = 0; i < db->cloud->users.len && *deleted < limit; i++) {
+		size_t n = 0;
+		if (!delete_before(&db->cloud->users.data[i]->conn, before, limit - *deleted, &n,
+				   err)) {
+			return false;
+		}
+		*deleted += n;
 	}
 	return true;
 }

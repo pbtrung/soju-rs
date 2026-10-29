@@ -1,6 +1,7 @@
 #include "db/conn.h"
 
 #include <stdio.h>
+#include <openssl/rand.h>
 #include <stdlib.h>
 
 #include "base/alloc.h"
@@ -145,6 +146,18 @@ void db_finalize(struct db_stmt *st) {
 
 int64_t db_last_insert_rowid(struct db_conn *c) {
 	return c->remote ? c->last_id : sqlite3_last_insert_rowid(c->sqlite);
+}
+
+int64_t db_new_row_id(struct db_conn *c) {
+	if (!c->remote) {
+		return 0;
+	}
+	uint64_t r = 0;
+	if (RAND_bytes((unsigned char *)&r, sizeof(r)) != 1) {
+		abort();
+	}
+	int64_t id = (int64_t)(r & (uint64_t)INT64_MAX);
+	return id > 0 ? id : 1;
 }
 
 int64_t db_changes(struct db_conn *c) {

@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 127 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
+Ported so far: 145 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -60,23 +60,23 @@ Also compared against the Rust code by the differential harness
 | `src/database/sqlite/tests.rs` | `unchanged_records_and_receipts_do_not_write` | `test_db_sqlite.c`: `test_unchanged_records_and_receipts_do_not_write` |
 | `src/database/sqlite/tests.rs` | `sparse_fts_preserves_updates_and_event_history_ordering` | `test_db_sqlite.c`: `test_sparse_fts_preserves_updates_and_event_history_ordering` |
 | `src/database/turso/http.rs` | `usage_counts_execute_and_batch_results_once` | `test_db_hrana.c`: `test_usage_counts_execute_and_batch_results_once` |
-| `src/database/turso/tests.rs` | `provisioning_authentication_isolation_and_restart` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `creation_and_deletion_resume_after_failure` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `wrong_group_and_sql_failure_leave_no_partial_message` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `names_retain_all_128_bits` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `authorization_failures_do_not_expose_credentials` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `user_schema_migration_preserves_messages` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `missing_ready_database_is_not_recreated_empty` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `invalid_links_and_changed_groups_cannot_delete_other_databases` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `tenant_owner_mismatch_stops_startup` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `lost_or_malformed_stream_never_continues_a_transaction` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `commit_closes_stream_on_hosted_and_legacy_servers` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `malformed_commit_responses_fail_without_replaying_writes` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `binary_values_named_parameters_and_replication_index` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `provisioning_authentication_isolation_and_restart` | `test_db_turso.c`: `test_provisioning_authentication_isolation_and_restart` |
+| `src/database/turso/tests.rs` | `creation_and_deletion_resume_after_failure` | `test_db_turso.c`: `test_creation_and_deletion_resume_after_failure` |
+| `src/database/turso/tests.rs` | `wrong_group_and_sql_failure_leave_no_partial_message` | `test_db_turso.c`: `test_wrong_group_and_sql_failure_leave_no_partial_message` |
+| `src/database/turso/tests.rs` | `names_retain_all_128_bits` | `test_db_turso.c`: `test_names_retain_all_128_bits` |
+| `src/database/turso/tests.rs` | `authorization_failures_do_not_expose_credentials` | `test_db_turso.c`: `test_authorization_failures_do_not_expose_credentials` |
+| `src/database/turso/tests.rs` | `user_schema_migration_preserves_messages` | `test_db_turso_migration.c`: `test_user_schema_migration_preserves_messages` |
+| `src/database/turso/tests.rs` | `missing_ready_database_is_not_recreated_empty` | `test_db_turso.c`: `test_missing_ready_database_is_not_recreated_empty` |
+| `src/database/turso/tests.rs` | `invalid_links_and_changed_groups_cannot_delete_other_databases` | `test_db_turso.c`: `test_invalid_links_and_changed_groups_cannot_delete_other_databases` |
+| `src/database/turso/tests.rs` | `tenant_owner_mismatch_stops_startup` | `test_db_turso.c`: `test_tenant_owner_mismatch_stops_startup` |
+| `src/database/turso/tests.rs` | `lost_or_malformed_stream_never_continues_a_transaction` | `test_db_turso.c`: `test_lost_or_malformed_stream_never_continues_a_transaction` |
+| `src/database/turso/tests.rs` | `commit_closes_stream_on_hosted_and_legacy_servers` | `test_db_turso.c`: `test_commit_closes_stream_on_hosted_and_legacy_servers` |
+| `src/database/turso/tests.rs` | `failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed` | `test_db_turso.c`: `test_failed_begin_releases_stream_and_ambiguous_commit_is_not_replayed` |
+| `src/database/turso/tests.rs` | `malformed_commit_responses_fail_without_replaying_writes` | `test_db_turso.c`: `test_malformed_commit_responses_fail_without_replaying_writes` |
+| `src/database/turso/tests.rs` | `binary_values_named_parameters_and_replication_index` | `test_db_turso.c`: `test_binary_values_named_parameters_and_replication_index` |
 | `src/database/turso/tests.rs` | `slow_http_request_does_not_block_an_independent_stream` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `slow_storage_does_not_freeze_the_user_runtime_or_user_directory` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `cross_tenant_network_update_cannot_poison_routes_after_restart` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `cross_tenant_network_update_cannot_poison_routes_after_restart` | `test_db_turso.c`: `test_cross_tenant_network_update_cannot_poison_routes_after_restart` |
 | `src/database/turso/tests.rs` | `startup_and_recurring_expiry_never_send_file_maintenance_sql` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `buffered_history_search_targets_and_shutdown_include_pending_lines` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `a_slow_commit_does_not_block_the_other_buffer_or_history_reads` | pending: phase 9b |
@@ -92,9 +92,9 @@ Also compared against the Rust code by the differential harness
 | `src/database/turso/tests.rs` | `a_large_logical_multiline_message_fits_the_encoded_body_budget` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `pending_and_committed_history_merge_in_timestamp_and_id_order` | pending: phase 9b |
 | `src/database/turso/tests.rs` | `failed_background_batches_retain_both_buffers_until_recovery` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `initialize_an_existing_empty_controller_with_read_only_user_version` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` | pending: phase 9b |
-| `src/database/turso/tests.rs` | `tenant_user_removal_and_sparse_search_resume_preserve_existing_data` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `initialize_an_existing_empty_controller_with_read_only_user_version` | `test_db_turso_migration.c`: `test_initialize_an_existing_empty_controller_with_read_only_user_version` |
+| `src/database/turso/tests.rs` | `existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` | `test_db_turso_migration.c`: `test_existing_legacy_controller_imports_its_schema_version_and_keeps_accounts` |
+| `src/database/turso/tests.rs` | `tenant_user_removal_and_sparse_search_resume_preserve_existing_data` | `test_db_turso_migration.c`: `test_tenant_user_removal_and_sparse_search_resume_preserve_existing_data` |
 | `src/database/utils.rs` | `strip` | `test_db_utils.c`: `test_strip` |
 | `src/downstream/mod.rs` | `usernames` | `test_downstream.c`: `test_usernames` |
 | `src/downstream/mod.rs` | `nickserv` | `test_downstream.c`: `test_nickserv` |

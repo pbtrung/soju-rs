@@ -1,6 +1,7 @@
 // Users and their device certificates (soju-rs database/sqlite/users.rs)
 #include "base/alloc.h"
 #include "db/internal.h"
+#include "db/turso.h"
 
 // Columns: id, [username], password, admin, nick, realname, enabled,
 // downstream_interacted_at, max_networks
@@ -34,7 +35,7 @@ static bool user_from_row(struct db_stmt *st, const char *username, struct db_us
 }
 
 bool db_list_users(struct db *db, db_user_vec *out, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "SELECT id, username, password, admin, nick, realname, enabled,\n"
@@ -59,7 +60,20 @@ bool db_list_users(struct db *db, db_user_vec *out, struct err **err) {
 	}
 	db_finalize(st);
 	for (size_t i = 0; i < v.len; i++) {
-		vec_push(out, v.data[i]);
+		// Turso users being provisioned or deleted aren't loaded
+		bool ready = true;
+		if (db->cloud != nullptr && !turso_ready(db->cloud, v.data[i].id, &ready, err)) {
+			for (size_t j = i; j < v.len; j++) {
+				db_user_free(&v.data[j]);
+			}
+			vec_free(&v);
+			return false;
+		}
+		if (ready) {
+			vec_push(out, v.data[i]);
+		} else {
+			db_user_free(&v.data[i]);
+		}
 	}
 	vec_free(&v);
 	return true;
@@ -71,7 +85,7 @@ fail:
 
 bool db_get_user(struct db *db, const char *username, struct db_user *out, bool *found,
 		 struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	*found = false;
 	struct db_stmt *st =
 		db_prepare(dbc,
@@ -93,11 +107,17 @@ bool db_get_user(struct db *db, const char *username, struct db_user *out, bool 
 		ok = db_sql_err(dbc, err);
 	}
 	db_finalize(st);
+	bool ready = true;
+	if (ok && *found && db->cloud != nullptr &&
+	    (!(ok = turso_ready(db->cloud, out->id, &ready, err)) || !ready)) {
+		db_user_free(out);
+		*found = false;
+	}
 	return ok;
 }
 
 bool db_get_username_by_id(struct db *db, int64_t id, char **out, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	*out = nullptr;
 	struct db_stmt *st = db_prepare(dbc, "SELECT username FROM User WHERE id = ?", err);
 	if (st == nullptr) {
@@ -117,7 +137,7 @@ bool db_get_username_by_id(struct db *db, int64_t id, char **out, struct err **e
 
 bool db_list_inactive_usernames(struct db *db, struct timestamp limit, strvec *out,
 				struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st = db_prepare(dbc,
 					"SELECT username FROM User\n"
 					"            WHERE coalesce(downstream_interacted_at, "
@@ -173,7 +193,7 @@ static bool run(struct db_stmt *st, struct err **err) {
 }
 
 bool db_store_user_keep_password(struct db *db, const struct db_user *u, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "UPDATE User\n"
@@ -196,7 +216,7 @@ bool db_store_user_keep_password(struct db *db, const struct db_user *u, struct 
 
 bool db_upgrade_user_password(struct db *db, int64_t id, const char *old, const char *new_hash,
 			      struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "UPDATE User SET password = :new WHERE id = :id AND password = "
@@ -213,7 +233,7 @@ bool db_upgrade_user_password(struct db *db, int64_t id, const char *old, const 
 
 bool db_set_user_downstream_interacted_at(struct db *db, int64_t id, struct timestamp t,
 					  struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND "
@@ -229,7 +249,10 @@ bool db_set_user_downstream_interacted_at(struct db *db, int64_t id, struct time
 }
 
 bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	if (db->cloud != nullptr && u->id == 0) {
+		return turso_create_user(db->cloud, u, err);
+	}
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st;
 	if (u->id != 0) {
 		st = db_prepare(
@@ -276,7 +299,10 @@ bool db_store_user(struct db *db, struct db_user *u, struct err **err) {
 }
 
 bool db_delete_user(struct db *db, int64_t id, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	if (db->cloud != nullptr) {
+		return turso_delete_user(db->cloud, id, err);
+	}
+	struct db_conn *dbc = db->account;
 	static const char *const deletes[] = {
 		("DELETE FROM DeliveryReceipt\n"
 		 "            WHERE id IN (\n"
@@ -348,7 +374,7 @@ static bool cert_from_row(struct db_stmt *st, int first, struct db_device_certif
 
 bool db_get_device_certificate(struct db *db, struct str fingerprint, int64_t *user,
 			       struct db_device_certificate *out, bool *found, struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	*found = false;
 	struct db_stmt *st = db_prepare(dbc,
 					"SELECT user, id, label, last_used, last_ip\n"
@@ -379,12 +405,18 @@ bool db_get_device_certificate(struct db *db, struct str fingerprint, int64_t *u
 		ok = db_sql_err(dbc, err);
 	}
 	db_finalize(st);
+	bool ready = true;
+	if (ok && *found && db->cloud != nullptr &&
+	    (!(ok = turso_ready(db->cloud, *user, &ready, err)) || !ready)) {
+		db_device_certificate_free(out);
+		*found = false;
+	}
 	return ok;
 }
 
 bool db_list_device_certificates(struct db *db, int64_t user_id, db_cert_vec *out,
 				 struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st = db_prepare(dbc,
 					"SELECT id, label, fingerprint, last_used, last_ip\n"
 					"            FROM DeviceCertificate\n"
@@ -428,7 +460,7 @@ bool db_list_device_certificates(struct db *db, int64_t user_id, db_cert_vec *ou
 
 bool db_store_device_certificate(struct db *db, int64_t user_id, struct db_device_certificate *c,
 				 struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st;
 	if (c->id != 0) {
 		st = db_prepare(
@@ -479,7 +511,7 @@ bool db_store_device_certificate(struct db *db, int64_t user_id, struct db_devic
 
 bool db_delete_device_certificate(struct db *db, int64_t user_id, struct str fingerprint,
 				  struct err **err) {
-	struct db_conn *dbc = &db->account;
+	struct db_conn *dbc = db->account;
 	struct db_stmt *st = db_prepare(
 		dbc, "DELETE FROM DeviceCertificate WHERE user = ? AND fingerprint = ?", err);
 	if (st == nullptr) {

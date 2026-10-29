@@ -83,6 +83,10 @@ void db_reset(struct db_stmt *st);
 void db_clear_bindings(struct db_stmt *st);
 void db_finalize(struct db_stmt *st);
 [[nodiscard]] int64_t db_last_insert_rowid(struct db_conn *c);
+// soju-rs new_row_id: tenant databases share the server's ID namespace, so
+// remote networks, channels, subscriptions and receipts get random
+// positive IDs; 0 (let SQLite choose) for local connections
+[[nodiscard]] int64_t db_new_row_id(struct db_conn *c);
 [[nodiscard]] int64_t db_changes(struct db_conn *c);
 
 // Several statements, without parameters nor results

@@ -4,6 +4,7 @@
 #include "base/alloc.h"
 #include "base/utf8.h"
 #include "db/internal.h"
+#include "db/turso.h"
 
 bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struct err **err) {
 	struct db_conn *dbc = db_user_conn(db, user_id, err);
@@ -65,6 +66,14 @@ bool db_list_networks(struct db *db, int64_t user_id, db_network_vec *out, struc
 		db_network_vec_free(&v);
 		return false;
 	}
+	for (size_t i = 0; ok && i < v.len; i++) {
+		ok = db->cloud == nullptr ||
+		     turso_remember_network(db->cloud, user_id, v.data[i].id, err);
+	}
+	if (!ok) {
+		db_network_vec_free(&v);
+		return false;
+	}
 	for (size_t i = 0; i < v.len; i++) {
 		vec_push(out, v.data[i]);
 	}
@@ -76,6 +85,15 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 	struct db_conn *dbc = db_user_conn(db, user_id, err);
 	if (dbc == nullptr) {
 		return false;
+	}
+	if (db->cloud != nullptr && n->id != 0) {
+		struct db_conn *owner = db_network_conn(db, n->id, err);
+		if (owner == nullptr) {
+			return false;
+		}
+		if (owner != dbc) {
+			return err_set(err, 0, "network belongs to a different Turso user");
+		}
 	}
 	const char *mech = nullptr, *plain_user = nullptr, *plain_pass = nullptr;
 	if (n->sasl.mechanism[0] != '\0') {
@@ -135,8 +153,9 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 		}
 		bind_i64(st, ":id", n->id);
 	} else {
-		st = db_prepare(
-			dbc,
+		// Local IDs stay above deleted ones (ActorIdHighWater); remote ones
+		// are random
+		AUTOFREE char *sql = xasprintf(
 			"INSERT INTO Network(id, user, name, addr, nick, username, realname, "
 			"certfp, "
 			"pass,\n"
@@ -144,19 +163,24 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 			"sasl_plain_username,\n"
 			"                    sasl_plain_password, sasl_external_cert, "
 			"sasl_external_key, auto_away, enabled)\n"
-			"                VALUES ((SELECT max(coalesce((SELECT max(id) FROM "
-			"Network),0),coalesce((SELECT last_id FROM ActorIdHighWater WHERE "
-			"kind='network'),0))+1), :user, :name, :addr, :nick, :username, "
+			"                VALUES (%s, :user, :name, :addr, :nick, :username, "
 			":realname, :certfp, :pass,\n"
 			"                    :connect_commands, :sasl_mechanism, "
 			":sasl_plain_username,\n"
 			"                    :sasl_plain_password, :sasl_external_cert, "
 			":sasl_external_key, :auto_away, :enabled)",
-			err);
+			dbc->remote ? ":id"
+				    : "(SELECT max(coalesce((SELECT max(id) FROM Network),0),"
+				      "coalesce((SELECT last_id FROM ActorIdHighWater WHERE "
+				      "kind='network'),0))+1)");
+		st = db_prepare(dbc, sql, err);
 		if (st == nullptr) {
 			return false;
 		}
 		bind_i64(st, ":user", user_id);
+		if (dbc->remote) {
+			bind_i64(st, ":id", db_new_row_id(dbc));
+		}
 	}
 	bind_text_or_null(st, ":name", n->name);
 	bind_text(st, ":addr", n->addr);
@@ -187,7 +211,8 @@ bool db_store_network(struct db *db, int64_t user_id, struct db_network *n, stru
 	if (ok && n->id == 0) {
 		n->id = db_last_insert_rowid(dbc);
 	}
-	return ok;
+	return ok &&
+	       (db->cloud == nullptr || turso_remember_network(db->cloud, user_id, n->id, err));
 }
 
 bool db_delete_network(struct db *db, int64_t id, struct err **err) {
@@ -307,7 +332,12 @@ bool db_store_channel(struct db *db, int64_t network_id, struct db_channel *c, s
 		if (st == nullptr) {
 			return false;
 		}
-		bind_null(st, ":id");
+		int64_t id = db_new_row_id(dbc);
+		if (id != 0) {
+			bind_i64(st, ":id", id);
+		} else {
+			bind_null(st, ":id");
+		}
 	}
 	bind_i64(st, ":network", network_id);
 	bind_text(st, ":name", c->name);

@@ -146,7 +146,12 @@ static bool store_changes(struct db_conn *dbc, int64_t network_id, const char *c
 					err);
 			ok = st != nullptr;
 			if (ok) {
-				bind_pos_null(st, 1);
+				int64_t id = db_new_row_id(dbc);
+				if (id != 0) {
+					bind_pos_i64(st, 1, id);
+				} else {
+					bind_pos_null(st, 1);
+				}
 				bind_pos_i64(st, 2, network_id);
 				bind_pos_text(st, 3, r->target);
 				bind_client(st, 4, client);

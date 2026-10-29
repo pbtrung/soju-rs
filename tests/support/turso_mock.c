@@ -10,6 +10,7 @@
 
 #include "base/alloc.h"
 #include "base/base64.h"
+#include "db/internal.h"
 #include "testsupport.h"
 
 struct mock_stream {
@@ -681,4 +682,50 @@ void turso_mock_stop(struct turso_mock *m) {
 	strvec_free(&m->st.requests);
 	pthread_mutex_destroy(&m->mu);
 	xfree(m);
+}
+
+struct config_turso turso_mock_config(void) {
+	return (struct config_turso){.organization = (char *)(uintptr_t)"example",
+				     .group = (char *)(uintptr_t)"soju",
+				     .controller = (char *)(uintptr_t)"soju-controller",
+				     .api_token = (char *)(uintptr_t)"platform-secret",
+				     .group_token = (char *)(uintptr_t)"sql-secret"};
+}
+
+bool turso_mock_open_db(struct turso_mock *m, const struct config_turso *cfg, struct db **out,
+			struct err **err) {
+	AUTOFREE char *api = xasprintf("%s/v1", m->url);
+	struct config_turso c = cfg != nullptr ? *cfg : turso_mock_config();
+	return db_open_turso(&c, api, m->url, out, err);
+}
+
+struct db *turso_mock_database(struct turso_mock *m) {
+	struct db *db = nullptr;
+	struct err *e = nullptr;
+	if (!turso_mock_open_db(m, nullptr, &db, &e)) {
+		fail_msg("open: %s", err_msg(e));
+	}
+	return db;
+}
+
+struct db_user turso_mock_user(struct db *db, const char *name) {
+	struct db_user u;
+	db_user_init(&u, name);
+	assert_true(db_user_set_password(&u, "secret", nullptr));
+	u.admin = cstr_eq(name, "alice");
+	struct err *e = nullptr;
+	if (!db_store_user(db, &u, &e)) {
+		fail_msg("store_user: %s", err_msg(e));
+	}
+	return u;
+}
+
+char *turso_mock_linked_name(struct db *db, int64_t id) {
+	struct db_stmt *st =
+		db_prepare(db->account, "SELECT name FROM UserDatabase WHERE user=?", nullptr);
+	bind_pos_i64(st, 1, id);
+	assert_int_equal(db_step(st), SQLITE_ROW);
+	char *name = col_lossy(st, 0);
+	db_finalize(st);
+	return name;
 }

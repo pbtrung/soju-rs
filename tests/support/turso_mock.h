@@ -12,6 +12,8 @@
 #include "base/map.h"
 #include "base/str.h"
 #include "base/vec.h"
+#include "config/config.h"
+#include "db/db.h"
 
 enum turso_fault {
 	TURSO_FAULT_NONE,
@@ -60,3 +62,15 @@ void turso_mock_stop(struct turso_mock *m);
 [[nodiscard]] size_t turso_mock_count(struct turso_mock *m, const char *sql);
 // Runs SQL directly on a database file (tests inspecting the cloud)
 [[nodiscard]] sqlite3 *turso_mock_open(struct turso_mock *m, const char *name);
+
+// The configuration matching the mock (tokens included)
+[[nodiscard]] struct config_turso turso_mock_config(void);
+// Opens the storage of the mock (cfg: nullptr for turso_mock_config())
+[[nodiscard]] bool turso_mock_open_db(struct turso_mock *m, const struct config_turso *cfg,
+				      struct db **out, struct err **err);
+// Opens it, failing the test on error
+[[nodiscard]] struct db *turso_mock_database(struct turso_mock *m);
+// Stores a user with password "secret"; alice is an admin
+[[nodiscard]] struct db_user turso_mock_user(struct db *db, const char *name);
+// The database name linked to a user
+[[nodiscard]] char *turso_mock_linked_name(struct db *db, int64_t id);

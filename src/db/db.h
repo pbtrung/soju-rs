@@ -241,6 +241,15 @@ struct db;
 struct sqlite3;
 [[nodiscard]] bool db_open_handle(struct sqlite3 *conn, struct db **out, struct err **err);
 // Closes the connection; every statement must be finalized
+// Opens Turso Cloud storage (config.h, message-store turso). api_base and
+// sql_base replace Turso's endpoints in tests (nullptr otherwise).
+struct config_turso;
+[[nodiscard]] bool db_open_turso(const struct config_turso *cfg, const char *api_base,
+				 const char *sql_base, struct db **out, struct err **err);
+// Whether the database is Turso's
+[[nodiscard]] bool db_is_remote(struct db *db);
+// The rows read and written reported by Turso; false for local SQLite
+[[nodiscard]] bool db_turso_usage(struct db *db, uint64_t *read, uint64_t *written);
 void db_close(struct db *db);
 // The underlying handle, for tests (borrowed)
 [[nodiscard]] struct sqlite3 *db_handle(struct db *db);
