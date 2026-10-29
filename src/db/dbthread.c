@@ -193,3 +193,7 @@ void db_thread_stop(struct db_thread *t) {
 	t->db = nullptr;
 	uv_close((uv_handle_t *)&t->async, on_close);
 }
+
+struct db *db_thread_db(const struct db_thread *t) {
+	return t->db;
+}

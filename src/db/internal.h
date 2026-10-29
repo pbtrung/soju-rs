@@ -25,6 +25,10 @@ struct db {
 [[nodiscard]] struct db_conn *db_subscription_conn(struct db *db, int64_t id, struct err **err);
 
 [[nodiscard]] bool record_message_id_high_water(struct db_conn *c, struct err **err);
+// The stored time and searchable text of a message (text: nullptr for
+// none)
+[[nodiscard]] bool message_time_text(const struct irc_msg *msg, char **time, char **text,
+				     struct err **err);
 
 // db.c: schemas and migrations of a connection (remote ones keep their
 // version in SojuSchemaVersion)

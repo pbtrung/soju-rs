@@ -140,7 +140,7 @@ bool db_store_message_target(struct db *db, int64_t network_id, struct db_messag
 
 // The stored time and searchable text of a message (text: nullptr for
 // none)
-static bool message_time_text(const struct irc_msg *msg, char **time, char **text,
+bool message_time_text(const struct irc_msg *msg, char **time, char **text,
 			      struct err **err) {
 	struct timestamp t;
 	const char *tag = irc_tags_get(&msg->tags, "time");

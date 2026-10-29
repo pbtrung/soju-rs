@@ -30,5 +30,8 @@ void db_thread_call(struct db_thread *t, db_job_fn run, void *data);
 // Runs every queued job and its completion, stops the thread, closes the
 // database and frees t once the loop has run the handle's close callback
 void db_thread_stop(struct db_thread *t);
+// The database, for what is safe from any thread (db_is_remote, Turso
+// message writers)
+[[nodiscard]] struct db *db_thread_db(const struct db_thread *t);
 // The number of jobs submitted but not completed
 [[nodiscard]] size_t db_thread_pending(const struct db_thread *t);

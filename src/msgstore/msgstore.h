@@ -2,16 +2,26 @@
 // fresh results. Local SQLite calls wait for the DB thread, matching the
 // synchronous local-storage sections of the Rust user actor.
 #pragma once
+#include "base/log.h"
 #include "base/map.h"
 #include "db/dbthread.h"
 #include "msgstore/msgid.h"
 
 static constexpr size_t MESSAGE_RING_BUFFER_CAP = 4096;
+struct batch_store;
+
 struct msgstore {
 	struct strmap buffers;
 	struct db_thread *db; // nullptr: memory
+	struct batch_store *batch; // Turso
+	uv_timer_t *timer; // polls the batches
+	struct logger log;
 };
 void msgstore_init(struct msgstore *s, struct db_thread *db);
+// With Turso storage: buffers lines and writes them in batches (soju-rs
+// msgstore/turso.rs), polled from loop. Does nothing otherwise.
+void msgstore_start_batches(struct msgstore *s, uv_loop_t *loop, const struct logger *log,
+			    int64_t user_id, size_t limit);
 void msgstore_destroy(struct msgstore *s);
 void msgstore_delete_network(struct msgstore *s, int64_t net_id);
 [[nodiscard]] bool msgstore_append(struct msgstore *s, int64_t net_id, const char *target,

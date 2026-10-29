@@ -235,6 +235,9 @@ static void start_run(void *data) {
 	struct server_config *cfg = server_config_get(srv);
 	msgstore_init(&u->store,
 		      cfg->cfg.basic.msg_store_driver == MSG_STORE_MEMORY ? nullptr : srv->db);
+	// Turso: lines are buffered and written in batches
+	msgstore_start_batches(&u->store, &u->loop->uv, &srv->log, u->record.id,
+			       cfg->cfg.basic.chat_history_limit);
 	server_config_unref(cfg);
 	if (users == nullptr) {
 		users = xcalloc(1, sizeof(*users));
