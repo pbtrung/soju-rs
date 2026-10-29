@@ -1,10 +1,10 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–5 implemented; phases 6–7 next**
+Status: **phases 0–6 implemented; phases 7–8 next**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
-and the stateful downstream session fuzzer. Network selection, channel
-replay and backlog delivery are integrated by the user actor in phase 6.
+and the stateful downstream session fuzzer. The user actor integrates network selection,
+channel replay, history stores, receipts and backlog delivery.
 Other open items: phase 1's long fuzzing budget and dedicated L5 harnesses;
 phase 2's migration check uses upstream's version 0 and 30 schemas rather
 than a Go soju v0.11 database. The full phase-exit matrix and long fuzzing
@@ -737,3 +737,11 @@ Phase 5: upstream protocol and TCP/DNS lifetime tests, GCC/Clang debug and
 ASan suites, clang-tidy, and a 60-second upstream-session libFuzzer run.
 Phase 4 additionally passed GCC/Clang release, UBSan and TSan, and Clang
 MSan. Valgrind could not configure because the executable is not installed.
+
+Phase 6: 15 of 17 Rust server scenarios run through real sockets in four
+configurations (1/4 loops × normal/delayed DB jobs), plus lifecycle and
+memory-backlog checks. GCC/Clang debug, ASan/UBSan/LSan and TSan pass.
+The two BouncerServ scenarios require the phase 7 handlers. Local SQLite
+message append/history, receipt and network/channel updates use blocking
+DB-thread calls with copied inputs, matching Rust's synchronous local
+storage sections; authentication and account creation use continuations.

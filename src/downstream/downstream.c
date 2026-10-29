@@ -15,10 +15,12 @@
 #include "irc/ircutil.h"
 #include "irc/numerics.h"
 #include "net/url.h"
+#include "user/user.h"
 
 // Downstreams of this loop by ID (rule 2: asynchronous completions look
 // their downstream up here)
 static thread_local struct strmap *table;
+static void drain_input(struct downstream *dc);
 static void on_closed(struct conn *c, const struct err *err, void *data);
 static struct downstream *downstream_new(struct server *srv, struct conn *c,
 					 const struct conn_info *info,
@@ -45,12 +47,14 @@ static void table_add(struct downstream *dc) {
 	char k[24];
 	id_key(k, sizeof(k), dc->id);
 	strmap_set(table, k, dc);
+	atomic_fetch_add(&dc->srv->metrics.downstreams, 1);
 }
 
 static void table_remove(struct downstream *dc) {
 	char k[24];
 	id_key(k, sizeof(k), dc->id);
 	(void)strmap_take(table, k);
+	atomic_fetch_sub(&dc->srv->metrics.downstreams, 1);
 	if (strmap_len(table) == 0) {
 		strmap_free(table);
 		xfree(table);
@@ -158,6 +162,7 @@ static void on_timer_closed(uv_handle_t *h) {
 	downstream_sasl_free(dc->sasl);
 	registration_free(dc->reg);
 	label_free(dc->label);
+	irc_msg_vec_free(&dc->pending_input);
 	xfree(dc->remote_addr);
 	strbuf_free(&dc->peer_cert);
 	xfree(dc->client_name);
@@ -217,6 +222,26 @@ void downstream_close(struct downstream *dc) {
 	downstream_free(dc);
 }
 
+void downstream_close_server(struct server *srv) {
+	VEC(uint64_t) ids = {0};
+	if (table != nullptr) {
+		void *v;
+		for (size_t it = 0; strmap_next(table, &it, nullptr, &v);) {
+			struct downstream *dc = v;
+			if (dc->srv == srv) {
+				vec_push(&ids, dc->id);
+			}
+		}
+	}
+	for (size_t i = 0; i < ids.len; i++) {
+		struct downstream *dc = downstream_lookup(ids.data[i]);
+		if (dc != nullptr) {
+			downstream_close(dc);
+		}
+	}
+	vec_free(&ids);
+}
+
 void downstream_registration_done(struct downstream *dc) {
 	registration_free(dc->reg);
 	dc->reg = nullptr;
@@ -242,6 +267,9 @@ static void raw_send(struct downstream *dc, struct irc_msg *msg) {
 static bool tag_allowed(const char *key, const char *value, void *data) {
 	(void)value;
 	const struct cap_registry *caps = data;
+	if (cstr_eq(key, "label")) {
+		return cap_registry_is_enabled(caps, "labeled-response");
+	}
 	if (cstr_eq(key, "time")) {
 		return cap_registry_is_enabled(caps, "server-time");
 	}
@@ -325,6 +353,10 @@ static char *batch_ref_cb(void *data) {
 }
 
 void downstream_send(struct downstream *dc, struct irc_msg *msg) {
+	if (is_numeric(msg->command) && msg->params.len > 0 &&
+	    cstr_eq(irc_msg_param(msg, 0), "*")) {
+		irc_msg_set_param(msg, 0, dc->nick);
+	}
 	const struct cap_registry *caps = &dc->caps;
 	if (!cap_registry_is_enabled(caps, "message-tags")) {
 		if (cstr_eq(msg->command, "TAGMSG")) {
@@ -1479,6 +1511,7 @@ static void pass_done(void *data, const struct auth_error *err) {
 	set_auth_username(dc, j->username, j->client, j->network);
 	pass_job_free(j);
 	finish_registration(dc);
+	drain_input(dc);
 }
 
 // soju-rs register(): authentication by PASS if SASL wasn't used, then
@@ -1606,7 +1639,7 @@ static void handle_message_unregistered(struct downstream *dc, struct irc_msg *m
 }
 
 // Pending input while busy: processed in order once the async step ends
-static void on_message(struct conn *c, struct irc_msg *msg, void *data) {
+static void process_input(struct conn *c, struct irc_msg *msg, void *data) {
 	struct downstream *dc = data;
 	if (dc->registered && !dc->closed) {
 		downstream_receive_take(dc, msg);
@@ -1628,10 +1661,31 @@ static void on_message(struct conn *c, struct irc_msg *msg, void *data) {
 	if (dc->busy) {
 		// Holds this message's input slot until the step completes: later
 		// messages wait, like the sequential soju-rs loop
+		dc->waiting_input = true;
 		return;
 	}
 	conn_input_done(c);
 	maybe_register(dc);
+}
+
+static void drain_input(struct downstream *dc) {
+	if (dc->processing_input || dc->closed) {
+		return;
+	}
+	dc->processing_input = true;
+	while (!dc->busy && !dc->closed && dc->pending_input.len > 0) {
+		struct irc_msg *msg = dc->pending_input.data[0];
+		vec_remove(&dc->pending_input, 0);
+		process_input(dc->conn, msg, dc);
+	}
+	dc->processing_input = false;
+}
+
+static void on_message(struct conn *c, struct irc_msg *msg, void *data) {
+	(void)c;
+	struct downstream *dc = data;
+	vec_push(&dc->pending_input, msg);
+	drain_input(dc);
 }
 
 void downstream_input_done(struct downstream *dc) {
@@ -1674,6 +1728,9 @@ void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
 		AUTOFREE char *fatal = finish_message(dc, handle_cap(dc, msg));
 		if (fatal != nullptr) {
 			fail_connection(dc, fatal);
+		}
+		if (!dc->closed && dc->events.updated != nullptr) {
+			dc->events.updated(dc, dc->events.data);
 		}
 	} else if (cstr_eq(msg->command, "QUIT")) {
 		downstream_close(dc);
@@ -1765,12 +1822,21 @@ struct downstream *downstream_attach(struct downstream *parent, int64_t network_
 }
 
 static void resume(struct downstream *dc) {
-	conn_input_done(dc->conn);
+	if (dc->waiting_input) {
+		dc->waiting_input = false;
+		conn_input_done(dc->conn);
+	}
 	if (dc->conn != nullptr && conn_is_closed(dc->conn)) {
 		downstream_close(dc);
 		return;
 	}
 	maybe_register(dc);
+	drain_input(dc);
+}
+
+void downstream_resume_input(struct downstream *dc) {
+	dc->busy = false;
+	resume(dc);
 }
 
 static void on_closed(struct conn *c, const struct err *err, void *data) {
@@ -1798,6 +1864,11 @@ static struct downstream *downstream_new(struct server *srv, struct conn *c,
 	dc->conn = c;
 	if (events != nullptr) {
 		dc->events = *events;
+	} else {
+		dc->events = (struct downstream_events){.registered = user_downstream_registered,
+							.message = user_downstream_message,
+							.closed = user_downstream_closed,
+							.updated = user_downstream_updated};
 	}
 	AUTOFREE char *q = utf8_debug_cstr(str_from(info->remote_addr));
 	AUTOFREE char *prefix = xasprintf("downstream %s: ", q);

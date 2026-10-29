@@ -1,6 +1,7 @@
 #include "server/server.h"
 
 #include "base/alloc.h"
+#include "user/user.h"
 
 struct server_config *server_config_default(void) {
 	struct server_config *c = xcalloc(1, sizeof(*c));
@@ -32,6 +33,8 @@ void server_init(struct server *srv, struct loop_pool *loops, struct db_thread *
 	*srv = (struct server){.loops = loops, .db = db};
 	log_init(&srv->log, &srv->log_root);
 	pthread_mutex_init(&srv->config_mu, nullptr);
+	pthread_mutex_init(&srv->users_mu, nullptr);
+	strmap_init(&srv->users, xfree);
 	srv->config = server_config_default();
 	srv->cpu = cpu_work_pool_new(&loops->loops[0].uv, 0);
 	atomic_init(&srv->next_downstream_id, 1);
@@ -41,7 +44,36 @@ void server_finish(struct server *srv) {
 	cpu_work_pool_free(srv->cpu);
 	server_config_unref(srv->config);
 	pthread_mutex_destroy(&srv->config_mu);
+	strmap_free(&srv->users);
+	pthread_mutex_destroy(&srv->users_mu);
 	log_free(&srv->log);
+}
+
+bool server_start(struct server *srv, struct err **err) {
+	return user_server_start(srv, err);
+}
+
+void server_stop(struct server *srv) {
+	atomic_store(&srv->shutting_down, true);
+	user_server_stop(srv);
+}
+
+bool server_is_idle(struct server *srv) {
+	pthread_mutex_lock(&srv->users_mu);
+	bool empty = strmap_len(&srv->users) == 0;
+	pthread_mutex_unlock(&srv->users_mu);
+	return empty && atomic_load(&srv->pending_work) == 0 &&
+	       atomic_load(&srv->metrics.downstreams) == 0;
+}
+
+bool server_find_user(struct server *srv, const char *username, int64_t *id) {
+	pthread_mutex_lock(&srv->users_mu);
+	int64_t *found = strmap_get(&srv->users, username);
+	if (found != nullptr) {
+		*id = *found;
+	}
+	pthread_mutex_unlock(&srv->users_mu);
+	return found != nullptr;
 }
 
 struct server_config *server_config_get(struct server *srv) {
@@ -98,6 +130,7 @@ static void hop_back(void *data) {
 	if (h->cpu_done != nullptr) {
 		h->cpu_done(h->data, h->err);
 	}
+	atomic_fetch_sub(&h->srv->pending_work, 1);
 	xfree(h->err);
 	xfree(h);
 }
@@ -119,7 +152,9 @@ static void hop_done(void *data) {
 
 void server_db(struct server *srv, db_job_fn run, db_done_fn done, void *data) {
 	struct hop *h = xcalloc(1, sizeof(*h));
-	*h = (struct hop){.origin = loop_current(), .run = run, .done = done, .data = data};
+	*h = (struct hop){
+		.origin = loop_current(), .run = run, .done = done, .data = data, .srv = srv};
+	atomic_fetch_add(&srv->pending_work, 1);
 	db_thread_submit(srv->db, hop_run, hop_done, h);
 }
 
@@ -142,10 +177,74 @@ void server_cpu(struct server *srv, cpu_work_fn work, server_cpu_done_fn done, v
 	struct hop *h = xcalloc(1, sizeof(*h));
 	*h = (struct hop){
 		.origin = loop_current(), .work = work, .cpu_done = done, .srv = srv, .data = data};
+	atomic_fetch_add(&srv->pending_work, 1);
 	struct sloop *zero = &srv->loops->loops[0];
 	if (loop_current() == zero || loop_current() == nullptr) {
 		cpu_submit(h);
 	} else {
 		loop_post(zero, cpu_submit, hop_drop, h);
 	}
+}
+
+void server_config_reload(struct server *srv, struct server_config *c) {
+	struct server_config *old = server_config_get(srv);
+	c->cfg.basic.msg_store_driver = old->cfg.basic.msg_store_driver;
+	xfree(c->cfg.basic.msg_store_source);
+	c->cfg.basic.msg_store_source = xstrdup(old->cfg.basic.msg_store_source);
+	server_config_unref(old);
+	server_config_set(srv, c);
+}
+
+struct get_create_job {
+	struct server *srv;
+	char *username;
+	bool enable, found;
+	struct db_user record;
+	struct err *err;
+	server_user_done_fn done;
+	void *data;
+};
+static void get_create_run(struct db *db, void *data) {
+	struct get_create_job *j = data;
+	if (!db_get_user(db, j->username, &j->record, &j->found, &j->err)) {
+		return;
+	}
+	if (!j->found) {
+		if (!j->enable) {
+			bool failed = err_set(&j->err, 0, "user not found");
+			(void)failed;
+			return;
+		}
+		db_user_init(&j->record, j->username);
+		j->found = true;
+		bool ok = db_store_user(db, &j->record, &j->err);
+		(void)ok;
+	}
+}
+static void get_create_done(void *data) {
+	struct get_create_job *j = data;
+	if (j->err == nullptr && !atomic_load(&j->srv->shutting_down)) {
+		struct db_user *copy = xmalloc(sizeof(*copy));
+		db_user_copy(copy, &j->record);
+		user_start_take(j->srv, copy);
+	}
+	j->done(j->data, j->found ? j->record.id : 0, j->err);
+	if (j->found) {
+		db_user_free(&j->record);
+	}
+	err_free(j->err);
+	xfree(j->username);
+	xfree(j);
+}
+void server_get_or_create_user(struct server *srv, const char *username, server_user_done_fn done,
+			       void *data) {
+	struct get_create_job *j = xcalloc(1, sizeof(*j));
+	struct server_config *cfg = server_config_get(srv);
+	*j = (struct get_create_job){.srv = srv,
+				     .username = xstrdup(username),
+				     .enable = cfg->cfg.basic.enable_users_on_auth,
+				     .done = done,
+				     .data = data};
+	server_config_unref(cfg);
+	server_db(srv, get_create_run, get_create_done, j);
 }

@@ -32,7 +32,7 @@ struct db_thread {
 	struct job *queue_head, *queue_tail; // to run
 	struct job *done_head, *done_tail; // to complete on the loop thread
 	bool stopping;
-	size_t pending; // loop thread only
+	atomic_size_t pending;
 };
 
 static void push(struct job **head, struct job **tail, struct job *j) {
@@ -105,7 +105,7 @@ static void on_async(uv_async_t *a) {
 	while (list != nullptr) {
 		struct job *j = list;
 		list = j->next;
-		t->pending--;
+		atomic_fetch_sub(&t->pending, 1);
 		if (j->done != nullptr) {
 			j->done(j->data);
 		}
@@ -159,7 +159,7 @@ bool db_thread_start(uv_loop_t *loop, struct db *db, unsigned delay_max_ms, stru
 void db_thread_submit(struct db_thread *t, db_job_fn run, db_done_fn done, void *data) {
 	struct job *j = xcalloc(1, sizeof(*j));
 	*j = (struct job){.run = run, .done = done, .data = data};
-	t->pending++;
+	atomic_fetch_add(&t->pending, 1);
 	pthread_mutex_lock(&t->mu);
 	push(&t->queue_head, &t->queue_tail, j);
 	pthread_cond_signal(&t->cond);
@@ -178,7 +178,7 @@ void db_thread_call(struct db_thread *t, db_job_fn run, void *data) {
 }
 
 size_t db_thread_pending(const struct db_thread *t) {
-	return t->pending;
+	return atomic_load(&t->pending);
 }
 
 void db_thread_stop(struct db_thread *t) {

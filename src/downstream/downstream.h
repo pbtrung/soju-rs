@@ -89,6 +89,7 @@ struct downstream_events {
 	// user's event has been handled, including when its target disappeared.
 	void (*message)(struct downstream *dc, struct irc_msg *msg, void *data);
 	void (*closed)(struct downstream *dc, void *data);
+	void (*updated)(struct downstream *dc, void *data);
 	void *data;
 };
 
@@ -133,6 +134,8 @@ struct downstream {
 	bool has_parent; // a virtual connection: parent_id is its bouncer connection
 	bool impersonating;
 	bool busy; // an asynchronous registration step is running
+	bool processing_input, waiting_input;
+	irc_msg_vec pending_input;
 	bool closed;
 	int64_t user_id;
 	struct sloop *user_loop; // routing only; no user object crosses loops
@@ -144,9 +147,15 @@ void downstream_serve(struct server *srv, struct conn *c, const struct conn_info
 // The downstream with this ID on the current loop, or nullptr
 [[nodiscard]] struct downstream *downstream_lookup(uint64_t id);
 void downstream_close(struct downstream *dc);
+// Closes this server's downstreams on the current loop, including clients
+// which have not authenticated yet.
+void downstream_close_server(struct server *srv);
 // Dispatches owned input, also used by multiplex and the session fuzzer.
 void downstream_receive_take(struct downstream *dc, struct irc_msg *msg);
 void downstream_input_done(struct downstream *dc);
+// Completes an asynchronous registration/attachment step and drains the
+// retained input in order. Its input permits bound the queue to 64 lines.
+void downstream_resume_input(struct downstream *dc);
 void downstream_begin_command(struct downstream *dc, const struct irc_msg *msg);
 void downstream_end_command(struct downstream *dc);
 void downstream_registration_done(struct downstream *dc);

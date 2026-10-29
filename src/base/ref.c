@@ -27,6 +27,7 @@ void ref_track_at(struct ref_node *node, const char *type, const char *file, int
 
 void ref_untrack(struct ref_node *node) {
 #if SOJU_REF_TRACKING
+	pthread_mutex_lock(&live_mu);
 	if (node->next == nullptr || node->prev == nullptr) {
 		// Untracked twice, or never tracked: a lifetime bug
 		fprintf(stderr, "ref_untrack: %s (%s:%d) isn't tracked\n",
@@ -34,12 +35,13 @@ void ref_untrack(struct ref_node *node) {
 			node->file != nullptr ? node->file : "?", node->line);
 		abort();
 	}
-	pthread_mutex_lock(&live_mu);
 	node->prev->next = node->next;
 	node->next->prev = node->prev;
-	pthread_mutex_unlock(&live_mu);
-#endif
 	node->prev = node->next = nullptr;
+	pthread_mutex_unlock(&live_mu);
+#else
+	node->prev = node->next = nullptr;
+#endif
 }
 
 size_t ref_live_count(const char *type) {

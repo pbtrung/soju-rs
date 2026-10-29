@@ -1,6 +1,7 @@
 #include "base/map.h"
 
 #include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/random.h>
 
@@ -12,7 +13,7 @@ static constexpr size_t SLOT_REMOVED = SIZE_MAX;
 // SipHash-1-3 (the variant Rust's HashMap uses)
 
 static uint64_t sip_key[2];
-static bool sip_key_set;
+static pthread_once_t sip_once = PTHREAD_ONCE_INIT;
 
 static uint64_t rotl(uint64_t x, unsigned b) {
 	return (x << b) | (x >> (64 - b));
@@ -47,13 +48,10 @@ static void init_sip_key(void) {
 		got += (size_t)n;
 	}
 	memcpy(sip_key, buf, sizeof(buf));
-	sip_key_set = true;
 }
 
 uint64_t hash_bytes(const void *p, size_t n) {
-	if (!sip_key_set) {
-		init_sip_key();
-	}
+	pthread_once(&sip_once, init_sip_key);
 	const unsigned char *in = p;
 	uint64_t v0 = 0x736f6d6570736575ULL ^ sip_key[0];
 	uint64_t v1 = 0x646f72616e646f6dULL ^ sip_key[1];

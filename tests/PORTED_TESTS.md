@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 102 of 165 unit tests (phases 0–5); 0 of 17 scenarios.
+Ported so far: 110 of 165 unit tests (phases 0–6); 15 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -122,8 +122,8 @@ Also compared against the Rust code by the differential harness
 | `src/listen.rs` | `client_cert_header` | `test_http_forwarded.c`: `test_client_cert_header` |
 | `src/metrics.rs` | `render` | pending: phase 8 |
 | `src/msgstore/bare.rs` | `roundtrip` | `test_msgstore_msgid.c`: `test_roundtrip` |
-| `src/msgstore/memory.rs` | `ring` | pending: phase 6 |
-| `src/msgstore/memory.rs` | `delete_network` | pending: phase 6 |
+| `src/msgstore/memory.rs` | `ring` | `test_user.c`: `test_ring` |
+| `src/msgstore/memory.rs` | `delete_network` | `test_user.c`: `test_delete_network` |
 | `src/msgstore/mod.rs` | `go_compat` | `test_msgstore_msgid.c`: `test_go_compat` |
 | `src/proxyproto.rs` | `no_header` | `test_net_misc.c`: `test_no_header` |
 | `src/proxyproto.rs` | `v1` | `test_net_misc.c`: `test_v1` |
@@ -133,8 +133,8 @@ Also compared against the Rust code by the differential harness
 | `src/scfg.rs` | `basic` | `test_config_scfg.c`: `test_basic` |
 | `src/scfg.rs` | `quoting` | `test_config_scfg.c`: `test_quoting` |
 | `src/scfg.rs` | `errors` | `test_config_scfg.c`: `test_errors` |
-| `src/server.rs` | `create_user_on_auth_concurrently` | pending: phase 6 |
-| `src/server.rs` | `msg_store_not_reloaded` | pending: phase 6 |
+| `src/server.rs` | `create_user_on_auth_concurrently` | `../integration/test_server.c`: `test_create_user_on_auth_concurrently` |
+| `src/server.rs` | `msg_store_not_reloaded` | `../integration/test_server.c`: `test_msg_store_not_reloaded` |
 | `src/service/mod.rs` | `lookup` | pending: phase 7 |
 | `src/service/mod.rs` | `help_listing` | pending: phase 7 |
 | `src/service/mod.rs` | `durations` | pending: phase 7 |
@@ -151,10 +151,10 @@ Also compared against the Rust code by the differential harness
 | `src/upstream/server_tests.rs` | `labeled_nested_batch` | `test_upstream.c`: `test_labeled_nested_batch` |
 | `src/upstream/server_tests.rs` | `registration_timeout` | `test_upstream.c`: `test_registration_timeout` |
 | `src/upstream/server_tests.rs` | `sasl_cap_nak_ends_capability_negotiation` | `test_upstream.c`: `test_sasl_cap_nak_ends_capability_negotiation` |
-| `src/user/delivered.rs` | `store` | pending: phase 6 |
-| `src/user/mod.rs` | `local_addr` | pending: phase 6 |
-| `src/user/mod.rs` | `highlight` | pending: phase 6 |
-| `src/user/mod.rs` | `ident` | pending: phase 6 |
+| `src/user/delivered.rs` | `store` | `test_user.c`: `test_store` |
+| `src/user/mod.rs` | `local_addr` | `test_user.c`: `test_local_addr` |
+| `src/user/mod.rs` | `highlight` | `test_user.c`: `test_highlight` |
+| `src/user/mod.rs` | `ident` | `test_user.c`: `test_ident` |
 | `src/util.rs` | `go_match_tests` | `test_base_path_match.c`: `test_go_match_tests` |
 | `src/webpush.rs` | `encrypt_roundtrip` | pending: phase 9 |
 | `src/webpush.rs` | `vapid` | pending: phase 9 |
@@ -182,23 +182,23 @@ Also compared against the Rust code by the differential harness
 
 ## Integration scenarios (`tests/server.rs`, phase 6)
 
-- `broadcast`: pending
-- `chat_history_db`: pending
-- `statusmsg_keeps_sigil`: pending
-- `upstream_malformed_messages`: pending
-- `cap_req_removal`: pending
-- `labeled_response_ack`: pending
-- `sasl_errors`: pending
-- `chat_history_params`: pending
-- `read_marker`: pending
-- `upstream_clock_skew`: pending
-- `multiline`: pending
+- `broadcast`: `tests/integration/test_server.c`: `test_broadcast` (1/4 loops × 0/20 ms DB delay)
+- `chat_history_db`: `tests/integration/test_server.c`: `test_chat_history_db` (1/4 loops × 0/20 ms DB delay)
+- `statusmsg_keeps_sigil`: `tests/integration/test_server.c`: `test_statusmsg_keeps_sigil` (1/4 loops × 0/20 ms DB delay)
+- `upstream_malformed_messages`: `tests/integration/test_server.c`: `test_upstream_malformed_messages` (1/4 loops × 0/20 ms DB delay)
+- `cap_req_removal`: `tests/integration/test_server.c`: `test_cap_req_removal` (1/4 loops × 0/20 ms DB delay)
+- `labeled_response_ack`: `tests/integration/test_server.c`: `test_labeled_response_ack` (1/4 loops × 0/20 ms DB delay)
+- `sasl_errors`: `tests/integration/test_server.c`: `test_sasl_errors` (1/4 loops × 0/20 ms DB delay)
+- `chat_history_params`: `tests/integration/test_server.c`: `test_chat_history_params` (1/4 loops × 0/20 ms DB delay)
+- `read_marker`: `tests/integration/test_server.c`: `test_read_marker` (1/4 loops × 0/20 ms DB delay)
+- `upstream_clock_skew`: `tests/integration/test_server.c`: `test_upstream_clock_skew` (1/4 loops × 0/20 ms DB delay)
+- `multiline`: `tests/integration/test_server.c`: `test_multiline` (1/4 loops × 0/20 ms DB delay)
 - `service_other_user`: pending
-- `chat_history_limit`: pending
+- `chat_history_limit`: `tests/integration/test_server.c`: `test_chat_history_limit` (1/4 loops × 0/20 ms DB delay)
 - `service_blocking_work`: pending
-- `monitor_invalid_targets`: pending
-- `multiplex`: pending
-- `multiplex_unsupported`: pending
+- `monitor_invalid_targets`: `tests/integration/test_server.c`: `test_monitor_invalid_targets` (1/4 loops × 0/20 ms DB delay)
+- `multiplex`: `tests/integration/test_server.c`: `test_multiplex` (1/4 loops × 0/20 ms DB delay)
+- `multiplex_unsupported`: `tests/integration/test_server.c`: `test_multiplex_unsupported` (1/4 loops × 0/20 ms DB delay)
 
 Phase 4 C-only coverage: `test_downstream.test_welcome_sync_multiplex`
 checks welcome, dynamic ISUPPORT, tagged virtual welcomes, independent
@@ -210,3 +210,8 @@ Phase 5: upstream protocol fixtures cover all twelve upstream Rust tests.
 Additional C-only coverage checks the live TCP/DNS runner, destruction with
 DNS outstanding, the 64-command budget and multiline assembly.
 `fuzz_upstream_session` interleaves hostile input, commands and timers.
+
+Phase 6 also exercises memory backlog replay, concurrent account creation,
+immutable message-store configuration on reload, pending DB/authentication
+disconnects, and full loop/actor teardown. The two BouncerServ scenarios
+are completed with phase 7, which supplies their command handlers.
