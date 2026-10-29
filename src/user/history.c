@@ -267,6 +267,7 @@ void user_read_marker(struct user *u, struct user_client *dc, const struct irc_m
 						   other->hostname);
 				user_send_take(u, other, copy);
 			}
+			user_web_push_read(u, net, target, bound, j.record.timestamp);
 		}
 	}
 out:

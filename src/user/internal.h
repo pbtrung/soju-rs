@@ -48,3 +48,24 @@ void user_send_networks(struct user *u, struct user_packet *p);
 void user_save_delivered(struct user *u, struct user_network *net, const char *client);
 void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg, const char *target,
 		  uint64_t origin_id, uint64_t reply_id);
+
+// Web Push (user/webpush.c, soju-rs user/webpush.rs)
+void user_web_push_init(struct user *u);
+// Cancels the delayed notifications and frees the Web Push state
+void user_web_push_stop(struct user *u);
+// Whether a network (0: the bouncer connection) may have subscriptions
+[[nodiscard]] bool user_has_web_push_subscriptions(struct user *u, int64_t net_id);
+void user_reset_web_push_networks(struct user *u);
+// Sends msg (taken) to a network's subscriptions, in the background
+void user_broadcast_web_push(struct user *u, int64_t net_id, struct irc_msg *msg);
+// A message from upstream: pushed after 5 s unless the buffer was read
+// meanwhile, if it's a highlight or a direct message
+void user_web_push_message(struct user *u, struct user_network *net, const struct irc_msg *msg,
+			   const char *buffer, bool direct, bool self_msg);
+// A read marker was set on target: dismisses its notification
+void user_web_push_read(struct user *u, struct user_network *net, const char *target,
+			const char *bound, struct db_time receipt);
+// WEBPUSH (user/webpush_cmd.c): returns true when the reply comes later
+// (the command must not be acknowledged now)
+[[nodiscard]] bool user_webpush_command(struct user *u, struct user_client *dc,
+					const struct irc_msg *msg, struct user_packet *p);

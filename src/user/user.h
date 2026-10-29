@@ -27,6 +27,8 @@ struct user_network {
 	struct cmmap channels; // db_channel *
 	struct delivered_store delivered;
 	struct cmmap latest_times; // timestamp *
+	// Targets with a Web Push notification a read marker should dismiss
+	struct cmmap push_targets; // timestamp *
 	char *last_error;
 	uint64_t joined_generation;
 };
@@ -40,6 +42,15 @@ struct user {
 	VEC(struct user_client *) clients;
 	struct msgstore store;
 	bool stopped, certfp_pending;
+	// Web Push (user/webpush.c): the networks with subscriptions (0 for the
+	// bouncer connection), loaded when needed
+	bool web_push_networks_loaded;
+	VEC(int64_t) web_push_networks;
+	// WEBPUSH REGISTER test notifications in flight: "<network ID> <endpoint>"
+	// -> owned uint64_t check ID
+	struct strmap web_push_checks;
+	uint64_t next_web_push_check;
+	VEC(struct push_delay *) push_delays; // highlights waiting to be pushed
 };
 
 // Local lookup only. No user pointer may cross a loop boundary.

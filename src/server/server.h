@@ -14,6 +14,7 @@
 #include "irc/message.h"
 #include "net/loops.h"
 #include "base/map.h"
+#include "webpush/webpush.h"
 
 struct oauth2;
 
@@ -64,6 +65,7 @@ struct server {
 	pthread_mutex_t users_mu;
 	struct strmap deleted_users; // stopped IDs; reject stale authentication/start completions
 	struct strmap users; // username -> owned int64_t user ID; no actor pointers
+	struct webpush_sender *web_push; // set by server_start, then immutable
 };
 
 [[nodiscard]] bool server_start(struct server *srv, struct err **err);

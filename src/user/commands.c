@@ -310,6 +310,10 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		user_read_marker(u, dc, msg, p);
 	} else if (cstr_eq(cmd, "MONITOR")) {
 		monitor(u, dc, msg, p);
+	} else if (cstr_eq(cmd, "WEBPUSH")) {
+		if (user_webpush_command(u, dc, msg, p)) {
+			no_ack(p);
+		}
 	} else if (cstr_eq(cmd, "AWAY")) {
 		xfree(dc->away);
 		dc->away = msg->params.len > 0 ? xstrdup(irc_msg_param(msg, 0)) : nullptr;

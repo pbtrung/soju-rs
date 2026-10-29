@@ -34,6 +34,7 @@ void user_network_free(struct user_network *net) {
 	db_network_free(&net->record);
 	cmmap_free(&net->channels);
 	cmmap_free(&net->latest_times);
+	cmmap_free(&net->push_targets);
 	delivered_destroy(&net->delivered);
 	xfree(net->last_error);
 	xfree(net);
@@ -112,6 +113,7 @@ bool user_store_network(struct user *u, struct db_network *record, bool check_li
 		net = xcalloc(1, sizeof(*net));
 		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
 		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
 		delivered_init(&net->delivered, CASEMAPPING_ASCII);
 		net->last_error = xstrdup("");
 		vec_push(&u->networks, net);

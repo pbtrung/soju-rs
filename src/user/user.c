@@ -226,6 +226,7 @@ static void start_run(void *data) {
 	}
 	struct user *u = xcalloc(1, sizeof(*u));
 	REF_TRACK(&u->ref, "user");
+	user_web_push_init(u);
 	u->srv = srv;
 	u->loop = loop_current();
 	u->record = *record;
@@ -258,6 +259,7 @@ static void start_run(void *data) {
 		net->last_error = xstrdup("");
 		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
 		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
 		delivered_init(&net->delivered, CASEMAPPING_ASCII);
 		for (size_t k = 0; k < loaded->channels.len; k++) {
 			struct db_channel *ch = xmalloc(sizeof(*ch));
@@ -354,6 +356,7 @@ static void stop_user(struct user *u, void *data) {
 		user_client_free(u->clients.data[i]);
 	}
 	vec_free(&u->clients);
+	user_web_push_stop(u);
 	msgstore_destroy(&u->store);
 	pthread_mutex_lock(&u->srv->users_mu);
 	strmap_remove(&u->srv->users, u->record.username);

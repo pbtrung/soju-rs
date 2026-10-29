@@ -811,8 +811,8 @@ void downstream_build_isupport(struct downstream *dc, const struct isupport_ctx 
 			isupport_set(out, "MSGREFTYPES", "timestamp");
 		}
 		if (cap_registry_is_enabled(&dc->caps, "soju.im/webpush") &&
-		    ctx->vapid_public != nullptr) {
-			isupport_set(out, "VAPID", ctx->vapid_public);
+		    dc->srv->web_push != nullptr) {
+			isupport_set(out, "VAPID", dc->srv->web_push->vapid_public);
 		}
 	}
 	if (ctx->up_isupport != nullptr) {

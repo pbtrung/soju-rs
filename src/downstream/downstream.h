@@ -214,7 +214,6 @@ struct isupport_ctx {
 	bool chathistory;
 	const struct isupport *up_isupport;
 	const struct cap_registry *up_caps;
-	const char *vapid_public; // nullptr: no Web Push
 };
 
 void downstream_build_isupport(struct downstream *dc, const struct isupport_ctx *ctx,

@@ -1,6 +1,6 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–8 implemented; phase 9 next**
+Status: **phases 0–9 implemented (9b, Turso, pending); phase 10 next**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
 and the stateful downstream session fuzzer. The user actor integrates network selection,
@@ -800,3 +800,16 @@ four `auth.rs` tests are ported, with client tests against a threaded mock
 HTTP server and an OAUTHBEARER login end to end. GCC/Clang debug,
 ASan/UBSan/LSan, TSan and Clang MSan (libcurl built from source,
 instrumented) pass, and clang-tidy is clean.
+
+Part 2, Web Push: RFC 8291 encryption and VAPID (RFC 8292) with OpenSSL
+(P-256 keys, ECDH, HKDF-SHA-256, AES-128-GCM, ES256), the VAPID key pair
+generated on first start, `VAPID` in ISUPPORT with `soju.im/webpush`,
+`WEBPUSH REGISTER`/`UNREGISTER` with soju-rs's limits (25 subscriptions per
+network, 4 pending checks, re-check after 24 h) and asynchronous test
+notifications, highlights and direct messages pushed after 5 s unless read
+(muted and blocked targets excepted), `MARKREAD` pushes dismissing them,
+expired subscriptions deleted and failing ones pruned after 30 days. The
+encryption is done on the loop (a key generation, an ECDH and a signature
+per notification) rather than through the CPU-job limiter. The five
+`webpush.rs` tests are ported, with integration tests of the command and of
+notifications through the server.

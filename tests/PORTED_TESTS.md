@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 120 of 165 unit tests (phases 0–9); 17 of 17 scenarios.
+Ported so far: 125 of 165 unit tests (phases 0–9); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -156,11 +156,11 @@ Also compared against the Rust code by the differential harness
 | `src/user/mod.rs` | `highlight` | `test_user.c`: `test_highlight` |
 | `src/user/mod.rs` | `ident` | `test_user.c`: `test_ident` |
 | `src/util.rs` | `go_match_tests` | `test_base_path_match.c`: `test_go_match_tests` |
-| `src/webpush.rs` | `encrypt_roundtrip` | pending: phase 9 |
-| `src/webpush.rs` | `vapid` | pending: phase 9 |
-| `src/webpush.rs` | `internal_ips` | pending: phase 9 |
-| `src/webpush.rs` | `external_url` | pending: phase 9 |
-| `src/webpush.rs` | `expired_status` | pending: phase 9 |
+| `src/webpush.rs` | `encrypt_roundtrip` | `test_webpush.c`: `test_encrypt_roundtrip` |
+| `src/webpush.rs` | `vapid` | `test_webpush.c`: `test_vapid` |
+| `src/webpush.rs` | `internal_ips` | `test_webpush.c`: `test_internal_ips` |
+| `src/webpush.rs` | `external_url` | `test_webpush.c`: `test_external_url` |
+| `src/webpush.rs` | `expired_status` | `test_webpush.c`: `test_expired_status` |
 | `src/xirc/casemapping.rs` | `casemaps` | `test_irc_casemapping.c`: `test_casemaps` |
 | `src/xirc/casemapping.rs` | `map_shrinks` | `test_irc_casemapping.c`: `test_map_shrinks` |
 | `src/xirc/casemapping.rs` | `map` | `test_irc_casemapping.c`: `test_map` |

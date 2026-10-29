@@ -45,6 +45,7 @@ void server_init(struct server *srv, struct loop_pool *loops, struct db_thread *
 }
 
 void server_finish(struct server *srv) {
+	webpush_sender_free(srv->web_push);
 	cpu_work_pool_free(srv->cpu);
 	server_config_unref(srv->config);
 	pthread_mutex_destroy(&srv->config_mu);
@@ -54,7 +55,65 @@ void server_finish(struct server *srv) {
 	log_free(&srv->log);
 }
 
+// The VAPID key pair, generated on first start (soju-rs
+// load_web_push_config)
+struct web_push_load {
+	struct webpush_sender *sender;
+	bool generated;
+	struct err *err;
+};
+
+static void load_web_push_config(struct db *db, void *data) {
+	struct web_push_load *j = data;
+	db_webpush_config_vec configs = {0};
+	struct err *e = nullptr;
+	if (!db_list_webpush_configs(db, &configs, &e)) {
+		err_set(&j->err, 0, "failed to list Web push configs: %s", err_msg(e));
+		err_free(e);
+		return;
+	}
+	struct db_webpush_config c;
+	db_webpush_config_init(&c);
+	if (configs.len == 0) {
+		j->generated = true;
+		xfree(c.vapid_private);
+		xfree(c.vapid_public);
+		webpush_generate_vapid_keys(&c.vapid_private, &c.vapid_public);
+		if (!db_store_webpush_config(db, &c, &e)) {
+			err_set(&j->err, 0, "failed to store Web push config: %s", err_msg(e));
+			err_free(e);
+		}
+	} else if (configs.len == 1) {
+		db_webpush_config_free(&c);
+		c = configs.data[0];
+		configs.len = 0;
+	} else {
+		err_set(&j->err, 0, "expected zero or one Web push config, got %zu", configs.len);
+	}
+	if (j->err == nullptr) {
+		j->sender = xmalloc(sizeof(*j->sender));
+		*j->sender = (struct webpush_sender){.vapid_public = xstrdup(c.vapid_public),
+						     .vapid_private = xstrdup(c.vapid_private)};
+	}
+	db_webpush_config_free(&c);
+	db_webpush_config_vec_free(&configs);
+}
+
 bool server_start(struct server *srv, struct err **err) {
+	struct web_push_load j = {0};
+	db_thread_call(srv->db, load_web_push_config, &j);
+	if (j.err != nullptr) {
+		if (err != nullptr) {
+			*err = j.err;
+		} else {
+			err_free(j.err);
+		}
+		return false;
+	}
+	if (j.generated) {
+		log_info(&srv->log, "generating Web push VAPID key pair");
+	}
+	srv->web_push = j.sender;
 	return user_server_start(srv, err);
 }
 

@@ -140,7 +140,8 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 			goto out;
 		}
 		bool from_us = same(uc->casemap, source, uc->nick);
-		const char *buffer = same(uc->casemap, target, uc->nick) ? source : target;
+		bool direct = same(uc->casemap, target, uc->nick);
+		const char *buffer = direct ? source : target;
 		if (!uc->registered || same(uc->casemap, source, uc->server_name) ||
 		    cstr_eq(target, "*") || target[0] == '$') {
 			buffer = "";
@@ -150,8 +151,10 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 			context != nullptr ? cmmap_get(&uc->channels, context) : nullptr;
 		if (channel != nullptr && cmmap_has(&channel->members, source)) {
 			buffer = channel->name;
+			direct = false;
 		}
 		user_produce(u, net, msg, buffer, from_us ? dc_id : 0, dc_id);
+		user_web_push_message(u, net, msg, buffer, direct, from_us);
 		goto out;
 	}
 	if (cstr_eq(cmd, "730") || cstr_eq(cmd, "731")) {
@@ -227,6 +230,7 @@ void user_upstream_state(struct upstream *uc, void *data) {
 	cmmap_set_casemapping(&net->channels, uc->casemap);
 	cmmap_set_casemapping(&net->delivered.targets, uc->casemap);
 	cmmap_set_casemapping(&net->latest_times, uc->casemap);
+	cmmap_set_casemapping(&net->push_targets, uc->casemap);
 	if (uc->attached && net->joined_generation != uc->generation) {
 		net->joined_generation = uc->generation;
 		strvec channels = {0}, keys = {0};
