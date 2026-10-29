@@ -64,10 +64,24 @@ S4 or false positives — mark them so and move on).
 ### 3.1 Targets
 
 **Hard limit: 500 lines per `.c`/`.h` file** in `src/`, `tests/` and
-`fuzz/` (generated `*.inc` tables and vendored `deps/` excluded). Functions
-over ~80 lines or complexity 20 are broken up while their file is split.
+`fuzz/` (generated `*.inc` tables and vendored `deps/` excluded).
 `tools/lint.sh` enforces the limit once phase B ends, so phases 8–11 can't
-reintroduce large files. Splits follow real seams (Rust module, protocol
+reintroduce large files.
+
+Function limits, chosen for readability (a function should fit on one
+screen, and C error handling makes it 20–30% longer than the Rust it
+mirrors):
+
+| Lines | Rule |
+|------:|------|
+| ≤ 50 | Target for every function |
+| 51–60 | Fine if it reads top to bottom with nesting depth ≤ 3 |
+| 61–80 | Reviewed: split unless there's a reason, written in a comment |
+| > 80 | Split, except flat dispatch (a `switch` or table whose cases are a few lines each) |
+
+Also: nesting depth ≤ 3 (early returns and the `goto out` cleanup path
+instead of nested `if`s) and cyclomatic complexity ≤ 15. Long functions
+are broken up in the same series as their file's split. Splits follow real seams (Rust module, protocol
 area, lifecycle versus I/O); a file isn't cut in half just to meet the
 number. Line counts below are estimates taken from each file's section
 boundaries.
@@ -271,8 +285,8 @@ commit (or series) that passes CI and updates `doc/audit-findings.md`.
 ## 6. Done when
 
 - No `.c`/`.h` file in `src/`, `tests/` or `fuzz/` over 500 lines, enforced
-  by `tools/lint.sh`; no function over ~80 lines without a comment saying
-  why.
+  by `tools/lint.sh`; no function over 80 lines except flat dispatch, and
+  each one over 60 lines has a comment saying why it isn't split.
 - Every S1/S2 finding fixed with a test; S3 fixed or recorded as a
   deliberate difference; S4 fixed or closed.
 - New fuzzers (section 4.1) each run ≥ 1 CPU-hour clean; existing ones
