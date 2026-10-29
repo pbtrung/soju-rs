@@ -4,8 +4,9 @@ Status: **partial bootstrap implementation; phases 0 and 1 are not complete.**
 The C build scaffold, base helpers and IRC parser exist. Bootstrap spikes,
 dependency fixes and CI wiring are recorded in `doc/spikes.md`; the full
 phase exit criteria below have not yet been met.
-Source of truth for behaviour: soju-rs `main` at v0.99.15 (`02acf7d`), ~25k
-lines of Rust in 106 files. This branch (`c-port`) starts empty; the Rust tree
+Source of truth for behaviour: soju-rs `main` at v0.99.23 (`c350574`), ~33k
+lines of Rust in 90 files (plan first written against v0.99.15, `02acf7d`;
+section 8 lists what changed on `main` since then). This branch (`c-port`) starts empty; the Rust tree
 stays on `main` and is used as a reference and as a test oracle.
 
 The plan puts the **memory-safety test strategy first** (section 2). It is
@@ -25,6 +26,11 @@ Goals
   `ws+insecure`/`http+insecure`, `ws+unix`/`http+unix`, `ident`,
   `http+prometheus`), PROXY protocol, identd, Web Push, OAuth2/HTTP auth,
   SIGHUP reload, message expiry, inactive-user disabling.
+- The soju-rs additions: `message-store turso` (Turso Cloud controller
+  database plus one database per user, over Turso's SQL-over-HTTP (Hrana)
+  protocol and Platform API, including `sojuctl turso create-admin`) and the
+  `soju.im/multiplex` extension (`BOUNCER ATTACH`/`DETACH`, virtual
+  downstream connections tagged `soju.im/network`).
 - Every "Differences from upstream soju" item in the Rust README holds for the
   C port too (lossy UTF-8, CR/LF handling, ALPN, X-Forwarded-For rule,
   clock-skew handling, vacuum policy, ...).
@@ -84,10 +90,15 @@ These are rules, not suggestions: code review rejects violations, and
    (`OPEN → CLOSING → CLOSED`) and refcount held by: the handle, each
    in-flight write request, each pending TLS/lws operation. The struct is
    freed when the refcount reaches zero *and* the close callback has run.
-9. **Bounded queues.** Rust uses unbounded channels; the C write queue keeps
-   a byte counter and closes connections exceeding a hard cap (default
-   16 MiB, far above any backlog) so a stuck reader cannot grow memory
-   without limit. Documented as a deliberate divergence.
+9. **Bounded queues, with the same limits as soju-rs.** Since v0.99.16 the
+   Rust code bounds its queues too, and the C port uses the same numbers:
+   the write queue keeps a byte counter and closes connections with more
+   than 16 MiB queued; a downstream or upstream stops reading while 64 of
+   its messages wait for the user's event queue (TCP flow control, events
+   stay in order per connection); queued upstream commands (WHO, WHOIS,
+   LIST, ...) are capped at 64 per type; CPU jobs (bcrypt, key generation)
+   go through a limiter of one running job per CPU and at most 64 waiting,
+   and one certfp generation per user.
 10. **C23, using the features that catch bugs.** The code is written in
     ISO C23 (`-std=c23`), built with the latest GCC and the latest Clang
     (section 3.2):
@@ -125,10 +136,10 @@ pinned).
 |------------|----------------|-----------|---------|
 | `debug`    | `-O0 -g3 -ftrivial-auto-var-init=pattern` | mimalloc with `MI_DEBUG=3` (guard bytes, poison on free) | everyday dev |
 | `asan`     | `-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all` | system malloc (mimalloc off: ASan must own malloc) | UAF, overflow, leaks (LSan), UB |
-| `msan`     | `-fsanitize=memory -fsanitize-memory-track-origins=2`, deps rebuilt with MSan, OpenSSL `no-asm` | system malloc | uninitialised reads |
+| `msan`     | `-fsanitize=memory -fsanitize-memory-track-origins=2`, deps rebuilt with MSan, system OpenSSL replaced by an MSan build of the same version (`no-asm`) | system malloc | uninitialised reads |
 | `tsan`     | `-fsanitize=thread` | system malloc | DB thread / threadpool handoff races |
 | `valgrind` | `-O1 -g`, mimalloc with `MI_TRACK_VALGRIND=ON` | mimalloc | second opinion on leaks/uninit without recompiling deps |
-| `release`  | `-O2 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fPIE -pie -Wl,-z,relro,-z,now` | mimalloc `MI_SECURE=ON` | shipped binaries (glibc + static musl) |
+| `release`  | `-O2 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fPIE -pie -Wl,-z,relro,-z,now` | mimalloc `MI_SECURE=ON` | shipped binaries (glibc and musl, both dynamic) |
 | `fuzz`     | `-fsanitize=fuzzer,address,undefined` | system malloc | libFuzzer harnesses |
 
 Warnings in every mode: `-std=c23 -Wall -Wextra -Wpedantic -Wshadow
@@ -144,7 +155,8 @@ Each layer runs under `asan`, then `valgrind`; parsers and protocol code also
 under `msan`; anything crossing threads under `tsan`.
 
 **L1 — Unit tests (one per Rust unit test, plus more).**
-The Rust tree has 109 `#[test]`/`#[tokio::test]` functions. Each gets a C
+The Rust tree has 166 `#[test]`/`#[tokio::test]` unit test functions
+(v0.99.23; 109 at v0.99.15). Each gets a C
 counterpart with the same name in `tests/unit/`, tracked in
 `tests/PORTED_TESTS.md` (Rust path → C test). Framework: **cmocka**
 (vendored, pinned like the other deps):
@@ -164,10 +176,11 @@ counterpart with the same name in `tests/unit/`, tracked in
 The L2 integration tests and L3/L4 torture loops use the same cmocka runner.
 
 **L2 — Integration tests (ports of `tests/server.rs`).**
-`tests/server.rs` has 17 scenarios (broadcast, chat history memory/db,
+`tests/server.rs` has 19 scenarios (broadcast, chat history memory/db,
 statusmsg, malformed upstream messages, CAP REQ removal, labeled-response ACK,
 SASL errors, CHATHISTORY params/limit, read marker, clock skew, multiline,
-BouncerServ for other users, blocking work, MONITOR invalid targets). They
+BouncerServ for other users, blocking work, MONITOR invalid targets,
+multiplex, multiplex unsupported). They
 run in-process: the server on a libuv loop, a fake upstream and test clients
 over `socketpair()`/loopback. Each scenario runs in two DB modes:
 - *async*: real DB thread (catches handoff bugs; also run under TSan),
@@ -187,7 +200,9 @@ Each is a loop over an injection point:
   close the downstream/upstream right before event #k is processed.
 - *Pending-job races*: close a client while each kind of DB job is in flight
   (store message, load history, update receipts, create network, certfp
-  generation, bcrypt check, Web Push send, OAuth2 introspection).
+  generation, bcrypt check, Web Push send, OAuth2 introspection, Turso batch commit).
+- *Multiplex*: close the bouncer connection, or `BOUNCER DETACH`, while each
+  virtual connection is in its registration burst or has jobs in flight.
 - *Admin races*: `user delete` / `network delete` / `user update -enabled
   false` while that user has connected clients and connecting upstreams.
 - *Reload races*: SIGHUP (config, TLS cert, MOTD) while TLS handshakes and
@@ -209,6 +224,10 @@ Each is a loop over an injection point:
   close_notify vs. TCP RST, peers sending garbage after the handshake.
 - *Library errors*: OpenSSL `EVP_*` failures forced via a provider stub in
   the Web Push and certfp tests.
+- *Turso*: the mock Platform/Hrana server (port of the Rust independent
+  mock, `src/database/turso/tests.rs`) drops responses, closes streams,
+  returns malformed JSON, lost COMMIT replies and hosted size/processing
+  limits on the k-th request.
 
 **L5 — Fuzzing (`fuzz/`, libFuzzer + ASan/UBSan, MSan variant).**
 Stateless harnesses, each with a seed corpus extracted from the compat
@@ -231,6 +250,8 @@ transcripts and Rust unit tests:
 | `fuzz_sasl` | AUTHENTICATE chunking + PLAIN decode | no crash |
 | `fuzz_ident` | identd query parse | no crash |
 | `fuzz_json` | OAuth2 discovery/introspection, Web Push JSON | no crash |
+| `fuzz_hrana` | Hrana pipeline responses (values, blobs, batons, errors) | no crash; malformed replies rejected |
+| `fuzz_multiplex` | `soju.im/network` tag routing, `BOUNCER ATTACH`/`DETACH` | no crash |
 | `fuzz_webpush` | encrypt then decrypt with test keys | round trip |
 
 Stateful harnesses (the important ones for UAF):
@@ -305,32 +326,38 @@ comment linking the upstream library bug.
 ## 3. Dependencies
 
 Two kinds:
-- **System library**: libxcrypt (plus libc). On the glibc target it is
-  linked dynamically (runtime dependency `libcrypt.so.2`, present on any
-  mainstream distro). Alpine edge does not package libxcrypt (checked
-  2026-10-22), so the static musl build compiles the libxcrypt release that
-  Arch ships at the time (4.5.2 today) from its release tarball, checksum
-  verified, as a static library.
+- **System libraries**: OpenSSL 3 and libxcrypt (plus libc), always linked
+  **dynamically** from the distribution (runtime dependencies `libssl.so.3`,
+  `libcrypto.so.3`, `libcrypt.so.2`). No binary is linked with `-static`,
+  so OpenSSL security updates reach soju through the distro without a
+  rebuild. OpenSSL is whatever the image ships (3.6.5 on Arch and Alpine
+  edge on 2026-10-29); CMake requires ≥ 3.0 via `find_package(OpenSSL)`.
+  Alpine edge does not package libxcrypt (checked 2026-10-22), so the musl
+  build compiles the libxcrypt release that Arch ships at the time (4.5.2
+  today) from its release tarball, checksum verified, and links it into
+  the binary.
 - **Vendored libraries** (everything else): pinned to the latest stable
   release of each at bootstrap time (versions verified against upstream tags
   then, recorded in `deps/VERSIONS`), vendored as tarballs with checksums,
-  built static by CMake `ExternalProject`. This covers the **SQLite
-  amalgamation** (like rusqlite's `bundled` feature), libuv, OpenSSL,
-  libwebsockets (built with `LWS_WITH_LIBUV`, which distro packages don't
+  built static by CMake `ExternalProject` and linked into the (dynamic)
+  binaries. This covers the **SQLite amalgamation** (like rusqlite's
+  `bundled` feature), libuv, libwebsockets (against the system OpenSSL), (built with `LWS_WITH_LIBUV`, which distro packages don't
   always enable), mimalloc (3.x), utf8proc, yyjson and cmocka. Both targets
   get the same versions, and the MSan build can instrument them.
 
-Sanitizer builds and the system library: libxcrypt is not instrumented, so
-the `msan` build (and only that one, test-only) compiles the same libxcrypt
-version from source with MSan. ASan, TSan and valgrind work with the
+Sanitizer builds and the system libraries: they are not instrumented, so
+the `msan` build (and only that one, test-only) compiles the same OpenSSL
+(`no-asm`) and libxcrypt versions as the gnu image ships from source with
+MSan. ASan, TSan and valgrind work with the
 uninstrumented system library.
 
 | Rust crate(s) | C replacement | Notes |
 |---------------|---------------|-------|
 | tokio (runtime, timers, signals, process) | **libuv** | single loop thread + DB thread + threadpool |
-| tokio-rustls, rustls, aws-lc-rs, webpki-roots, rustls-native-certs | **OpenSSL 3** | our own TLS-over-libuv layer using memory BIOs; system trust store via `SSL_CTX_set_default_verify_paths` |
+| tokio-rustls, rustls, aws-lc-rs, webpki-roots, rustls-native-certs | **OpenSSL 3** (system, dynamic) | our own TLS-over-libuv layer using memory BIOs; system trust store via `SSL_CTX_set_default_verify_paths` |
 | hyper, tokio-tungstenite | **libwebsockets** (`LWS_WITH_LIBUV`, foreign loop) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
 | reqwest | **libwebsockets** HTTP client | OAuth2, HTTP auth, Web Push; custom DNS check for internal IPs |
+| reqwest (blocking Turso worker), rusqlite overlay | **libwebsockets** HTTP client on the DB thread's own lws context, yyjson | Turso Hrana pipelines and Platform API; the DB thread blocks on its reply like the Rust HTTP worker; in-memory SQLite overlay for buffered messages |
 | mimalloc | **mimalloc** | `MI_SECURE` in release |
 | (Rust `str` UTF-8 handling) | **utf8proc** | validation, lossy decoding, char-boundary truncation, NFC where needed |
 | rusqlite (bundled) | **SQLite amalgamation** (vendored) | compiled into the binary with `SQLITE_ENABLE_FTS5`, `SQLITE_THREADSAFE=2` (one DB thread owns the connection), `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1` if soju-rs relies on it (checked in phase 2); WAL; the same options as rusqlite's bundled build so behaviour matches |
@@ -363,8 +390,8 @@ Docker from freshly pulled bases with all packages upgraded
 
 | Target | Image | Build |
 |--------|-------|-------|
-| `x86_64-linux-gnu` | `archlinux:latest` | dynamic glibc + libxcrypt, everything else static |
-| `x86_64-linux-musl` | `alpine:edge` | fully static (`-static`) |
+| `x86_64-linux-gnu` | `archlinux:latest` | dynamic glibc, OpenSSL, libxcrypt; vendored libraries linked in |
+| `x86_64-linux-musl` | `alpine:edge` | dynamic musl and OpenSSL; libxcrypt and vendored libraries linked in |
 
 Files: `docker/Dockerfile.gnu`, `docker/Dockerfile.musl`,
 `tools/docker-test.sh <target> [mode...]` (configure, build, CTest, compat
@@ -420,7 +447,7 @@ matrix is 2 targets × 2 compilers × the modes allowed for each.
 Everything runs on the gnu target. The musl target catches what differs
 there: the smaller default thread stack (128 KiB, so the DB thread and
 threadpool set stack sizes explicitly), musl's `getaddrinfo` and `crypt`
-symbol clashes with the static libxcrypt. The DB-thread and `uv_async`
+symbol clashes with the linked-in libxcrypt. The DB-thread and `uv_async`
 handoff uses only `stdatomic.h` acquire/release or libuv/pthread primitives,
 never plain flags, so TSan on gnu covers it for both targets.
 
@@ -490,15 +517,18 @@ src/
              whox.c ircutil.c
   config/    scfg.c config.c flags.c
   db/        db.c dbthread.c sqlite_schema.sql migrations.c users.c networks.c
-             messages.c receipts.c webpush.c
+             messages.c receipts.c webpush.c routing.c message_buffer.c
+  db/turso/  turso.c hrana.c platform.c controller_schema.sql
+             tenant_schema.sql tenant_user_migration.sql
   net/       listener.c conn.c tls.c proxyproto.c identd.c rate.c
   http/      lws.c websocket.c httpclient.c
-  downstream/ caps.c registration.c sasl.c send.c sync.c welcome.c cmds/*.c
+  downstream/ caps.c registration.c sasl.c send.c sync.c welcome.c multiplex.c
+             cmds/*.c
   upstream/  upstream.c connect.c registration.c channels.c users.c messages.c
              commands.c
   user/      user.c network.c channels.c delivered.c events.c upstream_conn.c
              webpush.c
-  msgstore/  msgstore.c memory.c db.c bare.c
+  msgstore/  msgstore.c memory.c db.c bare.c turso.c
   service/   service.c auth.c channel.c duration.c network.c server.c user.c
   auth.c certfp.c webpush.c metrics.c server.c
   main/      soju.c sojuctl.c
@@ -534,8 +564,11 @@ fuzzers vs. the Rust oracle. This phase has the highest bug density per line;
 it gets the longest fuzzing before moving on (≥ 8 CPU-hours per harness).
 
 **Phase 2 — Database**
-Schema, migrations (from every historical upstream version), all queries,
-DB thread with job queue, bcrypt via threadpool.
+Schema (local SQLite schema 33: rowid `Message` table, `MessageTextIndex`,
+`MessageIdHighWater`), migrations (from every historical upstream version),
+all queries, DB thread with job queue, bcrypt via the CPU-job limiter.
+Message IDs are never reused (high-water mark recorded before deletes);
+expiry deletes 2000 rows at a time with a 10 ms pause.
 Tests: port `src/database/sqlite/tests.rs`; open databases created by Go soju
 v0.11 and by soju-rs, run migrations, compare `sqlite3 .dump` output with the
 Rust result; SQLite fault-injection VFS; TSan on the job handoff;
@@ -552,12 +585,17 @@ TLS torture cases.
 
 **Phase 4 — Downstream**
 Registration (`username/network@client`), CAP 302, SASL (PLAIN, EXTERNAL,
-OAUTHBEARER), welcome, caps, labeled-response, batches, send helpers, sync.
+OAUTHBEARER), welcome, caps, labeled-response, batches, send helpers, sync,
+`soju.im/multiplex` (connection views: a tagged writer that can be closed
+without closing the connection; per-view batches, labels and multiline).
 Tests: unit tests of `downstream/*`; `fuzz_downstream_session` starts here.
 
 **Phase 5 — Upstream**
-Connect (with backoff and jitter), registration, SASL client, caps,
-channels, users, messages, commands, regain-nick and auto-detach timers.
+Connect (with backoff and jitter, TCP keep-alive), registration (60 s
+timeout once connected; CAP END on SASL NAK), SASL client, caps, channels,
+users, messages, commands (64 queued per type, only the command name logged
+on timeout), regain-nick and auto-detach timers. Pinned fingerprints match
+the leaf certificate only.
 Tests: port `upstream/server_tests.rs`; `fuzz_upstream_session`.
 
 **Phase 6 — User and networks**
@@ -578,9 +616,24 @@ Playwright suite; L3 reload races during upgrades.
 
 **Phase 9 — Auth and Web Push**
 HTTP and OAuth2 authenticators, Web Push (VAPID JWT, RFC 8291 encryption,
-expired-subscription handling, internal-IP refusal) over the lws HTTP client.
+expired-subscription handling, internal-IP refusal, at most 25 subscriptions,
+per-user cache of networks with subscriptions) over the lws HTTP client.
 Tests: port `auth.rs`, `webpush.rs` tests (decrypt round trip, VAPID, internal
 IPs); local mock HTTP servers.
+
+**Phase 9b — Turso Cloud storage**
+Hrana client (pipelines, batons, replication indexes, unpadded base64 blobs,
+named parameters, never replaying ambiguous commits), Platform API
+provisioning (25-character base36 names, `provisioning`/`ready`/`deleting`
+states, recovery at startup), controller and tenant schemas (tenant schema
+33: `WITHOUT ROWID` `Message` keyed `(target, time, id)`, resumable copy
+migration), routing of queries to the user's database, message write
+batching (chathistory-limit rows, 1 s partial flush, 512 KiB body budget,
+splitting on hosted limits, bisection of constraint-rejected rows, shutdown
+drain), `sojuctl turso create-admin`.
+Tests: port `src/database/turso/tests.rs` and `cost_tests.rs` against a C
+port of the Platform/Hrana mock; L4 Turso faults; L3 network deletion and
+shutdown with buffered writes.
 
 **Phase 10 — Process glue**
 `soju` main (flags, `-version`, SIGHUP reload, SIGTERM/SIGINT shutdown,
@@ -590,13 +643,13 @@ Tests: L3 shutdown races, L4 everything, `plumbing.py`.
 
 **Phase 11 — Hardening and release**
 Full L6 three-way compat under ASan and valgrind, 24 h L7 soak, performance
-comparison with soju-rs, release builds (x86_64 glibc + static musl), README "Differences" section for the C port.
+comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically linked), README "Differences" section for the C port.
 
 ---
 
 ## 6. Definition of done
 
-- All 109 Rust unit tests and 17 integration scenarios ported and passing.
+- All 166 Rust unit tests and 19 integration scenarios ported and passing.
 - `tests/compat` differential, IRCv3 spec, plumbing and gamja suites pass,
   with soju-c transcripts identical to soju-rs.
 - Clean under ASan/UBSan, MSan, TSan and valgrind across L1–L4 and L6.
@@ -608,14 +661,32 @@ comparison with soju-rs, release builds (x86_64 glibc + static musl), README "Di
 ## 7. Decisions
 
 1. Allocator: **mimalloc**.
-2. Write-queue cap (rule 9): **kept**, documented as a divergence from
-   soju-rs.
+2. Write-queue cap (rule 9): **kept**; soju-rs adopted the same 16 MiB cap
+   in v0.99.16, so it is no longer a divergence.
 3. JSON: **yyjson**.
 4. Binaries are named **`soju`** and **`sojuctl`**. Test scripts may copy
    them under other names (e.g. `soju-c`) to run side by side with soju-rs
    and Go soju in the compat harness.
-5. bcrypt: **libxcrypt** (system library); SQLite: **bundled** amalgamation.
+5. bcrypt: **libxcrypt** (system library); SQLite: **bundled** amalgamation;
+   TLS/crypto: **system OpenSSL, dynamically linked**; no `-static` binaries.
 6. Targets: Linux x86_64 only, `gnu` and `musl`, built and tested in
    `archlinux:latest` and `alpine:edge` (section 3.1). No aarch64.
+   Release archives document their runtime packages (`openssl`,
+   `libxcrypt` on glibc).
 7. Compilers: latest GCC and latest Clang, both required to pass
    (section 3.2).
+8. Turso Cloud storage and `soju.im/multiplex` are **in scope**: they are
+   documented soju-rs features (README "Additions").
+
+## 8. Changes on `main` since v0.99.15
+
+Folded into the sections above; listed here so the next rebase of this plan
+starts from `c350574` (v0.99.23).
+
+| Commit | Change | Plan impact |
+|--------|--------|-------------|
+| `8780ccd` | Audit fixes: leaf-only fingerprint pinning, 16 MiB output cap, 64-message input backpressure, 64 queued commands per type, CPU-job limiter, linear tag parsing, never-reused message IDs (`MessageIdHighWater`), 60 s upstream registration timeout, TCP keep-alive, bcrypt upgrade preservation, `sojuctl` quoting | rule 9, phases 1–3, 5, 10 |
+| `30710ff` | Web Push subscription cache; chunked expiry deletes | phases 2, 9 |
+| `e0957f3` | `soju.im/multiplex` | goals, phase 4, L2/L3/L5 |
+| `e3a3349` | `MessageTextIndex` (schema 31) | phase 2 |
+| `d478f60`…`c350574` | Turso Cloud storage, write batching, schemas 32–33, clustered tenant `Message`, SASL NAK and registration-timer fixes | goals, deps, layout, phase 9b, L4 |
