@@ -70,3 +70,25 @@ read it first.
   on a violated property. Run `build/clang-fuzz/fuzz_<name> -max_total_time=60
   fuzz/seeds/fuzz_<name>` (copy the seeds to a scratch directory first if
   you don't want new corpus files added to the seeds directory).
+
+## Differential testing against soju-rs
+
+- `tests/oracle` is a small Rust program that runs soju-rs's own code (and
+  the std/crate behaviour it relies on) for one input at a time;
+  `tools/oracle.sh` builds it against a worktree of `main` at the revision
+  the port follows (`build/soju-main`). `tools/ci.sh` builds it when cargo
+  is available.
+- `fuzz/diff_oracle.c` runs each op on both sides and aborts on any
+  difference; its seeds run as a CTest test in every mode. To add a
+  comparison: add an op at the end of `oracle_ops` (`fuzz/oracle_ops.c`) and
+  to the `match` in `tests/oracle/src/main.rs`, formatting the result the
+  same way, and add seeds (first byte: the op's index).
+- Rust strings may contain NUL bytes; C strings can't. Inputs with NUL
+  bytes are only compared for ops that take `struct str` throughout. Where
+  a value decoded from data can contain NUL (e.g. message ID targets), keep
+  it in a `struct strbuf`.
+- Unicode properties come from `src/base/unicode_tables.inc`, generated
+  with `tools/gen-unicode-tables.sh` from the Rust toolchain: regenerate it
+  when soju-rs moves to a newer Rust release.
+- Error messages that soju-rs formats with `{:?}` use `utf8_debug_str`
+  (Rust's string escaping).

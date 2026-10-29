@@ -124,3 +124,7 @@ void irc_msg_truncate_params(struct irc_msg *msg, size_t n);
 void irc_msg_format(const struct irc_msg *msg, struct strbuf *out);
 // The formatted message as a new string
 [[nodiscard]] char *irc_msg_to_string(const struct irc_msg *msg);
+
+// A list of owned messages
+typedef VEC(struct irc_msg *) irc_msg_vec;
+void irc_msg_vec_free(irc_msg_vec *v);

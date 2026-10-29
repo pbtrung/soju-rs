@@ -50,6 +50,14 @@ run_preset() {
 		return 1
 	fi
 }
+# The differential oracle (fuzz/diff_*.c compare the C port with soju-rs):
+# built where cargo and the soju-rs main branch are available
+if [[ -z "${CI_NO_ORACLE:-}" ]] && command -v cargo >/dev/null &&
+	git rev-parse --verify -q main >/dev/null; then
+	mkdir -p build
+	tools/oracle.sh >build/oracle.log 2>&1 || { echo "FAILED oracle (see build/oracle.log)"; exit 1; }
+fi
+
 export -f run_preset
 
 printf '%s\n' "${presets[@]}" | xargs -P "$jobs" -I{} bash -c "run_preset \"\$1\"" _ '{}'

@@ -99,20 +99,34 @@ endforeach()
 # Fuzz harnesses (fuzz/fuzz_*.c). With SOJU_MODE=fuzz they are libFuzzer
 # binaries; in every other mode they are linked with a replay driver and
 # run over their committed seeds (fuzz/seeds/<name>/) as regression tests.
-file(GLOB fuzzers CONFIGURE_DEPENDS fuzz/fuzz_*.c)
+#
+# fuzz/diff_*.c are differential harnesses comparing the C port with
+# soju-rs through tests/oracle (built by tools/oracle.sh); without the
+# oracle binary they only run the C side.
+set(SOJU_ORACLE "${CMAKE_SOURCE_DIR}/build/oracle/release/soju-oracle" CACHE FILEPATH
+	"Differential oracle binary (tools/oracle.sh)")
+file(GLOB fuzzers CONFIGURE_DEPENDS fuzz/fuzz_*.c fuzz/diff_*.c)
 foreach(src IN LISTS fuzzers)
 	get_filename_component(exe "${src}" NAME_WE)
+	set(extra "")
+	if(exe MATCHES "^diff_")
+		set(extra fuzz/oracle_ops.c)
+	endif()
 	if(SOJU_MODE STREQUAL "fuzz")
-		soju_executable(${exe} "${src}")
+		soju_executable(${exe} "${src}" ${extra})
 		target_link_options(${exe} PRIVATE -fsanitize=fuzzer)
 	else()
-		soju_executable(${exe} "${src}" fuzz/replay.c)
+		soju_executable(${exe} "${src}" fuzz/replay.c ${extra})
 		if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/fuzz/seeds/${exe}")
 			add_test(NAME "${exe}.seeds"
 				COMMAND ${exe} "${CMAKE_SOURCE_DIR}/fuzz/seeds/${exe}")
 			set_tests_properties("${exe}.seeds" PROPERTIES LABELS fuzz-replay TIMEOUT 300)
 			soju_test_env("${exe}.seeds")
 		endif()
+	endif()
+	if(exe MATCHES "^diff_")
+		target_compile_definitions(${exe} PRIVATE "SOJU_ORACLE_DEFAULT=\"${SOJU_ORACLE}\"")
+		target_include_directories(${exe} PRIVATE fuzz)
 	endif()
 endforeach()
 

@@ -1,7 +1,8 @@
 // UTF-8 handling with the semantics of Rust's str, char and String, which
 // soju-rs relies on. Where Rust uses Unicode properties (char::is_whitespace,
 // str::to_lowercase, ...), these functions give the same answers as the Rust
-// toolchain soju-rs is built with, from tables generated with it.
+// toolchain soju-rs is built with, from tables generated with it
+// (tools/gen-unicode-tables.sh).
 //
 // Strings received from the network are made valid UTF-8 once, with
 // utf8_lossy(); the other functions expect valid UTF-8 but never read out
@@ -44,6 +45,8 @@ void utf8_lossy(struct strbuf *out, struct str s);
 [[nodiscard]] bool utf8_is_numeric(uint32_t cp);
 [[nodiscard]] bool utf8_is_alphanumeric(uint32_t cp);
 [[nodiscard]] bool utf8_is_control(uint32_t cp);
+[[nodiscard]] bool utf8_is_lowercase(uint32_t cp);
+[[nodiscard]] bool utf8_is_uppercase(uint32_t cp);
 
 // str::trim, trim_start, trim_end (Unicode whitespace)
 [[nodiscard]] struct str utf8_trim(struct str s);
@@ -60,3 +63,10 @@ void utf8_to_upper(struct strbuf *out, struct str s);
 // Appends s lowercased like str::to_lowercase (including the final sigma
 // rule)
 void utf8_to_lower(struct strbuf *out, struct str s);
+
+// Appends s formatted like Rust's `{:?}` on a str: quoted, with \0 \t \r
+// \n \\ \" escapes and \u{...} for characters Rust doesn't print as is
+// (error messages of soju-rs use it)
+void utf8_debug_str(struct strbuf *out, struct str s);
+// The same as a new string
+[[nodiscard]] char *utf8_debug_cstr(struct str s);

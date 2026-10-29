@@ -264,3 +264,71 @@ bool strmap_next(const struct strmap *m, size_t *it, const char **key, void **va
 	}
 	return false;
 }
+
+// The index slot pointing at entry ei
+static size_t slot_of_entry(const struct strmap *m, size_t ei) {
+	size_t mask = m->index_cap - 1;
+	size_t i = (size_t)m->entries[ei].hash & mask;
+	while (m->index[i] != ei + 1) {
+		i = (i + 1) & mask;
+	}
+	return i;
+}
+
+// Drops removed entries at the end of the entry array
+static void trim_removed(struct strmap *m) {
+	while (m->n_entries > 0 && m->entries[m->n_entries - 1].key == nullptr) {
+		m->n_entries--;
+	}
+}
+
+void *strmap_swap_take(struct strmap *m, const char *key) {
+	size_t slot = lookup(m, key);
+	if (slot == SIZE_MAX) {
+		return nullptr;
+	}
+	size_t ei = m->index[slot] - 1;
+	struct strmap_entry *e = &m->entries[ei];
+	void *value = e->value;
+	xfree(e->key);
+	*e = (struct strmap_entry){0};
+	m->index[slot] = SLOT_REMOVED;
+	m->live--;
+	trim_removed(m);
+	if (ei < m->n_entries) {
+		// Move the last live entry into the hole
+		size_t last = m->n_entries - 1;
+		m->index[slot_of_entry(m, last)] = ei + 1;
+		m->entries[ei] = m->entries[last];
+		m->entries[last] = (struct strmap_entry){0};
+		trim_removed(m);
+	}
+	return value;
+}
+
+bool strmap_swap_remove(struct strmap *m, const char *key) {
+	if (!strmap_has(m, key)) {
+		return false;
+	}
+	void *value = strmap_swap_take(m, key);
+	if (m->free_value != nullptr) {
+		m->free_value(value);
+	}
+	return true;
+}
+
+size_t strmap_capacity(const struct strmap *m) {
+	return m->cap_entries;
+}
+
+void strmap_shrink_to_fit(struct strmap *m) {
+	if (m->live == 0) {
+		xfree(m->entries);
+		xfree(m->index);
+		*m = (struct strmap){.free_value = m->free_value};
+		return;
+	}
+	rehash(m, m->live);
+	m->cap_entries = m->n_entries;
+	m->entries = xreallocarray(m->entries, m->cap_entries, sizeof(*m->entries));
+}

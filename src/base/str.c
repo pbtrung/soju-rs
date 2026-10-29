@@ -208,8 +208,12 @@ void strbuf_reserve(struct strbuf *sb, size_t extra) {
 	while (cap < need) {
 		cap = size_mul(cap, 2);
 	}
+	bool fresh = sb->buf == nullptr;
 	sb->buf = xrealloc(sb->buf, cap);
 	sb->cap = cap;
+	if (fresh) {
+		sb->buf[0] = '\0';
+	}
 }
 
 void strbuf_append(struct strbuf *sb, const char *p, size_t n) {

@@ -1,0 +1,16 @@
+# Differential oracle: exposes soju-rs parsers and std behaviours over
+# stdin/stdout so the C port can be compared against them (PLAN.md 2.3 L5).
+# Built by tools/oracle.sh against a worktree of soju-rs main at the pinned
+# revision; not shipped.
+[package]
+name = "soju-oracle"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+soju = { path = "../../build/soju-main" }
+base64 = "0.23.1"
+ipnet = "2.12.2"
+
+[workspace]

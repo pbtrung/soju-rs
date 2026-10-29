@@ -1,6 +1,9 @@
 #include "irc/message.h"
 
+#include <stdint.h>
+
 #include "base/alloc.h"
+#include "base/map.h"
 #include "base/utf8.h"
 
 void irc_escape_tag_value(struct strbuf *out, struct str v) {
@@ -86,19 +89,53 @@ void irc_tags_set(struct irc_tags *tags, const char *key, const char *value) {
 	irc_tags_set_str(tags, str_from(key), str_from(value));
 }
 
+// Sets a parsed tag, looking up its key in index (key -> position + 1)
+static void parse_set(struct irc_tags *tags, struct strmap *index, struct str key,
+		      struct str value) {
+	AUTOFREE char *k = str_dup(key);
+	uintptr_t pos = (uintptr_t)strmap_get(index, k);
+	if (pos != 0) {
+		struct irc_tag *t = &tags->v.data[pos - 1];
+		xfree(t->value);
+		t->value = str_dup(value);
+		return;
+	}
+	vec_push(&tags->v, (struct irc_tag){.key = xstrdup(k), .value = str_dup(value)});
+	strmap_set(index, k, (void *)(uintptr_t)tags->v.len);
+}
+
 void irc_tags_parse(struct irc_tags *tags, struct str s) {
 	AUTO_STRBUF struct strbuf value = STRBUF_INIT;
+	// Looking up previous keys linearly would make parsing quadratic in
+	// the number of tags, which a client controls: past 16 tags, keys are
+	// indexed (soju-rs does the same)
+	size_t semicolons = 0;
+	for (size_t i = 0; i < s.len; i++) {
+		semicolons += s.p[i] == ';';
+	}
+	bool indexed = semicolons >= 16;
+	struct strmap index;
+	strmap_init(&index, nullptr);
+	if (indexed) {
+		for (size_t i = 0; i < tags->v.len; i++) {
+			strmap_set(&index, tags->v.data[i].key, (void *)(uintptr_t)(i + 1));
+		}
+	}
 	struct str rest = s, tag;
 	while (str_next_field(&rest, ';', &tag)) {
-		struct str k, v;
+		struct str k = tag, v = STR_EMPTY;
 		if (str_split_once(tag, '=', &k, &v)) {
 			strbuf_reset(&value);
 			irc_parse_tag_value(&value, v);
-			irc_tags_set_str(tags, k, strbuf_str(&value));
+			v = strbuf_str(&value);
+		}
+		if (indexed) {
+			parse_set(tags, &index, k, v);
 		} else {
-			irc_tags_set_str(tags, tag, STR_EMPTY);
+			irc_tags_set_str(tags, k, v);
 		}
 	}
+	strmap_free(&index);
 }
 
 const char *irc_tags_get(const struct irc_tags *tags, const char *key) {
@@ -444,4 +481,12 @@ char *irc_msg_to_string(const struct irc_msg *msg) {
 	struct strbuf sb = STRBUF_INIT;
 	irc_msg_format(msg, &sb);
 	return strbuf_take(&sb);
+}
+
+static void msg_free_ptr(struct irc_msg **m) {
+	irc_msg_free(*m);
+}
+
+void irc_msg_vec_free(irc_msg_vec *v) {
+	vec_free_with(v, msg_free_ptr);
 }

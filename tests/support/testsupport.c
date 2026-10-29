@@ -5,6 +5,7 @@
 
 #include "base/alloc.h"
 #include "base/ref.h"
+#include "irc/message.h"
 
 #ifdef SOJU_MODE_DEBUG
 static void *t_malloc(size_t n) {
@@ -57,6 +58,18 @@ void t_assert_cstr_eq(const char *a, const char *b, const char *file, int line) 
 	if (a == nullptr || b == nullptr ? a != b : strcmp(a, b) != 0) {
 		cmocka_print_error("%s:%d: \"%s\" != \"%s\"\n", file, line,
 				   a != nullptr ? a : "(null)", b != nullptr ? b : "(null)");
+		_fail(file, line);
+	}
+}
+
+void t_assert_msg_str(const struct irc_msg *m, const char *want, const char *file, int line) {
+	char *s = irc_msg_to_string(m);
+	bool eq = strcmp(s, want) == 0;
+	if (!eq) {
+		cmocka_print_error("%s:%d: \"%s\" != \"%s\"\n", file, line, s, want);
+	}
+	xfree(s);
+	if (!eq) {
 		_fail(file, line);
 	}
 }

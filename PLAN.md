@@ -155,7 +155,7 @@ Each layer runs under `asan`, then `valgrind`; parsers and protocol code also
 under `msan`; anything crossing threads under `tsan`.
 
 **L1 — Unit tests (one per Rust unit test, plus more).**
-The Rust tree has 166 `#[test]`/`#[tokio::test]` unit test functions
+The Rust tree has 165 `#[test]`/`#[tokio::test]` unit test functions
 (v0.99.23; 109 at v0.99.15). Each gets a C
 counterpart with the same name in `tests/unit/`, tracked in
 `tests/PORTED_TESTS.md` (Rust path → C test). Framework: **cmocka**
@@ -176,8 +176,8 @@ counterpart with the same name in `tests/unit/`, tracked in
 The L2 integration tests and L3/L4 torture loops use the same cmocka runner.
 
 **L2 — Integration tests (ports of `tests/server.rs`).**
-`tests/server.rs` has 19 scenarios (broadcast, chat history memory/db,
-statusmsg, malformed upstream messages, CAP REQ removal, labeled-response ACK,
+`tests/server.rs` has 17 scenarios, each run on both Tokio runtimes
+(broadcast, chat history memory/db, statusmsg, malformed upstream messages, CAP REQ removal, labeled-response ACK,
 SASL errors, CHATHISTORY params/limit, read marker, clock skew, multiline,
 BouncerServ for other users, blocking work, MONITOR invalid targets,
 multiplex, multiplex unsupported). They
@@ -649,7 +649,7 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
 
 ## 6. Definition of done
 
-- All 166 Rust unit tests and 19 integration scenarios ported and passing.
+- All 165 Rust unit tests and 17 integration scenarios ported and passing.
 - `tests/compat` differential, IRCv3 spec, plumbing and gamja suites pass,
   with soju-c transcripts identical to soju-rs.
 - Clean under ASan/UBSan, MSan, TSan and valgrind across L1–L4 and L6.

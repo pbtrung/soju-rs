@@ -1,0 +1,9 @@
+# comment
+listen ircs://
+
+tls "cert file.pem" key.pem
+block a {
+  child x
+}
+empty {
+}

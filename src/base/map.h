@@ -50,6 +50,16 @@ bool strmap_remove(struct strmap *m, const char *key);
 // Removes the key and returns its value without freeing it (nullptr if
 // missing)
 [[nodiscard]] void *strmap_take(struct strmap *m, const char *key);
+// Removes the key like Rust's IndexMap::swap_remove: the last entry takes
+// its position (O(1), but changes the order). Returns the value without
+// freeing it (nullptr if missing).
+[[nodiscard]] void *strmap_swap_take(struct strmap *m, const char *key);
+// swap_take, then frees the value; returns false if the key was missing
+bool strmap_swap_remove(struct strmap *m, const char *key);
+// The number of entries the map can hold without growing
+[[nodiscard]] size_t strmap_capacity(const struct strmap *m);
+// Releases unused memory
+void strmap_shrink_to_fit(struct strmap *m);
 // Iterates in insertion order; *it starts at 0. Entries may be removed
 // while iterating, but not added.
 [[nodiscard]] bool strmap_next(const struct strmap *m, size_t *it, const char **key, void **value);

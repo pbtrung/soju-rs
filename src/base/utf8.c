@@ -1,23 +1,117 @@
-// Initial implementation on top of utf8proc. To be replaced by tables
-// generated with the Rust toolchain for exact parity with soju-rs.
+// Unicode properties come from src/base/unicode_tables.inc, generated from
+// the Rust toolchain soju-rs is built with (tools/gen-unicode-tables.sh).
 #include "base/utf8.h"
 
-#include <utf8proc.h>
+struct utf8_range {
+	uint32_t lo, hi;
+};
+
+struct utf8_case {
+	uint32_t cp;
+	uint8_t n;
+	uint32_t to[3];
+};
+
+#include "base/unicode_tables.inc"
+
+static bool in_ranges(const struct utf8_range *r, size_t n, uint32_t cp) {
+	size_t lo = 0, hi = n;
+	while (lo < hi) {
+		size_t mid = lo + (hi - lo) / 2;
+		if (cp < r[mid].lo) {
+			hi = mid;
+		} else if (cp > r[mid].hi) {
+			lo = mid + 1;
+		} else {
+			return true;
+		}
+	}
+	return false;
+}
+
+#define IN(table, cp) in_ranges((table), sizeof(table) / sizeof((table)[0]), (cp))
+
+static const struct utf8_case *find_case(const struct utf8_case *m, size_t n, uint32_t cp) {
+	size_t lo = 0, hi = n;
+	while (lo < hi) {
+		size_t mid = lo + (hi - lo) / 2;
+		if (cp < m[mid].cp) {
+			hi = mid;
+		} else if (cp > m[mid].cp) {
+			lo = mid + 1;
+		} else {
+			return &m[mid];
+		}
+	}
+	return nullptr;
+}
+
+// The length of the valid UTF-8 sequence at s[i], or 0 if it's invalid. On
+// an invalid sequence, *bad is the length of its maximal valid prefix (at
+// least 1): Rust's from_utf8_lossy replaces each such prefix with one
+// U+FFFD.
+static size_t seq_len(struct str s, size_t i, uint32_t *cp, size_t *bad) {
+	const unsigned char *p = (const unsigned char *)s.p + i;
+	size_t avail = s.len - i;
+	unsigned char b0 = p[0];
+	*bad = 1;
+	if (b0 < 0x80) {
+		*cp = b0;
+		return 1;
+	}
+	size_t n;
+	unsigned char lo = 0x80, hi = 0xBF;
+	uint32_t c;
+	if (b0 >= 0xC2 && b0 <= 0xDF) {
+		n = 2;
+		c = b0 & 0x1FU;
+	} else if (b0 >= 0xE0 && b0 <= 0xEF) {
+		n = 3;
+		c = b0 & 0x0FU;
+		if (b0 == 0xE0) {
+			lo = 0xA0;
+		} else if (b0 == 0xED) {
+			hi = 0x9F;
+		}
+	} else if (b0 >= 0xF0 && b0 <= 0xF4) {
+		n = 4;
+		c = b0 & 0x07U;
+		if (b0 == 0xF0) {
+			lo = 0x90;
+		} else if (b0 == 0xF4) {
+			hi = 0x8F;
+		}
+	} else {
+		return 0;
+	}
+	for (size_t k = 1; k < n; k++) {
+		if (k >= avail) {
+			return 0;
+		}
+		unsigned char b = p[k];
+		if (b < lo || b > hi) {
+			return 0;
+		}
+		lo = 0x80;
+		hi = 0xBF;
+		c = (c << 6U) | (b & 0x3FU);
+		*bad = k + 1;
+	}
+	*cp = c;
+	return n;
+}
 
 bool utf8_next(struct str s, size_t *i, uint32_t *cp) {
 	if (*i >= s.len) {
 		return false;
 	}
-	utf8proc_int32_t c;
-	utf8proc_ssize_t n = utf8proc_iterate((const utf8proc_uint8_t *)s.p + *i,
-					      (utf8proc_ssize_t)(s.len - *i), &c);
-	if (n <= 0) {
+	size_t bad;
+	size_t n = seq_len(s, *i, cp, &bad);
+	if (n == 0) {
 		*cp = UTF8_REPLACEMENT;
-		*i += 1;
-	} else {
-		*cp = (uint32_t)c;
-		*i += (size_t)n;
+		n = 1;
 	}
+	*i += n;
 	return true;
 }
 
@@ -29,9 +123,9 @@ bool utf8_prev(struct str s, size_t *i, uint32_t *cp) {
 	while (start > 0 && *i - start < 4 && ((unsigned char)s.p[start] & 0xC0U) == 0x80U) {
 		start--;
 	}
-	size_t j = start;
 	uint32_t c;
-	if (utf8_next(s, &j, &c) && j == *i) {
+	size_t bad;
+	if (seq_len(s, start, &c, &bad) == *i - start) {
 		*cp = c;
 		*i = start;
 	} else {
@@ -42,9 +136,28 @@ bool utf8_prev(struct str s, size_t *i, uint32_t *cp) {
 }
 
 void utf8_push(struct strbuf *out, uint32_t cp) {
-	utf8proc_uint8_t buf[4];
-	utf8proc_ssize_t n = utf8proc_encode_char((utf8proc_int32_t)cp, buf);
-	strbuf_append(out, (const char *)buf, (size_t)n);
+	char buf[4];
+	size_t n;
+	if (cp < 0x80) {
+		buf[0] = (char)cp;
+		n = 1;
+	} else if (cp < 0x800) {
+		buf[0] = (char)(0xC0U | (cp >> 6U));
+		buf[1] = (char)(0x80U | (cp & 0x3FU));
+		n = 2;
+	} else if (cp < 0x10000) {
+		buf[0] = (char)(0xE0U | (cp >> 12U));
+		buf[1] = (char)(0x80U | ((cp >> 6U) & 0x3FU));
+		buf[2] = (char)(0x80U | (cp & 0x3FU));
+		n = 3;
+	} else {
+		buf[0] = (char)(0xF0U | (cp >> 18U));
+		buf[1] = (char)(0x80U | ((cp >> 12U) & 0x3FU));
+		buf[2] = (char)(0x80U | ((cp >> 6U) & 0x3FU));
+		buf[3] = (char)(0x80U | (cp & 0x3FU));
+		n = 4;
+	}
+	strbuf_append(out, buf, n);
 }
 
 size_t utf8_count(struct str s) {
@@ -59,27 +172,30 @@ size_t utf8_count(struct str s) {
 bool utf8_valid(struct str s) {
 	size_t i = 0;
 	while (i < s.len) {
-		utf8proc_int32_t c;
-		utf8proc_ssize_t n = utf8proc_iterate((const utf8proc_uint8_t *)s.p + i,
-						      (utf8proc_ssize_t)(s.len - i), &c);
-		if (n <= 0) {
+		uint32_t cp;
+		size_t bad;
+		size_t n = seq_len(s, i, &cp, &bad);
+		if (n == 0) {
 			return false;
 		}
-		i += (size_t)n;
+		i += n;
 	}
 	return true;
 }
 
 void utf8_lossy(struct strbuf *out, struct str s) {
+	strbuf_reserve(out, s.len);
 	size_t i = 0;
 	while (i < s.len) {
-		size_t start = i;
 		uint32_t cp;
-		(void)utf8_next(s, &i, &cp);
-		if (cp == UTF8_REPLACEMENT && i - start == 1 && (unsigned char)s.p[start] != 0xEF) {
+		size_t bad;
+		size_t n = seq_len(s, i, &cp, &bad);
+		if (n == 0) {
 			utf8_push(out, UTF8_REPLACEMENT);
+			i += bad;
 		} else {
-			strbuf_append(out, s.p + start, i - start);
+			strbuf_append(out, s.p + i, n);
+			i += n;
 		}
 	}
 }
@@ -111,15 +227,11 @@ bool utf8_is_whitespace(uint32_t cp) {
 }
 
 bool utf8_is_alphabetic(uint32_t cp) {
-	utf8proc_category_t c = utf8proc_category((utf8proc_int32_t)cp);
-	return c == UTF8PROC_CATEGORY_LU || c == UTF8PROC_CATEGORY_LL ||
-	       c == UTF8PROC_CATEGORY_LT || c == UTF8PROC_CATEGORY_LM ||
-	       c == UTF8PROC_CATEGORY_LO || c == UTF8PROC_CATEGORY_NL;
+	return IN(alphabetic_ranges, cp);
 }
 
 bool utf8_is_numeric(uint32_t cp) {
-	utf8proc_category_t c = utf8proc_category((utf8proc_int32_t)cp);
-	return c == UTF8PROC_CATEGORY_ND || c == UTF8PROC_CATEGORY_NL || c == UTF8PROC_CATEGORY_NO;
+	return IN(numeric_ranges, cp);
 }
 
 bool utf8_is_alphanumeric(uint32_t cp) {
@@ -127,7 +239,15 @@ bool utf8_is_alphanumeric(uint32_t cp) {
 }
 
 bool utf8_is_control(uint32_t cp) {
-	return utf8proc_category((utf8proc_int32_t)cp) == UTF8PROC_CATEGORY_CC;
+	return cp <= 0x1F || (cp >= 0x7F && cp <= 0x9F);
+}
+
+bool utf8_is_lowercase(uint32_t cp) {
+	return IN(lowercase_ranges, cp);
+}
+
+bool utf8_is_uppercase(uint32_t cp) {
+	return IN(uppercase_ranges, cp);
 }
 
 struct str utf8_trim_start(struct str s) {
@@ -168,19 +288,107 @@ bool utf8_next_word(struct str *rest, struct str *word) {
 	return true;
 }
 
-static void map_chars(struct strbuf *out, struct str s, utf8proc_int32_t (*f)(utf8proc_int32_t)) {
-	strbuf_reserve(out, s.len);
-	size_t i = 0;
-	uint32_t cp;
-	while (utf8_next(s, &i, &cp)) {
-		utf8_push(out, (uint32_t)f((utf8proc_int32_t)cp));
+static void push_mapped(struct strbuf *out, const struct utf8_case *m, uint32_t cp) {
+	if (m == nullptr) {
+		utf8_push(out, cp);
+		return;
+	}
+	for (size_t k = 0; k < m->n; k++) {
+		utf8_push(out, m->to[k]);
 	}
 }
 
 void utf8_to_upper(struct strbuf *out, struct str s) {
-	map_chars(out, s, utf8proc_toupper);
+	strbuf_reserve(out, s.len);
+	size_t i = 0;
+	uint32_t cp;
+	while (utf8_next(s, &i, &cp)) {
+		push_mapped(out, find_case(upper_map, sizeof(upper_map) / sizeof(upper_map[0]), cp),
+			    cp);
+	}
+}
+
+// Skips case-ignorable characters, then reports whether the next one is
+// cased (core::str's case_ignorable_then_cased)
+static bool ignorable_then_cased_fwd(struct str s, size_t i) {
+	uint32_t cp;
+	while (utf8_next(s, &i, &cp)) {
+		if (!IN(case_ignorable_ranges, cp)) {
+			return IN(cased_ranges, cp);
+		}
+	}
+	return false;
+}
+
+static bool ignorable_then_cased_back(struct str s, size_t i) {
+	uint32_t cp;
+	while (utf8_prev(s, &i, &cp)) {
+		if (!IN(case_ignorable_ranges, cp)) {
+			return IN(cased_ranges, cp);
+		}
+	}
+	return false;
 }
 
 void utf8_to_lower(struct strbuf *out, struct str s) {
-	map_chars(out, s, utf8proc_tolower);
+	strbuf_reserve(out, s.len);
+	size_t i = 0;
+	uint32_t cp;
+	while (true) {
+		size_t start = i;
+		if (!utf8_next(s, &i, &cp)) {
+			break;
+		}
+		if (cp == 0x3A3) {
+			// Σ: final form at the end of a word (str::to_lowercase)
+			bool final = ignorable_then_cased_back(s, start) &&
+				     !ignorable_then_cased_fwd(s, i);
+			utf8_push(out, final ? 0x3C2 : 0x3C3);
+			continue;
+		}
+		push_mapped(out, find_case(lower_map, sizeof(lower_map) / sizeof(lower_map[0]), cp),
+			    cp);
+	}
+}
+
+void utf8_debug_str(struct strbuf *out, struct str s) {
+	strbuf_append_char(out, '"');
+	size_t i = 0;
+	uint32_t cp;
+	while (utf8_next(s, &i, &cp)) {
+		switch (cp) {
+		case '\0':
+			strbuf_append_cstr(out, "\\0");
+			continue;
+		case '\t':
+			strbuf_append_cstr(out, "\\t");
+			continue;
+		case '\r':
+			strbuf_append_cstr(out, "\\r");
+			continue;
+		case '\n':
+			strbuf_append_cstr(out, "\\n");
+			continue;
+		case '\\':
+			strbuf_append_cstr(out, "\\\\");
+			continue;
+		case '"':
+			strbuf_append_cstr(out, "\\\"");
+			continue;
+		default:
+			break;
+		}
+		if (IN(debug_escape_ranges, cp)) {
+			strbuf_printf(out, "\\u{%x}", (unsigned)cp);
+		} else {
+			utf8_push(out, cp);
+		}
+	}
+	strbuf_append_char(out, '"');
+}
+
+char *utf8_debug_cstr(struct str s) {
+	struct strbuf sb = STRBUF_INIT;
+	utf8_debug_str(&sb, s);
+	return strbuf_take(&sb);
 }

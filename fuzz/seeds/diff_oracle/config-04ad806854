@@ -1,0 +1,17 @@
+listen ircs://
+hostname example.org
+title "My bouncer"
+tls cert.pem key.pem
+db sqlite3 /x.db
+message-store db
+auth oauth2 https://a
+http-origin https://*.e
+accept-proxy-ip localhost 10.0.0.1/8
+accept-proxy-unix true
+max-user-networks 5
+upstream-user-ip 192.168.0.0/24 fd00::/64
+disable-inactive-user 30d
+message-expiry 0.5d
+chathistory-limit 100
+enable-user-on-auth true
+client-cert-auth true
