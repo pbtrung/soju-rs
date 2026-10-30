@@ -14,6 +14,7 @@ enum stage {
 
 struct conn {
 	struct ref_node ref;
+	struct conn *next, *prev; // registry on the owning thread
 	uv_stream_t *stream;
 	uv_timer_t write_timer, rate_timer, setup_timer;
 	struct logger log;

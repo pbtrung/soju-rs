@@ -93,6 +93,7 @@ struct server_ctx_data {
 	struct tls_cert_store *store;
 	char alpn[16];
 	const bool *client_cert_auth;
+	const atomic_bool *atomic_client_cert_auth;
 };
 
 static int ctx_data_index = -1;
@@ -154,7 +155,10 @@ static int cert_cb(SSL *ssl, void *arg) {
 		sk_X509_free(extra);
 	}
 	pthread_mutex_unlock(&d->store->mu);
-	if (ok && d->client_cert_auth != nullptr && *d->client_cert_auth) {
+	bool request = d->atomic_client_cert_auth != nullptr
+			       ? atomic_load(d->atomic_client_cert_auth)
+			       : d->client_cert_auth != nullptr && *d->client_cert_auth;
+	if (ok && request) {
 		SSL_set_verify(ssl, SSL_VERIFY_PEER, accept_any);
 	}
 	return ok;
@@ -475,4 +479,9 @@ struct str tls_session_alpn(const struct tls_session *t) {
 	unsigned n = 0;
 	SSL_get0_alpn_selected(t->ssl, &p, &n);
 	return p != nullptr ? str_new((const char *)p, n) : STR_EMPTY;
+}
+
+void tls_server_ctx_set_client_cert_auth(SSL_CTX *ctx, const atomic_bool *enabled) {
+	struct server_ctx_data *data = SSL_CTX_get_ex_data(ctx, ctx_data_index);
+	data->atomic_client_cert_auth = enabled;
 }

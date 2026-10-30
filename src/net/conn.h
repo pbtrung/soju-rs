@@ -148,3 +148,6 @@ void conn_format_line(const struct irc_msg *msg, struct strbuf *out);
 // Rust's std::io::Error Display for a libuv error ("Connection reset by
 // peer (os error 104)")
 void io_error_str(struct strbuf *out, int uv_err);
+
+// Close all transports on the calling loop, including unregistered clients.
+void conn_close_all(void);

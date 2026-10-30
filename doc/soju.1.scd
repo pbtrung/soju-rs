@@ -1,0 +1,726 @@
+soju(1)
+
+# NAME
+
+soju - IRC bouncer (soju-c, a C port of soju-rs)
+
+# SYNOPSIS
+
+*soju* [options...]
+
+# DESCRIPTION
+
+soju is a user-friendly IRC bouncer. It connects to upstream IRC servers on
+behalf of the user to provide extra features.
+
+- Multiple separate users sharing the same bouncer, each with their own
+  upstream servers
+- Sending the backlog (messages received while the user was disconnected from
+  the bouncer), with per-client buffers
+
+To connect to the bouncer, use the bouncer username and password. To use a
+client which doesn't support the _soju.im/bouncer-networks_ IRC extension,
+setup one connection per server configured in soju, and indicate the network
+name in the username: "<username>/<network>". Then channels can be joined and
+parted as if you were directly connected to the upstream server.
+
+For per-client history to work on clients which don't support the IRCv3
+_chathistory_ extension, clients need to indicate their name. This can be done
+by adding a "@<client>" suffix to the username.
+
+When joining a channel, the channel will be saved and automatically joined on
+the next connection. When registering or authenticating with NickServ, the
+credentials will be saved and automatically used on the next connection if the
+server supports SASL. When parting a channel with the reason "detach", the
+channel will be detached instead of being left.
+
+If a network specified in the username doesn't exist, and the network name is a
+valid hostname, the network will be automatically added.
+
+When all clients are disconnected from the bouncer, the user is automatically
+marked as away by default.
+
+soju will reload the configuration file, the TLS certificate/key and the MOTD
+file when it receives the HUP signal. The configuration options _listen_, _db_
+and _message-store_ cannot be reloaded.
+
+Administrators can broadcast a message to all bouncer users via _/notice
+$<hostname> <text>_, or via _/notice $\* <text>_ if the connection isn't bound
+to a particular network. All currently connected bouncer users will receive the
+message from the special _BouncerServ_ service.
+
+# OPTIONS
+
+*-h, -help*
+	Show help message and quit.
+
+*-config* <path>
+	Path to the config file. If unset, a default config file is used.
+
+*-debug*
+	Enable debug logging (this will leak sensitive information such as
+	passwords).
+	This can be overriden at run time with the service command
+	_server debug_.
+
+*-listen* <uri>
+	Listening URI (default: ":6697"). Can be specified multiple times.
+
+*-version*
+	Print the version and quit.
+
+# CONFIG FILE
+
+The config file has one directive per line.
+
+Example:
+
+```
+listen ircs://
+tls cert.pem key.pem
+hostname example.org
+```
+
+The following directives are supported:
+
+*listen* <uri>
+	Listening URI (default: ":6697").
+
+	The following URIs are supported:
+
+	- _[ircs://][host][:port]_ listens with TLS over TCP (default port if
+	  omitted: 6697)
+	- _irc://localhost[:port]_ listens with plain-text over TCP (default port
+	  if omitted: 6667, host must be "localhost")
+	- _irc+insecure://[host][:port]_ listens with plain-text over TCP (default
+	  port if omitted: 6667)
+	- _unix://<path>_ listens on a Unix domain socket
+	- _https://[host][:port]_ listens for HTTPS connections (default port: 443)
+	  and handles the following requests:
+		- _/socket_ for WebSocket
+		- _/icon_ for the server icon
+	- _http://localhost[:port]_ listens for plain-text HTTP connections
+	  (default port: 80, host must be "localhost") and handles requests like
+	  _https://_ does
+	- _http+insecure://[host][:port]_ listens for plain-text HTTP connections
+	  (default port: 80) and handles requests like _https://_ does
+	- _http+unix://<path>_ listens for plain-text HTTP connections on a Unix
+	  domain socket and handles requests like _https://_ does
+	- _wss://[host][:port]_ listens for WebSocket connections over TLS (default
+	  port: 443)
+	- _ws://localhost[:port]_ listens for plain-text WebSocket connections
+	  (default port: 80, host must be "localhost")
+	- _ws+insecure://[host][:port]_ listens for plain-text WebSocket
+	  connections (default port: 80)
+	- _ws+unix://<path>_ listens for plain-text WebSocket connections on a Unix
+	  domain socket
+	- _ident://[host][:port]_ listens for plain-text ident connections (default
+	  port: 113)
+	- _http+prometheus://localhost:<port>_ listens for plain-text HTTP
+	  connections and serves Prometheus metrics (host must be "localhost")
+	- _http+insecure+prometheus://[host]:<port>_ listens for plain-text HTTP
+	  connections and serves Prometheus metrics
+	- _unix+admin://[path]_ listens on a Unix domain socket for administrative
+	  connections, such as sojuctl (default path: /run/soju/admin)
+
+	If the scheme is omitted, "ircs" is assumed. If multiple *listen*
+	directives are specified, soju will listen on each of them.
+
+*hostname* <name>
+	Server hostname (default: system hostname).
+
+	This should be set to a fully qualified domain name.
+
+*title* <title>
+	Server title. This will be sent as the _ISUPPORT NETWORK_ value when clients
+	don't select a specific network.
+
+*icon* <url>
+	Server icon. Can be set to either a local path (in which case an HTTP
+	listener must be set up) or a full _https://_ URL. This will be sent as the
+	_ISUPPORT draft/ICON_ value when clients don't select a specific network.
+
+*tls* <cert> <key>
+	Enable TLS support. The certificate and the key files must be PEM-encoded.
+
+*db* <driver> <source>
+	Set the database location for user, network and channel storage. By default,
+	a _sqlite3_ database is opened in "./soju.db".
+
+	Supported drivers:
+
+	- _sqlite3_ expects _source_ to be a path to the SQLite file. The database
+	  format is the same as upstream soju's.
+
+*message-store* <driver>
+	Set the database location for IRC messages. By default, _db_ is used.
+
+	Supported drivers:
+
+	- _db_ stores messages in the database. A full-text search index is used to
+	  speed up search queries.
+	- _turso_ uses Turso Cloud for all bouncer storage, with a controller
+	  account directory and a separate database per user. Omit the _db_
+	  directive and configure the _turso-_ directives below. Databases and
+	  schemas are provisioned automatically before accepting connections.
+	  User databases reference a single TursoOwner record; login users and
+	  certificates are stored only in the controller. Schema upgrades may
+	  rebuild indexes in resumable chunks before opening the listeners.
+	- _memory_ stores messages in memory. For each channel/user, only the
+	  latest 4K messages are kept in memory, older messages are discarded. This
+	  driver is very basic and doesn't support features such as the
+	  _chathistory_ extension and search.
+
+	Upstream soju's _fs_ driver (ZNC-format log files) isn't supported.
+
+	(_log_ is a deprecated alias for this directive.)
+
+*turso-organization* <slug>
+	Turso organization owning the databases. Required with _message-store turso_.
+
+*turso-group* <name>
+	Existing Turso group in which databases are created. Required with
+	_message-store turso_.
+
+*turso-controller* <name>
+	Controller database name. Defaults to _soju-controller_. Each user database
+	gets a random name encoding 128 random bits using only lowercase letters
+	and digits. Run one soju instance per controller.
+
+*turso-group-token* <token>
+	Full-access SQL token for the configured group. Required with
+	_message-store turso_. The token is used for controller and user SQL access.
+
+*turso-api-token* <token>
+	Platform API token with read, database-create and database-delete access
+	to the configured group. Required for automatic provisioning; a group SQL
+	token cannot create databases through the Platform API. All Turso settings
+	require a restart to change. See _doc/turso.md_ for setup and recovery.
+
+*http-origin* <patterns...>
+	List of allowed HTTP origins for WebSocket listeners. The parameters are
+	interpreted as shell patterns, see *glob*(7).
+
+	By default, only the request host is authorized. Use this directive to
+	enable cross-origin WebSockets.
+
+*http-ingress* <url>
+	External URL on which HTTPS listeners are exposed.
+
+	By default, this is _https://<hostname>_.
+
+*accept-proxy-ip* <cidr...>
+	Allow the specified IPs to act as a proxy. Proxies have the ability to
+	overwrite the remote connection address (via the PROXY protocol, the
+	Forwarded HTTP header field defined in RFC 7239 or the X-Forwarded-For
+	HTTP header field). The special name "localhost" accepts the loopback
+	addresses 127.0.0.0/8 and ::1/128.
+
+	By default, all IPs are rejected.
+
+*accept-proxy-unix* true|false
+	Allow proxy connections over Unix domain sockets. This is useful when
+	running soju behind a reverse proxy such as Nginx and using Unix domain
+	sockets for the upstream connections. Note that any local user with
+	write permissions on the soju socket will be able to forge their
+	connection origin when this option is enabled.
+
+	By default, proxy headers received over Unix domain sockets are untrusted.
+
+	This currently only applies to _unix://_ listeners: _ws+unix://_ and
+	_http+unix://_ listeners ignore proxy headers.
+
+*max-user-networks* <limit>
+	Maximum number of enabled networks per user. By default, there is no limit.
+
+*motd* <path>
+	Path to the MOTD file. The bouncer MOTD is sent to clients which aren't
+	bound to a specific network. By default, no MOTD is sent.
+
+*upstream-user-ip* <cidr...>
+	Enable per-user IP addresses. One IPv4 range and/or one IPv6 range can be
+	specified in CIDR notation. One IP address per range will be assigned to
+	each user and will be used as the source address when connecting to an
+	upstream network.
+
+	This can be useful to avoid having the whole bouncer banned from an upstream
+	network because of one malicious user.
+
+*disable-inactive-user* <duration>
+	Disable inactive users after the specified duration.
+
+	A user is inactive when the last downstream connection is closed.
+
+	The duration is a positive decimal number followed by the unit "d" (days).
+	For instance, "30d" disables users 30 days after they last disconnect from
+	the bouncer.
+
+*chathistory-limit* <limit>
+	Maximum number of messages sent in reply to a single CHATHISTORY command,
+	between 100 and 1000. Clients requesting more get at most this many, and
+	fetch the rest with more commands: a lower limit reduces the memory used
+	while sending history to clients, at the cost of more round-trips.
+	Default: 1000.
+
+	With _message-store turso_, this also sets the per-user background message
+	batch target. Partial batches flush after one second. HTTP requests are
+	split below a 512 KiB encoded-body budget, and further on hosted size or
+	processing limits. Live messages and pending history remain available
+	while commits run. Full buffers apply input backpressure. Pending lines
+	are in memory until committed and may be lost on a crash; graceful
+	shutdown drains them. See _doc/turso.md_ for retry and durability details.
+
+*message-expiry* <duration>
+	Automatically delete messages older than the specified duration.
+
+	The duration is a positive decimal number followed by the unit "d"
+	(days). For instance, "30d" deletes messages with timestamps older than
+	30 days. Messages are deleted on startup, then once per day.
+
+	When using _db sqlite3_ and _message-store db_, the search index is
+	optimized after messages are deleted. The space freed by deleted
+	messages is reused for new ones. The database is vacuumed to reclaim
+	disk space on startup, and when a quarter of the database file or more
+	is still unused at the next run, e.g. after shortening the duration.
+	Vacuuming rewrites the database file, temporarily needing about its size
+	again in free disk space. All database access waits while it runs, so
+	clients and upstream connections may stall for the duration.
+
+	With _message-store turso_, startup and daily expiry delete messages from
+	each user database in turn and optimize the FTS index of those that
+	deleted messages; a failing database does not stop the others. They never
+	run VACUUM, WAL checkpoints or other local file maintenance. The hosted
+	SQL interface does not accept those operations.
+
+	By default, messages are kept indefinitely.
+
+*enable-user-on-auth* true|false
+	Enable users when they successfully authenticate.
+
+	This can be used together with _disable-inactive-user_ to seamlessly
+	disable and re-enable users during lengthy inactivity.
+
+	When external authentication is used (e.g. _auth oauth2_), bouncer users
+	are automatically created after successful authentication.
+
+*auth* <driver> ...
+	Set the authentication method. By default, internal authentication is used.
+
+	Supported drivers:
+
+	*auth internal*
+		Use internal authentication.
+	*auth http* <url>
+		Use external HTTP basic authentication. An HTTP POST request is made
+		against the URL, passing the user credentials in an Authorization Basic
+		header. The credentials are considered valid on HTTP 200; invalid on
+		HTTP 403; and any other error code means an error occured.
+	*auth oauth2* <url>
+		Use external OAuth 2.0 authentication. The authorization server URL must
+		be provided. The client ID and client secret can be provided as username
+		and password in the URL. The authorization server must support OAuth 2.0
+		Authorization Server Metadata (RFC 8414) and OAuth 2.0 Token
+		Introspection (RFC 7662).
+
+*client-cert-auth* true|false
+	Enable/disable client certificate authentication. By default, client
+	certificate authentication is disabled because it bypasses external
+	authentication methods and because it needs additional HTTP server
+	configuration.
+
+	When used behind a TCP reverse proxy, client certification authentication
+	needs the PROXY protocol to be used with _PP2_SUBTYPE_SSL_CLIENT_CERT_
+	support. When used behind an HTTP reverse proxy, client certificate
+	authentication needs the _Client-Cert_ header field to be populated (RFC
+	9440).
+
+# IRC SERVICE
+
+soju exposes an IRC service called *BouncerServ* to manage the bouncer.
+Commands can be sent via regular private messages
+(_/msg BouncerServ <command> [args...]_). Commands may be written in full or
+abbreviated form, for instance *network* can be abbreviated as *net* or just
+*n*.
+
+Commands are split into words similarly to a shell. Words can be quoted (via
+double or single quotes) and a backslash escapes the next character, including
+inside single quotes. Other escape sequences (e.g. *\\t*) are not supported.
+
+*help* [command]
+	Show a list of commands. If _command_ is specified, show a help message for
+	the command.
+
+*network create* *-addr* <addr> [options...]
+	Connect to a new network at _addr_. _-addr_ is mandatory.
+
+	_addr_ supports several connection types:
+
+	- _[ircs://]<host>[:port]_ connects with TLS over TCP
+	- _irc+insecure://<host>[:port]_ connects with plain-text TCP
+	- _irc+unix:///<path>_ connects to a Unix socket
+
+	For example, to connect to Libera Chat:
+
+	```
+	net create -addr irc.libera.chat
+	```
+
+	Other options are:
+
+	*-name* <name>
+		Short network name. This will be used instead of _addr_ to refer to the
+		network.
+
+	*-username* <username>
+		Connect with the specified username. By default, the nickname is used.
+
+	*-pass* <pass>
+		Connect with the specified server password.
+
+	*-realname* <realname>
+		Connect with the specified real name. By default, the account's realname
+		is used if set, otherwise the network's nickname is used.
+
+	*-certfp* <fingerprint>
+		Instead of using certificate authorities to check the server's TLS
+		certificate, check whether the server certificate matches the provided
+		fingerprint. This can be used to connect to servers using self-signed
+		certificates. The fingerprint is a hex-encoded SHA-256 or SHA-512 hash
+		of the server's (leaf) certificate. An empty string removes any
+		previous fingerprint.
+
+		The following command can be used to fetch the certificate fingerprint
+		of an IRC server:
+
+		```
+		openssl s_client -connect irc.example.org:6697 -verify_quiet </dev/null | openssl x509 -fingerprint -sha512 -noout -in /dev/stdin
+		```
+
+	*-nick* <nickname>
+		Connect with the specified nickname. By default, the account's username
+		is used.
+
+	*-auto-away* true|false
+		Enable or disable the auto-away feature. If the feature is enabled, the
+		user will be marked as away when all clients are disconnected from the
+		bouncer. By default, auto-away is enabled.
+
+	*-enabled* true|false
+		Enable or disable the network. If the network is disabled, the bouncer
+		won't connect to it. By default, the network is enabled.
+
+	*-ignore-limit*
+		Ignore the max networks limit for this command.
+		Only admin users can ignore the limit.
+
+	*-connect-command* <command>
+		Send the specified quoted string as a raw IRC command right after
+		connecting to the server. This can be used to identify to an account
+		when the server doesn't support SASL. soju waits 5 seconds after each
+		connect command, to give the server time to process it.
+
+		For instance, to identify with _NickServ_, the following command can be
+		used:
+
+		```
+		"PRIVMSG NickServ :IDENTIFY <password>"
+		```
+
+		The flag can be specified multiple times to send multiple IRC messages.
+		To clear all commands, set it to the empty string.
+
+*network update* [name] [options...]
+	Update an existing network. The options are the same as the
+	_network create_ command.
+
+	When this command is executed, soju will disconnect and re-connect to the
+	network.
+
+	If _name_ is not specified, the current network is updated.
+
+*network delete* <name>
+	Disconnect and delete a network.
+
+*network quote* [name] <command>
+	Send a raw IRC line as-is to a network.
+
+	If _name_ is not specified, the command is sent to the current network.
+
+*network status*
+	Show a list of saved networks and their current status.
+
+*network info* [name]
+	Show the configuration of a network. Passwords are not displayed, nor
+	the parameters of connect commands, which may contain secrets.
+
+	If _name_ is not specified, the current network is displayed.
+
+*channel status* [options...]
+	Show a list of saved channels, their current status and their
+	relay-detached, reattach-on, detach-after and detach-on settings.
+
+	Options:
+
+	*-network* <name>
+		Only show channels for the specified network. By default, only the
+		channels in the current network are displayed.
+
+*channel create* <name> [options...]
+	Join a new channel.
+
+	Joining a channel should usually be done with a simple join from the client,
+	but this command can be used to join another user to a channel when used with
+	_user run_.
+
+	Options are:
+
+	*-detached* true|false
+		Attach or detach this channel.
+
+		A detached channel is joined but is hidden by the bouncer. This is
+		useful to e.g. collect logs and highlights in low-interest or
+		high-traffic channels.
+
+	*-relay-detached* <mode>
+		Set when to relay messages from detached channels to the user with a BouncerServ NOTICE.
+
+		Modes are:
+
+		*message*
+			Relay any message from this channel when detached.
+
+		*highlight*
+			Relay only messages mentioning you when detached.
+
+		*none*
+			Don't relay any messages from this channel when detached.
+
+		*default*
+			Currently same as *highlight*. This is the default behaviour.
+
+	*-reattach-on* <mode>
+		Set when to automatically reattach to detached channels.
+
+		Modes are:
+
+		*message*
+			Reattach to this channel when any message is received.
+
+		*highlight*
+			Reattach to this channel when any message mentioning you is received.
+
+		*none*
+			Never automatically reattach to this channel.
+
+		*default*
+			Currently same as *none*. This is the default behaviour.
+
+	*-detach-after* <duration>
+		Automatically detach this channel after the specified duration has elapsed without receving any message corresponding to *-detach-on*.
+
+		Example duration values: *1h30m*, *30s*, *2.5h*.
+
+		Setting this value to 0 will disable this behaviour, i.e. this channel will never be automatically detached. This is the default behaviour.
+
+	*-detach-on* <mode>
+		Set when to reset the auto-detach timer used by *-detach-after*, causing it to wait again for the auto-detach duration timer before detaching.
+		Joining, reattaching, sending a message, or changing any channel option will reset the timer, in addition to the messages specified by the mode.
+
+		Modes are:
+
+		*message*
+			Receiving any message from this channel will reset the auto-detach timer.
+
+		*highlight*
+			Receiving any message mentioning you from this channel will reset the auto-detach timer.
+
+		*none*
+			Receiving messages from this channel will not reset the auto-detach timer. Sending messages or joining the channel will still reset the timer.
+
+		*default*
+			Currently same as *message*. This is the default behaviour.
+
+*channel update* <name> [options...]
+	Update the options of an existing channel. The options are the same as the
+	_channel create_ command.
+
+*channel delete* <name>
+	Leave and forget a channel.
+
+*device-certificate status*
+	Show a list of saved device certificates.
+
+*device-certificate create* [options...]
+	Create a new device certificate.
+
+	Options are:
+
+	*-fingerprint* <fingerprint>
+		The device certificate fingerprint, as a hex-encoded SHA-512 hash of the
+		certificate. Optional, defaults to the current TLS client certificate,
+		if any.
+
+	*-label* <label>
+		A short name for the device certificate, used for display.
+
+*device-certificate delete* <fingerprint>
+	Delete a device certificate.
+
+*certfp generate* [options...]
+	Generate self-signed certificate and use it for authentication (via SASL
+	EXTERNAL).
+
+	Generates a 3072-bit RSA private key by default.
+
+	Note, reconnection to the upstream network is required to use the newly
+	generated certificate.
+
+	Options are:
+
+	*-network* <name>
+		Select a network. By default, the current network is selected, if any.
+
+	*-key-type* <type>
+		Private key algorithm to use. Valid values are: _rsa_, _ecdsa_ and
+		_ed25519_. _ecdsa_ uses the NIST P-521 curve.
+
+	*-bits* <bits>
+		Size of RSA key to generate: 2048, 3072 (the default), 4096 or 8192.
+		Ignored for other key types.
+
+*certfp fingerprint* [options...]
+	Show SHA-1 and SHA-256 fingerprints for the certificate
+	currently used with the network.
+
+	Options are:
+
+	*-network* <name>
+		Select a network. By default, the current network is selected, if any.
+
+*sasl status* [options...]
+	Show current SASL status.
+
+	Options are:
+
+	*-network* <name>
+		Select a network. By default, the current network is selected, if any.
+
+*sasl set-plain* [options...] <username> <password>
+	Set SASL PLAIN credentials.
+
+	Note, reconnection to the upstream network is required to apply the new
+	settings.
+
+	Options are:
+
+	*-network* <name>
+		Select a network. By default, the current network is selected, if any.
+
+*sasl reset* [options...]
+	Disable SASL authentication and remove stored credentials.
+
+	Note, reconnection to the upstream network is required to apply the new
+	settings.
+
+	Options are:
+
+	*-network* <name>
+		Select a network. By default, the current network is selected, if any.
+
+*user status* [username]
+	Show a list of users on this server. Only admins can query this information.
+
+	If _username_ is specified, statistics are only displayed for this user.
+
+*user create* -username <username> -password <password> [options...]
+	Create a new soju user. Only admin users can create new accounts.
+	The _-username_ and _-password_ flags are mandatory.
+
+	Options are:
+
+	*-username* <username>
+		The bouncer username. This cannot be changed after the user has been
+		created.
+
+	*-password* <password>
+		The bouncer password.
+
+	*-disable-password*
+		Disable password authentication. The user will be unable to login.
+
+	*-admin*
+		Make the new user an administrator.
+
+	*-nick* <nick>
+		Set the user's nickname. This is used as a fallback if there is no
+		nickname set for a network.
+
+	*-realname* <realname>
+		Set the user's realname. This is used as a fallback if there is no
+		realname set for a network.
+
+	*-enabled*=true|false
+		Enable or disable the user. If the user is disabled, the bouncer will
+		not connect to any of their networks, and downstream connections will
+		be immediately closed. By default, users are enabled.
+
+	*-max-networks* <max-networks>
+		Set a limit on the number of enabled networks this user can use. A limit
+		of 0 means no network, and -1 means to default to the global
+		_max-user-networks_ configuration value.
+
+*user update* [username] [options...]
+	Update a user. The options are the same as the _user create_ command,
+	except that _-admin_ and _-enabled_ take a value: _-admin_ true|false,
+	_-enabled_ true|false.
+
+	If _username_ is omitted, the current user is updated. Only admins can
+	update other users.
+
+	Not all flags are valid in all contexts:
+
+	- The _-username_ flag is never valid, usernames are immutable.
+	- The _-nick_ and _-realname_ flag are only valid when updating the current
+	  user.
+	- The _-admin_, _-enabled_ and _-max_networks_ flags are only valid when
+	  updating another user.
+
+*user delete* <username> [confirmation token]
+	Delete a soju user.
+
+	Only admins can delete other users.
+
+*user run* <username> <command...>
+	Execute a command as another user.
+
+	Only admins can use this command.
+
+*server status*
+	Show some bouncer statistics. Only admins can query this information.
+
+*server notice* <message>
+	Broadcast a notice. All currently connected bouncer users will receive the
+	message from the special _BouncerServ_ service. Only admins can broadcast a
+	notice.
+
+*server debug* <true|false>
+	Enable/disable debug logging (this will leak sensitive information).
+	This overrides any value passed to soju in _-debug_.
+
+# AUTHORS
+
+Maintained by Simon Ser <contact@emersion.fr>, who is assisted by other
+open-source contributors. For more information about soju development, see
+<https://soju.im>.
+
+# SEE ALSO
+
+*sojuctl*(1)
+
+# C PORT
+
+This build uses llhttp for HTTP request parsing. WebSocket framing uses
+soju-c's transport implementation. The *-build-info* flag prints the compiler,
+build mode and dependency versions.
+
+File uploads, PostgreSQL, PAM, pprof and the fs message store are unsupported.

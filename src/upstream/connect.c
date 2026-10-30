@@ -4,6 +4,8 @@
 
 #include "base/alloc.h"
 #include "net/tls.h"
+#include "net/listener.h"
+#include "user/user.h"
 #include "net/url.h"
 
 struct dial {
@@ -124,6 +126,22 @@ static void connected(uv_connect_t *req, int status) {
 		int ret = uv_tcp_keepalive((uv_tcp_t *)d->stream, 1, 15);
 		if (ret < 0) {
 			log_info(&uc->log, "failed to enable TCP keep-alive: %s", uv_strerror(ret));
+		}
+	}
+	if (uc->srv->identd != nullptr && d->stream->type == UV_TCP) {
+		struct sockaddr_storage remote, local;
+		int rlen = sizeof(remote), llen = sizeof(local);
+		if (uv_tcp_getpeername((uv_tcp_t *)d->stream, (struct sockaddr *)&remote, &rlen) ==
+			    0 &&
+		    uv_tcp_getsockname((uv_tcp_t *)d->stream, (struct sockaddr *)&local, &llen) ==
+			    0) {
+			struct strbuf r = STRBUF_INIT, l = STRBUF_INIT;
+			fmt_addr(&r, (const struct sockaddr *)&remote);
+			fmt_addr(&l, (const struct sockaddr *)&local);
+			uc->ident_remote = strbuf_take(&r);
+			uc->ident_local = strbuf_take(&l);
+			AUTOFREE char *ident = user_ident(uc->user.id);
+			identd_store(uc->srv->identd, uc->ident_remote, uc->ident_local, ident);
 		}
 	}
 	struct err *err = nullptr;

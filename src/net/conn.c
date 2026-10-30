@@ -8,6 +8,8 @@
 #include "base/utf8.h"
 #include "net/conn_internal.h"
 
+static _Thread_local struct conn *connections;
+
 static void process(struct conn *c);
 static void close_handles(struct conn *c);
 
@@ -28,6 +30,14 @@ void conn_ref(struct conn *c) {
 }
 
 static void conn_free(struct conn *c) {
+	if (c->prev != nullptr) {
+		c->prev->next = c->next;
+	} else {
+		connections = c->next;
+	}
+	if (c->next != nullptr) {
+		c->next->prev = c->prev;
+	}
 	tls_session_finish(&c->tls);
 	strbuf_free(&c->peer_cert);
 	proxy_header_free(&c->proxy_header);
@@ -769,6 +779,11 @@ struct conn *conn_new(uv_stream_t *stream, const struct conn_options *opts,
 		      const struct logger *log, const struct conn_callbacks *cb, void *data) {
 	struct conn *c = xcalloc(1, sizeof(*c));
 	REF_TRACK(&c->ref, "conn");
+	c->next = connections;
+	if (connections != nullptr) {
+		connections->prev = c;
+	}
+	connections = c;
 	c->refs = 1;
 	c->stream = stream;
 	stream->data = c;
@@ -903,4 +918,17 @@ void conn_view_close(struct conn_view *v) {
 
 void conn_view_close_quietly(struct conn_view *v) {
 	view_close(v, false);
+}
+
+void conn_close_all(void) {
+	VEC(struct conn *) snapshot = {0};
+	for (struct conn *c = connections; c != nullptr; c = c->next) {
+		conn_ref(c);
+		vec_push(&snapshot, c);
+	}
+	for (size_t i = 0; i < snapshot.len; i++) {
+		conn_close(snapshot.data[i]);
+		conn_unref(snapshot.data[i]);
+	}
+	vec_free(&snapshot);
 }

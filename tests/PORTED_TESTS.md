@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 161 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
+Ported so far: 164 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -18,9 +18,9 @@ Also compared against the Rust code by the differential harness
 | `src/auth.rs` | `password_upgrade_kept` | `test_auth.c`: `test_password_upgrade_kept` |
 | `src/auth.rs` | `escape` | `test_auth.c`: `test_escape` |
 | `src/auth.rs` | `http_auth` | `test_auth.c`: `test_http_auth` |
-| `src/bin/sojuctl.rs` | `turso_bootstrap_validates_before_connecting` | pending: phase 10 |
-| `src/bin/sojuctl.rs` | `quoting` | pending: phase 10 |
-| `src/bin/sojuctl.rs` | `quoting_roundtrip` | pending: phase 10 |
+| `src/bin/sojuctl.rs` | `turso_bootstrap_validates_before_connecting` | `test_admin.c`: `test_turso_bootstrap_validates_before_connecting` |
+| `src/bin/sojuctl.rs` | `quoting` | `test_admin.c`: `test_quoting` |
+| `src/bin/sojuctl.rs` | `quoting_roundtrip` | `test_admin.c`: `test_quoting_roundtrip` |
 | `src/certfp.rs` | `generate_all` | `test_net_misc.c`: `test_generate_all` |
 | `src/config.rs` | `turso_config` | `test_config_config.c`: `test_turso_config` |
 | `src/config.rs` | `full_config` | `test_config_config.c`: `test_full_config` |

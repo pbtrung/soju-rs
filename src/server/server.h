@@ -17,6 +17,7 @@
 #include "webpush/webpush.h"
 
 struct oauth2;
+struct identd;
 
 enum plain_auth {
 	PLAIN_AUTH_NONE,
@@ -53,6 +54,7 @@ struct server_metrics {
 struct server {
 	struct logger log;
 	struct log_root log_root;
+	struct identd *identd; // immutable after startup, borrowed from the process
 	struct loop_pool *loops; // borrowed
 	struct db_thread *db; // borrowed
 	struct cpu_work_pool *cpu; // on loop 0
@@ -99,3 +101,8 @@ void server_db(struct server *srv, db_job_fn run, db_done_fn done, void *data);
 // calling loop; err is set if the job was refused ("server busy")
 typedef void (*server_cpu_done_fn)(void *data, const char *err);
 void server_cpu(struct server *srv, cpu_work_fn work, server_cpu_done_fn done, void *data);
+
+// Load config, MOTD, icon and authenticators; the callback takes config.
+typedef void (*server_config_done_fn)(void *data, struct server_config *config,
+				      const struct err *error);
+void server_config_load(uv_loop_t *loop, const char *path, server_config_done_fn done, void *data);

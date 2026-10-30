@@ -71,6 +71,7 @@ struct upstream {
 	struct db_network network;
 	struct logger log;
 	struct conn *conn;
+	char *ident_remote, *ident_local;
 	struct upstream_events events;
 	uv_timer_t timer;
 	struct cap_registry caps;

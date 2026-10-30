@@ -6,10 +6,9 @@ upstream IRC servers on behalf of its users and adds features on top:
 multiple users and networks, detached channels, chat history playback and
 many [IRCv3] extensions.
 
-> **Status: work in progress.** The core is ported (phases 0–7 of
-> [PLAN.md](PLAN.md)), but the `soju` and `sojuctl` programs do not run a
-> server yet. They are wired up in phase 10. Until then `soju` only
-> supports `-version` and `-build-info`.
+> **Status:** process glue is implemented. `soju` runs the server and
+> `sojuctl` sends commands through its Unix admin socket. Release qualification
+> is in progress; see [PLAN.md](PLAN.md).
 
 ## Features
 
@@ -31,7 +30,7 @@ file, reads and writes the same `soju.db` and speaks the same IRC protocol.
   single bouncer connection (used by [gamja])
 - Listeners: `ircs`, `irc+insecure`, `unix`, `unix+admin`, PROXY protocol
   and identd. HTTP/WebSocket, Prometheus, Web Push, OAuth2/HTTP auth and
-  Turso Cloud storage are in later phases
+  Turso Cloud storage are supported
 - Built with memory safety in mind. Every change is tested under ASan, UBSan,
   MSan, TSan and valgrind, and fuzzed
 
@@ -43,7 +42,7 @@ Requirements:
 
 - Linux (glibc or musl)
 - GCC or Clang with C23 support
-- CMake 3.29 or newer and Ninja
+- CMake 3.29 or newer, Ninja and Python 3 (for process tests)
 - OpenSSL 3, libcurl, llhttp 9 and libxcrypt (development packages)
 - Network access during the first configure
 
@@ -67,7 +66,7 @@ container.
 
 ## Usage
 
-Once the server is ported, it is used the same way as soju-rs:
+Use the same configuration syntax as soju-rs:
 
     soju -config /etc/soju/config
     sojuctl -config /etc/soju/config user create -username alice -password secret -admin
@@ -76,7 +75,7 @@ Then connect an IRC client to the bouncer, logging in as
 `alice/<network>`, and manage networks with `/msg BouncerServ help`. The
 configuration file and commands are documented in soju's man pages.
 
-These options already work:
+Build information:
 
     soju -version       # print the version
     soju -build-info    # print the compiler, mode and library versions

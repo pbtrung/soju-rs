@@ -1,6 +1,6 @@
 # soju-c: porting soju-rs to C — implementation plan
 
-Status: **phases 0–9 implemented (9b, Turso, pending); phase 10 next**
+Status: **phases 0–10 implemented; phase 11 qualification in progress**
 (`doc/spikes.md`, `tests/PORTED_TESTS.md`). Phase 4 includes welcome and
 state synchronization, dynamic capabilities, multiplex connection views,
 and the stateful downstream session fuzzer. The user actor integrates network selection,
@@ -813,3 +813,19 @@ encryption is done on the loop (a key generation, an ECDH and a signature
 per notification) rather than through the CPU-job limiter. The five
 `webpush.rs` tests are ported, with integration tests of the command and of
 notifications through the server.
+
+
+## Implementation validation: phase 10
+
+The executable entry points now start listeners, user actors, the database
+thread, authentication discovery and maintenance. SIGHUP publishes a fully
+loaded configuration/MOTD/certificate snapshot, retaining immutable storage
+selection; SIGTERM and SIGINT drain work and close every loop's transports,
+including incomplete HTTP, admin and ident connections. The Unix admin
+protocol uses BouncerServ, with an explicit offline Turso admin bootstrap.
+
+Executable lifecycle tests run with one and four loops, checking quoted
+credentials, successful and failed reloads, startup errors and shutdown.
+Maintenance tests exercise expiry across the 2,000-row chunk boundary and
+inactive-user disabling. ThreadSanitizer exposed a cross-loop listener
+reference-count race; accepted-socket handoffs now use an atomic count.

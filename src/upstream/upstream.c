@@ -7,6 +7,7 @@
 #include "base/alloc.h"
 #include "base/utf8.h"
 #include "irc/numerics.h"
+#include "net/identd.h"
 
 static atomic_uint_fast64_t next_id = 1;
 static thread_local struct strmap *sessions;
@@ -112,7 +113,17 @@ struct upstream *upstream_new(struct server *srv, const struct db_user *u,
 	return uc;
 }
 
+static void clear_ident(struct upstream *uc) {
+	if (uc->ident_remote != nullptr && uc->srv->identd != nullptr) {
+		identd_delete(uc->srv->identd, uc->ident_remote, uc->ident_local);
+	}
+	xfree(uc->ident_remote);
+	xfree(uc->ident_local);
+	uc->ident_remote = uc->ident_local = nullptr;
+}
+
 void upstream_clear_session(struct upstream *uc) {
+	clear_ident(uc);
 	upstream_abort_commands(uc);
 	strmap_clear(&uc->batches);
 	cmmap_clear(&uc->channels);
@@ -191,6 +202,7 @@ void upstream_free(struct upstream *uc) {
 	if (uc == nullptr || uc->closing) {
 		return;
 	}
+	clear_ident(uc);
 	uc->closing = true;
 	uc->reconnect = false;
 	upstream_abort_commands(uc);

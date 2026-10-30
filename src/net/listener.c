@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,11 +28,11 @@ struct listener {
 		uv_tcp_t tcp;
 		uv_pipe_t pipe;
 	} handle;
-	unsigned refs; // the handle, and accepted sockets in transit
+	atomic_uint refs; // shared by the handle and sockets in transit
 };
 
 static void listener_unref(struct listener *l) {
-	if (--l->refs == 0) {
+	if (atomic_fetch_sub(&l->refs, 1) == 1) {
 		if (l->tls_ctx != nullptr) {
 			SSL_CTX_free(l->tls_ctx);
 		}
@@ -305,7 +306,7 @@ static void on_connection(uv_stream_t *server, int status) {
 	// The accepted handle stays on loop 0: its duplicate goes to the loop
 	// which will own the connection
 	uv_close((uv_handle_t *)client, free_handle);
-	l->refs++;
+	atomic_fetch_add(&l->refs, 1);
 	loop_post(loop_pool_next(l->pool), adopt, drop_handoff, ho);
 }
 
@@ -389,7 +390,7 @@ bool listener_start(struct loop_pool *pool, const struct listener_spec *spec, SS
 		l->tls_ctx = tls_ctx;
 	}
 	l->h = *h;
-	l->refs = 1;
+	atomic_init(&l->refs, 1);
 	AUTOFREE char *prefix = xasprintf("listener %s: ", label);
 	log_with_prefix(&l->log, log, prefix);
 	uv_loop_t *loop = &pool->loops[0].uv;

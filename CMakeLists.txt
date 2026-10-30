@@ -164,3 +164,14 @@ set_tests_properties(soju.build-info PROPERTIES
 soju_test_env(soju.build-info)
 
 install(TARGETS soju sojuctl RUNTIME DESTINATION bin)
+
+# Exercise the real executables, including signals and Unix admin transport.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+foreach(loops 1 4)
+	add_test(NAME process.lifecycle.loops${loops}
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/process/lifecycle.py $<TARGET_FILE_DIR:soju>)
+	set_tests_properties(process.lifecycle.loops${loops} PROPERTIES LABELS "integration;process" TIMEOUT 120)
+	soju_test_env(process.lifecycle.loops${loops} "SOJU_LOOPS=${loops}")
+endforeach()
+
+install(FILES doc/soju.1 doc/sojuctl.1 DESTINATION share/man/man1)

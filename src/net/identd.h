@@ -26,3 +26,6 @@ void identd_serve(struct identd *id, uv_stream_t *stream, const char *remote_hos
 		  bool trust_proxy);
 // "local , remote" -> ports; false if invalid (exposed for tests)
 [[nodiscard]] bool identd_parse_query(const char *l, uint16_t *local, uint16_t *remote);
+
+// Close the calling loop's active ident sessions during process shutdown.
+void identd_close_all(void);

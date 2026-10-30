@@ -6,6 +6,7 @@
 
 #include <openssl/ssl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 #include "base/err.h"
 #include "base/str.h"
@@ -79,3 +80,6 @@ bool tls_session_take_output(struct tls_session *t, struct strbuf *out);
 bool tls_session_peer_cert(struct tls_session *t, struct strbuf *out);
 // The negotiated ALPN protocol, or ""
 [[nodiscard]] struct str tls_session_alpn(const struct tls_session *t);
+
+// Install a reloadable flag before any handshake can use this context.
+void tls_server_ctx_set_client_cert_auth(SSL_CTX *ctx, const atomic_bool *enabled);

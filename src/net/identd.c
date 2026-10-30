@@ -98,6 +98,7 @@ bool identd_parse_query(const char *l, uint16_t *local, uint16_t *remote) {
 
 struct session {
 	struct ref_node ref;
+	struct session *next, *prev;
 	struct identd *id;
 	uv_stream_t *stream;
 	uv_timer_t timer;
@@ -110,8 +111,18 @@ struct session {
 	bool closing;
 };
 
+static _Thread_local struct session *sessions;
+
 static void session_unref(struct session *s) {
 	if (--s->pending == 0) {
+		if (s->prev != nullptr) {
+			s->prev->next = s->next;
+		} else {
+			sessions = s->next;
+		}
+		if (s->next != nullptr) {
+			s->next->prev = s->prev;
+		}
 		xfree(s->remote_host);
 		strbuf_free(&s->buf);
 		ref_untrack(&s->ref);
@@ -270,6 +281,11 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 void identd_serve(struct identd *id, uv_stream_t *stream, const char *remote_host,
 		  bool trust_proxy) {
 	struct session *s = xcalloc(1, sizeof(*s));
+	s->next = sessions;
+	if (sessions != nullptr) {
+		sessions->prev = s;
+	}
+	sessions = s;
 	s->trust_proxy = trust_proxy;
 	REF_TRACK(&s->ref, "identd_session");
 	s->id = id;
@@ -282,6 +298,12 @@ void identd_serve(struct identd *id, uv_stream_t *stream, const char *remote_hos
 	s->timer.data = s;
 	uv_timer_start(&s->timer, on_timeout, IDENTD_TIMEOUT_MS, 0);
 	if (uv_read_start(stream, on_alloc, on_read) != 0) {
+		session_close(s);
+	}
+}
+
+void identd_close_all(void) {
+	for (struct session *s = sessions; s != nullptr; s = s->next) {
 		session_close(s);
 	}
 }
