@@ -293,5 +293,11 @@ would help there, at the cost of merging two ranges for event playback.
 The migration copies the whole table once, in key order and in one
 transaction, keeping message IDs (the search index and delivery receipts
 stay valid). It needs free disk space about the size of the message table
-and some startup time on large histories. Older versions can't open the
-upgraded database; back it up first.
+and some startup time on large histories (400,000 messages took under a
+second on a desktop). Older versions can't open the upgraded database; back
+it up first.
+
+The old table's pages stay in the file as free pages, which new messages
+reuse; nothing reads them. With `message-expiry`, soju vacuums on startup
+and gives them back. Otherwise, run `sqlite3 soju.db VACUUM` while soju is
+stopped to shrink the file.

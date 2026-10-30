@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "soju"
-version = "0.99.23"
+version = "0.99.24"
 dependencies = [
  "aes-gcm",
  "anyhow",
