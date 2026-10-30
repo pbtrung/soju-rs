@@ -78,8 +78,10 @@ and `tools/metrics.sh` (lizard, from PATH or `build/venv`).
 Done: the clang-tidy report with the extra and disabled checks, triaged
 in audit-findings.md (A-01 to A-08); nothing above S3.
 
-Not yet run: GCC `-fanalyzer`, 1 CPU-hour per fuzzer, the oracle pass
-rate.
+Done: GCC 16 `-fanalyzer` over the 104 `src/` files with the gcc-debug
+flags: no warnings (the analyzer was checked to report a planted leak).
+
+Not yet run: 1 CPU-hour per fuzzer, the oracle pass rate.
 
 ---
 
@@ -310,7 +312,7 @@ benchmark shows a cliff.
 
 | # | Work | Depends on | Size | Status |
 |---|------|------------|------|--------|
-| 1 | Phase A tooling + baseline | — | S | coverage, metrics, clang-tidy done |
+| 1 | Phase A tooling + baseline | — | S | coverage, metrics, clang-tidy, -fanalyzer done |
 | 2 | Split `downstream.c` | 1 | M | |
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |

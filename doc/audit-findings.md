@@ -35,3 +35,6 @@ report nothing. Rows A-01 to A-08 are the triage. Regenerate with:
 ```sh
 run-clang-tidy -quiet -p build/clang-asan -config='{Checks: "-*,performance-*,concurrency-*,readability-function-cognitive-complexity,bugprone-easily-swappable-parameters,bugprone-assignment-in-if-condition,bugprone-reserved-identifier,misc-no-recursion,misc-include-cleaner,cert-dcl37-c,bugprone-multi-level-implicit-pointer-conversion", CheckOptions: {readability-function-cognitive-complexity.Threshold: 40}, WarningsAsErrors: ""}' "$PWD/src/"
 ```
+
+GCC `-fanalyzer` (GCC 16) over every `src/` file, with the gcc-debug
+compile commands minus `-Werror`: no warnings, so no finding rows.
