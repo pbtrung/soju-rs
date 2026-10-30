@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.29)
-project(soju VERSION 0.1.0 LANGUAGES C)
+project(soju VERSION 0.99.0 LANGUAGES C)
 
 set(SOJU_MODE "debug" CACHE STRING "Build mode (PLAN.md 2.2)")
-set(SOJU_VERSION_STRING "${PROJECT_VERSION}" CACHE STRING "Version printed by -version")
+set(SOJU_VERSION_STRING "v${PROJECT_VERSION}" CACHE STRING "Version printed by -version")
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)

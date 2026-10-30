@@ -131,7 +131,22 @@ if(SOJU_USE_MIMALLOC)
 		INTERFACE_INCLUDE_DIRECTORIES "${P}/include")
 endif()
 
-# HTTP syntax is provided by the distribution's llhttp security updates.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LLHTTP REQUIRED IMPORTED_TARGET libllhttp>=9.0)
-add_library(soju::llhttp ALIAS PkgConfig::LLHTTP)
+# Prefer distribution security updates. MSan requires every parser write to
+# carry shadow state, so that mode alone uses an instrumented pinned release.
+if(SOJU_MODE STREQUAL "msan")
+	set(llhttp_URL "https://codeload.github.com/nodejs/llhttp/tar.gz/refs/tags/release/v9.3.1")
+	set(llhttp_SHA256 c14a93f287d3dbd6580d08af968294f8bcc61e1e1e3c34301549d00f3cf09365)
+	include("${CMAKE_SOURCE_DIR}/deps/fetch.cmake")
+	soju_fetch(llhttp)
+	set(llhttp_src "${CMAKE_BINARY_DIR}/llhttp-source")
+	file(ARCHIVE_EXTRACT INPUT "${llhttp_URL}" DESTINATION "${llhttp_src}")
+	set(llhttp_src "${llhttp_src}/llhttp-release-v9.3.1")
+	add_library(soju_llhttp STATIC "${llhttp_src}/src/api.c"
+		"${llhttp_src}/src/http.c" "${llhttp_src}/src/llhttp.c")
+	target_include_directories(soju_llhttp SYSTEM PUBLIC "${llhttp_src}/include")
+	add_library(soju::llhttp ALIAS soju_llhttp)
+else()
+	find_package(PkgConfig REQUIRED)
+	pkg_check_modules(LLHTTP REQUIRED IMPORTED_TARGET libllhttp>=9.0)
+	add_library(soju::llhttp ALIAS PkgConfig::LLHTTP)
+endif()
