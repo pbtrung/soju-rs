@@ -545,7 +545,7 @@ src/
   http/      request.c websocket.c client.c response.c
   downstream/ downstream.c receive.c send.c caps.c registration.c auth.c
              sasl.c sync.c util.c internal.h
-  upstream/  upstream.c connect.c registration.c channels.c users.c messages.c
+  upstream/  upstream.c connect.c receive.c registration.c channels.c users.c
              commands.c
   user/      user.c network.c channels.c delivered.c events.c upstream_conn.c
              webpush.c

@@ -24,7 +24,7 @@ struct upstream *upstream_lookup(uint64_t id) {
 	return strmap_get(sessions, k);
 }
 
-static void free_batch(void *data) {
+void upstream_free_batch(void *data) {
 	struct upstream_batch *b = data;
 	if (b->multiline != nullptr) {
 		multiline_batch_free(b->multiline);
@@ -87,7 +87,7 @@ struct upstream *upstream_new(struct server *srv, const struct db_user *u,
 	uc->casemap = CASEMAPPING_RFC1459;
 	cap_registry_init(&uc->caps);
 	isupport_init(&uc->isupport);
-	strmap_init(&uc->batches, free_batch);
+	strmap_init(&uc->batches, upstream_free_batch);
 	strmap_init(&uc->pending, free_pending);
 	upstream_channels_init(uc);
 	cmmap_init(&uc->monitored, uc->casemap, xfree);
@@ -323,39 +323,6 @@ bool upstream_supports_sasl(const struct upstream *uc, const char *mechanism) {
 	return false;
 }
 
-bool upstream_parse_label(const char *label, uint64_t *dc_id, char **out, struct err **err) {
-	*dc_id = 0;
-	*out = nullptr;
-	if (label[0] == '\0') {
-		*out = xstrdup("");
-		return true;
-	}
-	struct str rest = str_from(label), part;
-	unsigned long long n;
-	if (!str_next_field(&rest, '-', &part) || !str_eq_cstr(part, "sd") ||
-	    !str_next_field(&rest, '-', &part) || !str_parse_u64(part, &n)) {
-		return err_set(err, 0, "invalid label");
-	}
-	*dc_id = n;
-	if (!str_next_field(&rest, '-', &part) || rest.p == nullptr) {
-		return err_set(err, 0, "invalid label");
-	}
-	*out = str_dup(rest);
-	return true;
-}
-
-bool upstream_registration_temporary(const struct irc_msg *msg) {
-	return !cstr_eq(msg->command, ERR_PASSWDMISMATCH) &&
-	       !cstr_eq(msg->command, ERR_ERRONEUSNICKNAME) &&
-	       !(cstr_eq(msg->command, "FAIL") &&
-		 cstr_eq(irc_msg_param(msg, 1), "ACCOUNT_REQUIRED"));
-}
-
-char *upstream_registration_error(const struct irc_msg *msg) {
-	return xasprintf("registration error (%s): %s", msg->command,
-			 msg->params.len > 0 ? irc_msg_trailing(msg) : msg->command);
-}
-
 char *go_errno_message(int uv_error) {
 	char *text = xstrdup(uv_strerror(uv_error));
 	for (size_t i = 0; text[i] != '\0'; i++) {
@@ -484,157 +451,4 @@ void upstream_set_auto_detach(struct upstream *uc, const char *channel, uint64_t
 		ch->detach_after_ms = delay_ms;
 		ch->detach_deadline = delay_ms != 0 ? uc->now + delay_ms : 0;
 	}
-}
-
-void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
-	AUTOFREE char *label = nullptr;
-	if (uc->closing) {
-		irc_msg_free(msg);
-		return;
-	}
-	atomic_fetch_add(&uc->srv->metrics.upstream_in_messages_total, 1);
-	if (cstr_eq(msg->command, "PING")) {
-		upstream_send_take(uc, IRC_MSG("PONG", irc_msg_trailing(msg)));
-		goto out;
-	}
-	if (uc->registered && !uc->attached && !cstr_eq(msg->command, "001")) {
-		if (uc->delayed.len >= MAX_INPUT_IN_FLIGHT) {
-			upstream_disconnect(uc, "too many messages during registration delay",
-					    true);
-			goto out;
-		}
-		vec_push(&uc->delayed, msg);
-		return;
-	}
-	uint64_t dc_id = 0;
-	const char *raw_label = irc_tags_get_or_empty(&msg->tags, "label");
-	if (!upstream_parse_label(raw_label, &dc_id, &label, nullptr) || label == nullptr) {
-		goto out;
-	}
-	const char *parent_ref = irc_tags_get(&msg->tags, "batch");
-	struct upstream_batch *parent =
-		parent_ref != nullptr ? strmap_get(&uc->batches, parent_ref) : nullptr;
-	if (parent != nullptr && dc_id == 0) {
-		dc_id = parent->downstream_id;
-	}
-	// soju-rs forwards an upstream batch only as the labeled response of a
-	// labeled downstream command: messages of other batches lose their tag
-	if (parent != nullptr && parent->label[0] == '\0') {
-		irc_tags_remove(&msg->tags, "batch");
-	}
-	irc_tags_remove(&msg->tags, "label");
-	if (label[0] != '\0') {
-		irc_tags_set(&msg->tags, "label", label);
-	}
-	if (cstr_eq(msg->command, "BATCH") && msg->params.len > 0) {
-		const char *ref = irc_msg_param(msg, 0);
-		if (ref[0] == '+') {
-			if (uc->batches.live >= 64 || strmap_has(&uc->batches, ref + 1)) {
-				goto out;
-			}
-			struct upstream_batch *b = xcalloc(1, sizeof(*b));
-			b->downstream_id = dc_id;
-			b->label = xstrdup(label[0] != '\0'    ? label
-					   : parent != nullptr ? parent->label
-							       : "");
-			if (cstr_eq(irc_msg_param(msg, 1), MULTILINE_BATCH_TYPE)) {
-				b->multiline = xcalloc(1, sizeof(*b->multiline));
-				multiline_batch_init(b->multiline, irc_msg_clone(msg));
-			}
-			strmap_set(&uc->batches, ref + 1, b);
-			if (b->multiline != nullptr || b->label[0] == '\0') {
-				goto out;
-			}
-		} else if (ref[0] == '-') {
-			struct upstream_batch *b = strmap_take(&uc->batches, ref + 1);
-			if (b == nullptr) {
-				goto out;
-			}
-			dc_id = b->downstream_id;
-			if (b->multiline != nullptr) {
-				enum multiline_error error;
-				struct irc_msg *logical =
-					multiline_batch_finish(b->multiline, &error);
-				xfree(b->multiline);
-				b->multiline = nullptr;
-				if (logical != nullptr) {
-					irc_tags_remove(&logical->tags, "label");
-					if (b->downstream_id != 0) {
-						AUTOFREE char *original = xasprintf(
-							"sd-%llu-0-%s",
-							(unsigned long long)b->downstream_id,
-							b->label);
-						irc_tags_set(&logical->tags, "label", original);
-					}
-					upstream_receive_take(uc, logical);
-				}
-				free_batch(b);
-				goto out;
-			}
-			bool hidden = b->label[0] == '\0';
-			free_batch(b);
-			if (hidden) {
-				goto out;
-			}
-		}
-	} else if (parent != nullptr && parent->multiline != nullptr) {
-		struct multiline_limits limits = multiline_limits_default();
-		multiline_batch_push(parent->multiline, msg, &limits);
-		goto out;
-	}
-	if (cstr_eq(msg->command, "BATCH")) {
-		// A labeled response: it comes from us
-		server_set_prefix(uc->srv, msg);
-	}
-	if (parent != nullptr && parent->label[0] != '\0' && dc_id != 0) {
-		uc->batch_downstream = dc_id;
-		uc->batch_ref = xstrdup(parent_ref);
-	}
-	if (upstream_handle_registration(uc, msg)) {
-		goto out;
-	}
-	if (cstr_eq(msg->command, "ERROR")) {
-		// soju-rs: a handler error, which only aborts registration; a
-		// registered connection is then closed by the server
-		AUTOFREE char *text = xasprintf("fatal server error: %s", irc_msg_param(msg, 0));
-		if (uc->registered) {
-			log_info(&uc->log, "failed to handle message: %s", text);
-			goto out;
-		}
-		struct irc_msg *bare = irc_msg_clone(msg);
-		irc_tags_clear(&bare->tags);
-		AUTOFREE char *line = irc_msg_to_string(bare);
-		irc_msg_free(bare);
-		AUTOFREE char *q = utf8_debug_cstr(str_from(line));
-		AUTOFREE char *reason =
-			xasprintf("failed to register: failed to handle message %s: %s", q, text);
-		upstream_disconnect(uc, reason, true);
-		goto out;
-	}
-	if (!uc->registered &&
-	    (cstr_eq(msg->command, ERR_PASSWDMISMATCH) ||
-	     cstr_eq(msg->command, ERR_ERRONEUSNICKNAME) || cstr_eq(msg->command, "FAIL"))) {
-		AUTOFREE char *error = upstream_registration_error(msg);
-		AUTOFREE char *reason = xasprintf("failed to register: %s", error);
-		upstream_disconnect(uc, reason, upstream_registration_temporary(msg));
-		goto out;
-	}
-	if (!uc->registered && cstr_eq(msg->command, ERR_NICKNAMEINUSE)) {
-		AUTOFREE char *nick = xasprintf("%s_", uc->nick);
-		xfree(uc->nick);
-		uc->nick = xstrdup(nick);
-		upstream_send_take(uc, IRC_MSG("NICK", nick));
-		goto out;
-	}
-	if (!upstream_handle_channel(uc, msg)) {
-		goto out;
-	}
-	upstream_route_reply(uc, msg, &dc_id);
-	upstream_emit_take(uc, msg, dc_id);
-	msg = nullptr;
-out:
-	uc->batch_downstream = 0;
-	xfree(uc->batch_ref);
-	uc->batch_ref = nullptr;
-	irc_msg_free(msg);
 }

@@ -127,11 +127,11 @@ Files over the limit today (2026-10-30):
 | `src/db/hrana.c` | 808 | `hrana.c` protocol and value encoding; `hrana_pipeline.c` request pipelining (`pipeline` 124 lines) |
 | `src/config/config.c` | 741 | `parse_into` (337 lines) becomes table-driven, `{name, handler}` per block kind; handlers go in `config_directives.c` grouped by area; `config.c` keeps defaults, load/free, duration and float parsing. Directive order and error text stay identical, which the oracle `config`/`scfg` ops check |
 | `src/db/turso.c` | 663 | By role: connection and routing (`turso.c`), statement execution (`turso_exec.c`) |
-| `src/upstream/upstream.c` | 640 | `upstream_receive_take` (152 lines) becomes a command-to-handler table, batches move to `batches.c`; `upstream.c` keeps lifecycle, `tick` and send |
+| ~~`src/upstream/upstream.c`~~ | 640 | **Done**: receiving moved to `upstream/receive.c`, `upstream_receive_take` split into batch, error and early-message helpers. `upstream_receive_take` (152 lines) becomes a command-to-handler table, batches move to `batches.c`; `upstream.c` keeps lifecycle, `tick` and send |
 | `src/db/messages.c` | 629 | `messages_search.c`: FTS query quoting and search; `messages.c`: storage, history (`db_list_message_rows` 123 lines), ID high water |
 | `src/user/network.c` | 591 | `channel_state.c`: store/attach/detach/delete channel; `network.c`: network store, attrs, receipts, away/monitor |
 | `src/db/tenant.c` | 585 | `tenant_migrate.c`: `rebuild_messages` (108 lines) and schema upgrades; `tenant.c` the rest |
-| `src/upstream/channels.c` | 543 | `upstream_handle_channel` (376 lines, complexity 137) becomes a table; user state (NICK/QUIT/AWAY/ACCOUNT/CHGHOST/WHO cache) moves to `users.c`, as in soju-rs `upstream/users.rs` |
+| ~~`src/upstream/channels.c`~~ | 543 | **Done**: per-command handlers in a table, user state in `upstream/users.c`. `upstream_handle_channel` (376 lines, complexity 137) becomes a table; user state (NICK/QUIT/AWAY/ACCOUNT/CHGHOST/WHO cache) moves to `users.c`, as in soju-rs `upstream/users.rs` |
 | `src/db/conn.c` | 538 | Statement cache and helpers out of connection setup |
 | `src/service/user.c` | 525 | `user_change.c`: `apply_change`, `store_user`; `user.c`: create, delete, status, run |
 | `src/db/users.c` | 521 | Device certificates to `device_certs.c` |
@@ -319,7 +319,7 @@ benchmark shows a cliff.
 | 1 | Phase A tooling + baseline | — | S | done; fuzzing deferred |
 | 2 | Split `downstream.c` | 1 | M | done: 9 files, largest 424 lines |
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | split done: 6 files, largest 320 lines; audit open |
-| 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |
+| 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | splits done (channels.c 333, users.c 280, upstream.c 454, receive.c 212); `upstream_receive_take` still has complexity 27; audit open |
 | 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | |
 | 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | |
 | 7 | Split `config.c`; audit config + scfg | 1 | M | |
