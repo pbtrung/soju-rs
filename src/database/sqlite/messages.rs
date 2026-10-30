@@ -16,7 +16,7 @@ impl Database {
     /// list_messages): this is the last message stored, not the one with the
     /// latest time, which upstream servers may send out of order. Backlog
     /// replays only text messages after the cursor, so skipping later events
-    /// selects the same messages; Turso tenants only index text message IDs.
+    /// selects the same messages; only text message IDs are indexed.
     pub fn get_message_last_id(&self, network_id: i64, name: &str) -> Result<i64> {
         let conn = self.conn();
         Ok(conn
@@ -123,63 +123,38 @@ impl Database {
             ON CONFLICT DO NOTHING",
         )?
         .execute(named_params! {":network": network_id, ":target": name})?;
+        // Message IDs are delivery receipt cursors, never reused after
+        // deletion. The clustered Message table can't seek max(id): reserve
+        // them, like the background writer does.
+        let count = msgs.len() as i64;
+        let end: i64 = tx.query_row(
+            "INSERT INTO MessageIdHighWater(id, last_id)
+            VALUES (0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) + :count)
+            ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
+            RETURNING last_id",
+            named_params! {":count": count},
+            |r| r.get(0),
+        )?;
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO Message(id, target, raw, time, sender, text)
+            SELECT :id, id, :raw, :time, :sender, :text
+            FROM MessageTarget WHERE network = :network AND target = :target",
+        )?;
         let mut ids = Vec::with_capacity(msgs.len());
-        if tx.is_remote() {
-            // Turso tenants can't seek max(id) of their clustered table:
-            // reserve IDs like the background writer does.
-            let count = msgs.len() as i64;
-            let end: i64 = tx.query_row(
-                "INSERT INTO MessageIdHighWater(id, last_id)
-                VALUES (0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) + :count)
-                ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
-                RETURNING last_id",
-                named_params! {":count": count},
-                |r| r.get(0),
-            )?;
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO Message(id, target, raw, time, sender, text)
-                SELECT :id, id, :raw, :time, :sender, :text
-                FROM MessageTarget WHERE network = :network AND target = :target",
-            )?;
-            for (msg, id) in msgs.iter().zip(end - count + 1..) {
-                let (time, text) = message_time_text(msg)?;
-                stmt.execute(named_params! {
-                    ":id": id,
-                    ":network": network_id,
-                    ":target": name,
-                    ":raw": msg.to_string(),
-                    ":time": time,
-                    ":sender": msg.prefix_name(),
-                    ":text": text,
-                })?;
-                ids.push(id);
-            }
-        } else {
-            // Message IDs are delivery receipt cursors: never reuse the IDs
-            // of deleted messages, see record_message_id_high_water
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO Message(id, target, raw, time, sender, text)
-                SELECT max(
-                        coalesce((SELECT max(id) FROM Message), 0),
-                        coalesce((SELECT last_id FROM MessageIdHighWater), 0)
-                    ) + 1,
-                    id, :raw, :time, :sender, :text
-                FROM MessageTarget as t
-                WHERE network = :network AND target = :target",
-            )?;
-            for msg in msgs {
-                let (time, text) = message_time_text(msg)?;
-                stmt.execute(named_params! {
-                    ":network": network_id,
-                    ":target": name,
-                    ":raw": msg.to_string(),
-                    ":time": time,
-                    ":sender": msg.prefix_name(),
-                    ":text": text,
-                })?;
-                ids.push(tx.last_insert_rowid());
-            }
+        for (msg, id) in msgs.iter().zip(end - count + 1..) {
+            let (time, text) = message_time_text(msg)?;
+            stmt.execute(named_params! {
+                ":id": id,
+                ":network": network_id,
+                ":target": name,
+                ":raw": msg.to_string(),
+                ":time": time,
+                ":sender": msg.prefix_name(),
+                ":text": text,
+            })?;
+            ids.push(id);
         }
+        drop(stmt);
         tx.commit()?;
         Ok(ids)
     }
@@ -190,17 +165,16 @@ impl Database {
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
         let remote = self.conn().is_remote();
-        let inner = if options.events && remote {
-            // Turso tenants cluster messages by target and time
+        let inner = if options.events {
+            // Messages are clustered by target and time: one seek
             "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1"
-        } else if options.events {
-            "SELECT max(latest) FROM (
-                SELECT max(time) latest FROM Message WHERE target=MessageTarget.id AND text IS NULL
-                UNION ALL
-                SELECT max(time) latest FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL
-            )"
-        } else {
+        } else if remote {
+            // Turso tenants have no text time index: step over events
             "SELECT time FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
+        } else {
+            // Without statistics, SQLite prefers the primary key, reading
+            // every event between text messages
+            "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
         };
 
         let mut query = format!(
@@ -285,6 +259,7 @@ impl Database {
         let conn = self.conn();
         let remote = conn.is_remote();
         let target = "(SELECT id FROM MessageTarget WHERE network = :network AND target = :target)";
+        let text_only = !options.events || !options.text.is_empty();
         let mut query = String::from("SELECT m.id AS id, m.time AS time, m.raw AS raw FROM ");
         if !options.text.is_empty() {
             // Seek each search result by ID, rather than scanning the
@@ -295,6 +270,12 @@ impl Database {
             );
         } else {
             query.push_str("Message AS m ");
+            if !remote && text_only && options.after_id == 0 {
+                // Without statistics, SQLite prefers the primary key,
+                // reading every event between text messages. Turso tenants
+                // have no text time index.
+                query.push_str("INDEXED BY MessageTextIndex ");
+            }
         }
         query.push_str(&format!("WHERE m.target = {target} "));
         let limit = options.limit as i64;
@@ -303,7 +284,6 @@ impl Database {
         if !options.text.is_empty() {
             binds.push((":text", &text));
         }
-        let text_only = !options.events || !options.text.is_empty();
         if options.after_id > 0 {
             if text_only {
                 // Delivery cursors: seek the text message ID index
@@ -332,17 +312,10 @@ impl Database {
         }
         if text_only {
             query.push_str("AND m.text IS NOT NULL ");
-        } else if !remote {
-            // Merge two disjoint ordered indexes, avoiding a second timestamp
-            // index entry on every text message. LIMIT applies to their union.
-            // Turso tenants are clustered by target and time instead.
-            let text_query = format!("{query}AND m.text IS NOT NULL ");
-            query.push_str("AND m.text IS NULL UNION ALL ");
-            query.push_str(&text_query);
         }
         // Messages often share a time, e.g. the lines of a multiline
-        // message: order them as they were stored. The (target, time) index
-        // entries end with the row ID, so this doesn't need an extra sort.
+        // message: order them as they were stored. The primary key and the
+        // text time index end with the ID, so this doesn't need a sort.
         if options.take_last {
             query.push_str("ORDER BY time DESC, id DESC ");
         } else {
@@ -374,67 +347,27 @@ impl Database {
     /// deleted messages: less than limit once there are none left.
     ///
     /// The database is locked meanwhile: deleting in chunks lets other
-    /// queries run in between. Expired messages are mostly the oldest, with
-    /// the lowest IDs: each chunk finds them at the start of the table.
+    /// queries run in between. Expired messages are the oldest of each
+    /// target: each chunk finds them at the start of its targets' ranges.
     pub fn delete_messages_before(&self, before: DateTime<Utc>, limit: usize) -> Result<usize> {
         if limit == 0 {
             return Ok(0);
         }
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        record_message_id_high_water(&tx)?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        if tx.is_remote() {
-            // Seek each target's oldest messages in the clustered table
-            let n = tx.execute(
-                "DELETE FROM Message WHERE (target, time, id) IN (
-                    SELECT m.target, m.time, m.id FROM MessageTarget t
-                    CROSS JOIN Message m ON m.target = t.id
-                    WHERE m.time < :before LIMIT :limit
-                )",
-                named_params! {":before": xirc::format_server_time(before), ":limit": limit},
-            )?;
-            tx.commit()?;
-            return Ok(n);
-        }
+        // Seek each target's oldest messages in the clustered table
         let n = tx.execute(
-            "DELETE FROM Message WHERE id IN (
-                SELECT id FROM (
-                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id
-                    WHERE m.text IS NULL AND m.time<:before
-                    UNION ALL
-                    SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id
-                    WHERE m.text IS NOT NULL AND m.time<:before
-                ) LIMIT :limit
+            "DELETE FROM Message WHERE (target, time, id) IN (
+                SELECT m.target, m.time, m.id FROM MessageTarget t
+                CROSS JOIN Message m ON m.target = t.id
+                WHERE m.time < :before LIMIT :limit
             )",
-            named_params! {":before":xirc::format_server_time(before),":limit":limit},
+            named_params! {":before": xirc::format_server_time(before), ":limit": limit},
         )?;
         tx.commit()?;
         Ok(n)
     }
-}
-
-/// Records the highest message ID before deleting messages. SQLite would
-/// otherwise reuse the IDs of deleted messages with the highest IDs, and
-/// delivery receipts pointing past them would hide new messages.
-///
-/// The table isn't part of upstream's schema: Go soju ignores it, and keeps
-/// reusing IDs if it deletes messages itself.
-///
-/// Turso tenants reserve every ID through this row before inserting, so it
-/// is already up to date there; their clustered table can't seek max(id).
-pub(super) fn record_message_id_high_water(conn: &super::Connection) -> Result<()> {
-    if conn.is_remote() {
-        return Ok(());
-    }
-    conn.execute(
-        "INSERT INTO MessageIdHighWater(id, last_id)
-        SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1
-        ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id
-        WHERE last_id<excluded.last_id",
-        [],
-    )?;
-    Ok(())
 }
 
 /// Returns the stored time and searchable text of a message.

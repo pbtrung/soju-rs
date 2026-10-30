@@ -387,8 +387,8 @@ fn messages_invalid_utf8() {
     let raw: &[u8] = b"@time=2024-01-01T00:00:00.000Z :bob PRIVMSG #a :caf\xe9";
     db.conn()
         .execute(
-            "INSERT INTO Message(target, raw, time, sender, text)
-            SELECT id, CAST(?1 AS TEXT), '2024-01-01T00:00:00.000Z', 'bob', 'caf'
+            "INSERT INTO Message(id, target, raw, time, sender, text)
+            SELECT 100, id, CAST(?1 AS TEXT), '2024-01-01T00:00:00.000Z', 'bob', 'caf'
             FROM MessageTarget WHERE target = '#a'",
             [raw],
         )
@@ -582,7 +582,7 @@ fn migrations() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 33);
+    assert_eq!(SCHEMA_VERSION, 34);
 }
 
 #[test]
@@ -630,7 +630,7 @@ fn message_text_index_migration() {
                 "#a",
                 &MessageOptions {
                     events: true,
-                    ..opts
+                    ..opts.clone()
                 }
             )
             .unwrap()
@@ -643,16 +643,43 @@ fn message_text_index_migration() {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        let stat: String = conn
+        // Schema 34 clustered the table, keeping IDs and the search index
+        let sql: String = conn
             .query_row(
-                "SELECT stat FROM sqlite_stat1 WHERE idx = 'MessageTextIndex'",
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'Message'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        // Only the text message is indexed, and the migration analyzed it.
-        assert_eq!(stat, "1 1 1");
+        assert!(sql.contains("WITHOUT ROWID"), "{sql}");
+        let ids = conn
+            .prepare("SELECT id FROM Message ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        conn.execute_batch("INSERT INTO MessageFTS(MessageFTS) VALUES ('integrity-check');")
+            .unwrap();
         drop(conn);
+        let found = db
+            .list_messages(
+                1,
+                "#a",
+                &MessageOptions {
+                    text: "hello".into(),
+                    ..opts.clone()
+                },
+            )
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        // New IDs continue after the highest stored one
+        assert_eq!(
+            db.store_messages(1, "#a", &[msg!("PRIVMSG", "#a", "again")])
+                .unwrap(),
+            vec![3]
+        );
         // Opening an already upgraded database is harmless.
         db.upgrade().unwrap();
     }
@@ -673,8 +700,9 @@ fn message_text_index_query_plans() {
         WITH RECURSIVE messages(id) AS (
             VALUES (1) UNION ALL SELECT id + 1 FROM messages WHERE id < 100
         )
-        INSERT INTO Message(target, raw, time, sender, text)
-            SELECT t.id, 'raw', printf('2024-01-01T00:%02d:%02d.000Z', m.id / 60, m.id % 60),
+        INSERT INTO Message(id, target, raw, time, sender, text)
+            SELECT t.id * 1000 + m.id, t.id, 'raw',
+                printf('2024-01-01T00:%02d:%02d.000Z', m.id / 60, m.id % 60),
                 '', CASE WHEN m.id % 10 = 0 THEN 'hello' END
             FROM MessageTarget t, messages m;",
     )
@@ -685,35 +713,55 @@ fn message_text_index_query_plans() {
         if analyze {
             conn.execute_batch("ANALYZE;").unwrap();
         }
-        for events in [false, true] {
-            let filter = if events {
-                "text IS NULL"
-            } else {
-                "text IS NOT NULL"
-            };
-            for query in [
-                format!(
-                    "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id AND {filter} ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10"
-                ),
-                format!(
-                    "SELECT m.raw FROM Message m,MessageTarget t WHERE m.target=t.id AND t.network=1 AND t.target='#channel1' AND m.{filter} ORDER BY m.time DESC,m.id DESC LIMIT 5"
-                ),
-            ] {
-                let plan = conn
-                    .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
-                    .unwrap()
-                    .query_map([], |r| r.get::<_, String>(3))
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<_>>>()
-                    .unwrap();
-                let index = if events {
-                    "MessageEventIndex"
-                } else {
-                    "MessageTextIndex"
-                };
+        // The SQL of list_message_last_per_target and list_message_rows
+        for (query, index) in [
+            (
+                "SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+                "MessageTextIndex",
+            ),
+            (
+                "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+                "PRIMARY KEY",
+            ),
+            (
+                "SELECT m.raw FROM Message AS m INDEXED BY MessageTextIndex WHERE m.target=(SELECT id FROM MessageTarget WHERE network=1 AND target='#channel1') AND m.text IS NOT NULL ORDER BY time DESC, id DESC LIMIT 5",
+                "MessageTextIndex",
+            ),
+            (
+                "SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM MessageTarget WHERE network=1 AND target='#channel1') ORDER BY time DESC, id DESC LIMIT 5",
+                "PRIMARY KEY",
+            ),
+            (
+                "SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC LIMIT 1",
+                "MessageTextIdIndex",
+            ),
+            (
+                "SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN (SELECT time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) AND m.text IS NOT NULL ORDER BY time ASC, id ASC LIMIT 5",
+                "MessageTextIdIndex",
+            ),
+            (
+                "SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m ON m.target = t.id WHERE m.time < '2024' LIMIT 10",
+                "PRIMARY KEY (target=? AND time<?)",
+            ),
+        ] {
+            let plan = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert!(
+                plan.iter().any(|detail| detail.contains(index)),
+                "expected {index} (analyze={analyze}): {query}: {plan:?}"
+            );
+            // History doesn't sort: the indexes are in time and ID order.
+            // Backlog sorts the messages after its cursor, and target
+            // lists their latest times.
+            if !query.contains("latest") && !query.contains(" IN (") {
                 assert!(
-                    plan.iter().any(|detail| detail.contains(index)),
-                    "expected {index} (analyze={analyze}): {plan:?}"
+                    !plan.iter().any(|detail| detail.contains("TEMP B-TREE")),
+                    "unexpected sort (analyze={analyze}): {query}: {plan:?}"
                 );
             }
         }

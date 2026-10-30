@@ -115,7 +115,6 @@ impl Database {
     pub fn delete_network(&self, id: i64) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        super::messages::record_message_id_high_water(&tx)?;
         tx.execute(
             "DELETE FROM Message WHERE target IN (SELECT id FROM MessageTarget WHERE network = ?)",
             [id],

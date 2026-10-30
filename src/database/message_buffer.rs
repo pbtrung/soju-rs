@@ -320,7 +320,11 @@ impl MessageBuffer {
         let mut conn = self.0.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         for m in messages {
-            tx.execute("DELETE FROM Message WHERE id=?", [m.id])?;
+            tx.execute(
+                "DELETE FROM Message WHERE target=(SELECT id FROM MessageTarget
+                WHERE network=:network AND target=:target) AND time=:time AND id=:id",
+                named_params! {":network":m.network, ":target":m.target, ":time":m.time, ":id":m.id},
+            )?;
         }
         // Keep metadata bounded too; retain only targets/networks with pending messages.
         tx.execute_batch(

@@ -11,7 +11,7 @@ use rusqlite::{Connection as SqliteConnection, TransactionBehavior};
 use super::*;
 use crate::xirc;
 
-use super::sqlite_migrations::MIGRATIONS;
+use super::sqlite_migrations::{LOCAL_MESSAGE_CLUSTER, MIGRATIONS};
 
 mod messages;
 mod networks;
@@ -124,14 +124,6 @@ impl Database {
             conn: Mutex::new(Connection::Local(conn)),
         };
         db.upgrade()?;
-        // Not part of upstream's schema, see
-        // messages::record_message_id_high_water
-        db.conn().execute_batch(
-            "CREATE TABLE IF NOT EXISTS MessageIdHighWater (
-                id INTEGER PRIMARY KEY CHECK (id = 0),
-                last_id INTEGER NOT NULL
-            );",
-        )?;
         Ok(db)
     }
 
@@ -181,6 +173,9 @@ impl Database {
             tx.execute_batch(FTS_SCHEMA)?;
         } else {
             for (i, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+                if tx.is_remote() && i == LOCAL_MESSAGE_CLUSTER {
+                    continue;
+                }
                 // Turso's hosted SQL allowlist rejects ANALYZE. The partial
                 // index itself is supported; local SQLite still analyzes it.
                 // The Message rebuild that follows replaces the timestamp

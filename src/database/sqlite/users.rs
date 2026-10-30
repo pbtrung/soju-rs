@@ -192,14 +192,12 @@ impl Database {
             )",
             [id],
         )?;
-        super::messages::record_message_id_high_water(&tx)?;
         tx.execute(
             "DELETE FROM Message
-            WHERE id IN (
-                SELECT Message.id
-                FROM Message, MessageTarget, Network
-                WHERE Message.target = MessageTarget.id
-                AND MessageTarget.network = Network.id
+            WHERE target IN (
+                SELECT MessageTarget.id
+                FROM MessageTarget, Network
+                WHERE MessageTarget.network = Network.id
                 AND Network.user = ?
             )",
             [id],

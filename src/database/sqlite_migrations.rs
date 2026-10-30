@@ -223,4 +223,51 @@ pub const MIGRATIONS: &[&str] = &[
             last_id INTEGER NOT NULL
         );
     "#,
+    // Local databases get the clustered layout of Turso tenants (which
+    // skip this migration, see LOCAL_MESSAGE_CLUSTER) plus a text-only time
+    // index. IDs are kept, so the search index and receipts stay valid; the
+    // reservation row takes over from max(id), which the new table can't
+    // seek. Dropping Message drops its indexes and search triggers.
+    r#"
+        INSERT INTO MessageIdHighWater(id, last_id)
+            SELECT 0, id FROM Message WHERE true ORDER BY id DESC LIMIT 1
+            ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
+            WHERE last_id < excluded.last_id;
+        CREATE TABLE MessageNew (
+            target INTEGER NOT NULL,
+            time TEXT NOT NULL,
+            id INTEGER NOT NULL,
+            raw TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            text TEXT,
+            PRIMARY KEY(target, time, id),
+            FOREIGN KEY(target) REFERENCES MessageTarget(id)
+        ) WITHOUT ROWID;
+        INSERT INTO MessageNew(target, time, id, raw, sender, text)
+            SELECT target, time, id, raw, sender, text FROM Message
+            ORDER BY target, time, id;
+        DROP TABLE Message;
+        ALTER TABLE MessageNew RENAME TO Message;
+        CREATE UNIQUE INDEX MessageTextIdIndex ON Message(target, id) WHERE text IS NOT NULL;
+        CREATE INDEX MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
+        CREATE TRIGGER MessageFTSInsert AFTER INSERT ON Message
+        WHEN new.text IS NOT NULL BEGIN
+            INSERT INTO MessageFTS(rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER MessageFTSDelete AFTER DELETE ON Message
+        WHEN old.text IS NOT NULL BEGIN
+            INSERT INTO MessageFTS(MessageFTS, rowid, text) VALUES ('delete', old.id, old.text);
+        END;
+        CREATE TRIGGER MessageFTSUpdate AFTER UPDATE ON Message
+        WHEN old.id IS NOT new.id OR old.text IS NOT new.text BEGIN
+            INSERT INTO MessageFTS(MessageFTS, rowid, text)
+                SELECT 'delete', old.id, old.text WHERE old.text IS NOT NULL;
+            INSERT INTO MessageFTS(rowid, text)
+                SELECT new.id, new.text WHERE new.text IS NOT NULL;
+        END;
+    "#,
 ];
+
+/// The migration clustering the local Message table. Turso tenants skip it:
+/// sqlite::turso::rebuild_turso_messages clusters them in resumable chunks.
+pub const LOCAL_MESSAGE_CLUSTER: usize = 33;
