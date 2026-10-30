@@ -125,9 +125,13 @@ it refuses to delete the controller or a database moved to another group.
 
 ## Upgrading to v0.99.24
 
-User databases record schema 34 without changes to their tables: its
-migration gives local SQLite databases the clustered `Message` layout that
-user databases already have. Earlier binaries cannot reopen them.
+User databases become schema 35. Schema 34 changes nothing in them: it
+gives local SQLite databases the clustered `Message` layout that user
+databases already have. Schema 35 adds `MessageTarget.highlight`, the time
+of the latest message mentioning the user, which tells `soju.im/unread`
+clients which conversations have mentions (see [doc/unread.md](unread.md)).
+Adding the column doesn't rewrite any row. Earlier binaries cannot reopen
+upgraded user databases.
 
 ## Upgrading to v0.99.23
 
