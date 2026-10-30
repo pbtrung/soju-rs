@@ -196,24 +196,43 @@ pub fn vapid_authorization(
 }
 
 /// Reports whether an IP address is internal and must not be contacted by
-/// the Web Push client.
+/// the Web Push client: not globally reachable, or a gateway to such an
+/// address (an IPv6 address embedding an IPv4 one).
 pub fn is_internal_ip(ip: IpAddr) -> bool {
-    let ip = ip.to_canonical();
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
             v4.is_loopback()
                 || v4.is_unspecified()
                 || v4.is_multicast()
                 || v4.is_private()
                 || v4.is_link_local()
+                || a == 0 // "this network"
+                || (a == 100 && (b & 0xc0) == 64) // shared address space (CGNAT, cloud metadata)
+                || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
+                || (a == 198 && (b & 0xfe) == 18) // benchmarking
+                || a >= 240 // reserved, broadcast
         }
         IpAddr::V6(v6) => {
-            let seg0 = v6.segments()[0];
+            let seg = v6.segments();
+            let embedded = |hi: u16, lo: u16| {
+                is_internal_ip(IpAddr::V4(std::net::Ipv4Addr::from(
+                    (u32::from(hi) << 16) | u32::from(lo),
+                )))
+            };
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || (seg0 & 0xfe00) == 0xfc00 // unique local
-                || (seg0 & 0xffc0) == 0xfe80 // link-local unicast
+                || (seg[0] & 0xfe00) == 0xfc00 // unique local
+                || (seg[0] & 0xffc0) == 0xfe80 // link-local unicast
+                || (seg[0] & 0xffc0) == 0xfec0 // site-local
+                // IPv4-compatible
+                || (seg[..6] == [0; 6] && embedded(seg[6], seg[7]))
+                // NAT64, well-known and local-use prefixes
+                || (seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && embedded(seg[6], seg[7]))
+                || (seg[..3] == [0x64, 0xff9b, 1])
+                // 6to4
+                || (seg[0] == 0x2002 && embedded(seg[1], seg[2]))
         }
     }
 }
@@ -269,6 +288,8 @@ impl Sender {
         let redirect = reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 10 {
                 attempt.error("stopped after 10 redirects")
+            } else if attempt.url().scheme() != "https" {
+                attempt.error("refusing a redirect to a non-HTTPS URL")
             } else if let Err(e) = check_external_url(attempt.url()) {
                 attempt.error(e)
             } else {
@@ -427,10 +448,28 @@ mod tests {
             "fd00::1",
             "0.0.0.0",
             "::ffff:10.0.0.1",
+            "0.1.2.3",
+            "100.100.100.200",
+            "100.64.0.1",
+            "192.0.0.8",
+            "198.18.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "fec0::1",
+            "::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::1",
+            "2002:a00:1::1",
         ] {
             assert!(is_internal_ip(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["1.1.1.1", "2606:4700::1111"] {
+        for ip in [
+            "1.1.1.1",
+            "2606:4700::1111",
+            "100.128.0.1",
+            "64:ff9b::808:808",
+            "2002:808:808::1",
+        ] {
             assert!(!is_internal_ip(ip.parse().unwrap()), "{ip}");
         }
     }
