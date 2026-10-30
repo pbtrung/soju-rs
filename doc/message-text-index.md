@@ -292,7 +292,8 @@ would help there, at the cost of merging two ranges for event playback.
 
 The migration copies the whole table once, in key order and in one
 transaction, keeping message IDs (the search index and delivery receipts
-stay valid). It needs free disk space about the size of the message table
+stay valid). It needs free disk space up to about twice the size of the message
+table (the copy, and SQLite's temporary file sorting it into key order)
 and some startup time on large histories (400,000 messages took under a
 second on a desktop). Older versions can't open the upgraded database; back
 it up first.
