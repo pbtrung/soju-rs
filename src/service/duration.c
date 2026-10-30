@@ -1,7 +1,5 @@
 #include "service/service.h"
 #include "base/alloc.h"
-#include <math.h>
-#include <stdlib.h>
 #include <stdio.h>
 
 bool service_parse_duration(const char *s, uint64_t *ns) {
@@ -15,27 +13,36 @@ bool service_parse_duration(const char *s, uint64_t *ns) {
 	if (*s == '\0' || *s == '-') {
 		return false;
 	}
-	long double total = 0;
+	uint64_t total = 0;
 	while (*s) {
+		uint64_t whole = 0;
+		bool digits = false;
+		while (*s >= '0' && *s <= '9') {
+			unsigned d = (unsigned)(*s++ - '0');
+			if (whole > ((uint64_t)INT64_MAX - d) / 10) {
+				return false;
+			}
+			whole = whole * 10 + d;
+			digits = true;
+		}
+		const char *fraction = s, *end = s;
+		if (*s == '.') {
+			fraction = ++s;
+			while (*s >= '0' && *s <= '9') {
+				s++;
+				digits = true;
+			}
+			end = s;
+		}
+		if (!digits) {
+			return false;
+		}
 		const char *start = s;
-		while ((*s >= '0' && *s <= '9') || *s == '.') {
-			s++;
-		}
-		if (s == start) {
-			return false;
-		}
-		AUTOFREE char *number = str_dup(str_new(start, (size_t)(s - start)));
-		char *end = nullptr;
-		long double v = strtold(number, &end);
-		if (*end || !isfinite(v)) {
-			return false;
-		}
-		start = s;
 		while (*s && !(*s >= '0' && *s <= '9') && *s != '.') {
 			s++;
 		}
 		struct str unit = str_new(start, (size_t)(s - start));
-		long double mult = 0;
+		uint64_t mult;
 		if (str_eq_cstr(unit, "ns")) {
 			mult = 1;
 		} else if (str_eq_cstr(unit, "us") || str_eq_cstr(unit, "µs") ||
@@ -46,18 +53,25 @@ bool service_parse_duration(const char *s, uint64_t *ns) {
 		} else if (str_eq_cstr(unit, "s")) {
 			mult = 1000000000;
 		} else if (str_eq_cstr(unit, "m")) {
-			mult = 60000000000.0L;
+			mult = 60000000000ULL;
 		} else if (str_eq_cstr(unit, "h")) {
-			mult = 3600000000000.0L;
+			mult = 3600000000000ULL;
 		} else {
 			return false;
 		}
-		total += v * mult;
-		if (total > (long double)INT64_MAX) {
+		// Decimal multiplication from the least significant digit avoids
+		// floating point rounding and cannot overflow (carry < mult).
+		uint64_t carry = 0;
+		while (end > fraction) {
+			carry = ((unsigned)(*--end - '0') * mult + carry) / 10;
+		}
+		if (carry > (uint64_t)INT64_MAX - total ||
+		    whole > ((uint64_t)INT64_MAX - total - carry) / mult) {
 			return false;
 		}
+		total += whole * mult + carry;
 	}
-	*ns = (uint64_t)total;
+	*ns = total;
 	return true;
 }
 char *service_format_duration(uint64_t ns) {

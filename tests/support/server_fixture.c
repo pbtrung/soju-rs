@@ -25,7 +25,7 @@ static void finish(void *data) {
 	}
 }
 
-void fixture_init(struct server_fixture *e, bool memory) {
+void fixture_init_database(struct server_fixture *e, struct db *db, bool memory) {
 	*e = (struct server_fixture){.listener = -1};
 	const char *loops = getenv("SOJU_LOOPS"), *delay = getenv("SOJU_DB_DELAY");
 	unsigned long long count = 1, ms = 0;
@@ -36,8 +36,6 @@ void fixture_init(struct server_fixture *e, bool memory) {
 		assert_true(str_parse_u64(str_from(delay), &ms));
 	}
 	loop_pool_init(&e->loops, (unsigned)count);
-	struct db *db;
-	assert_true(db_open_in_memory(&db, nullptr));
 	db_user_init(&e->user, "test");
 	assert_true(db_user_set_password(&e->user, "secret", nullptr));
 	assert_true(db_store_user(db, &e->user, nullptr));
@@ -65,6 +63,12 @@ void fixture_init(struct server_fixture *e, bool memory) {
 	server_config_set(&e->srv, cfg);
 	assert_true(server_start(&e->srv, nullptr));
 	assert_int_equal(uv_thread_create(&e->runner, pool_run, &e->loops), 0);
+}
+
+void fixture_init(struct server_fixture *e, bool memory) {
+	struct db *db;
+	assert_true(db_open_in_memory(&db, nullptr));
+	fixture_init_database(e, db, memory);
 }
 
 void fixture_finish(struct server_fixture *e) {

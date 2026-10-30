@@ -41,6 +41,33 @@ static void store_user(struct db *db, void *data) {
 		}
 		ok = db_store_user(db, &j->record, &j->err);
 	} else {
+		struct db_user current;
+		bool found = false;
+		if (!db_get_user(db, j->record.username, &current, &found, &j->err)) {
+			return;
+		}
+		if (!found || current.id != j->target) {
+			if (found) {
+				db_user_free(&current);
+			}
+			ok = err_set(&j->err, 0, "user no longer exists");
+			(void)ok;
+			return;
+		}
+		db_user_free(&j->record);
+		j->record = current;
+		service_replace(&j->record.password, j->disable ? "" : j->hash);
+		service_replace(&j->record.nick, j->nick);
+		service_replace(&j->record.realname, j->realname);
+		if (j->has_admin) {
+			j->record.admin = j->admin;
+		}
+		if (j->has_enabled) {
+			j->record.enabled = j->enabled;
+		}
+		if (j->has_max) {
+			j->record.max_networks = j->max;
+		}
 		ok = (j->hash != nullptr || j->disable)
 			     ? db_store_user(db, &j->record, &j->err)
 			     : db_store_user_keep_password(db, &j->record, &j->err);
@@ -50,28 +77,6 @@ static void store_user(struct db *db, void *data) {
 static void apply_change(struct user *u, void *data) {
 	struct user_change *j = data;
 	struct service_context *c = j->c;
-	if (uv_hrtime() > c->deadline) {
-		bool ok = SFAIL(c, "context deadline exceeded");
-		(void)ok;
-		service_finish(c);
-		change_free(j);
-		return;
-	}
-	db_user_free(&j->record);
-	db_user_copy(&j->record, &u->record);
-	service_replace(&j->record.password, j->disable ? "" : j->hash);
-	service_replace(&j->record.nick, j->nick);
-	service_replace(&j->record.realname, j->realname);
-	if (j->has_admin) {
-		j->record.admin = j->admin;
-	}
-	if (j->has_enabled) {
-		j->record.enabled = j->enabled;
-	}
-	if (j->has_max) {
-		j->record.max_networks = j->max;
-	}
-	db_thread_call(c->srv->db, store_user, j);
 	if (j->err != nullptr) {
 		c->err = j->err;
 		j->err = nullptr;
@@ -122,6 +127,23 @@ static void apply_change(struct user *u, void *data) {
 	}
 	service_finish(c);
 	change_free(j);
+}
+static void update_done(void *data) {
+	struct user_change *j = data;
+	user_post(j->c->srv, j->target, apply_change, change_drop, j);
+}
+static void prepare_change(struct user *u, void *data) {
+	struct user_change *j = data;
+	if (uv_hrtime() > j->c->deadline) {
+		bool ok = SFAIL(j->c, "context deadline exceeded");
+		(void)ok;
+		service_finish(j->c);
+		change_free(j);
+		return;
+	}
+	db_user_free(&j->record);
+	db_user_copy(&j->record, &u->record);
+	server_db(j->c->srv, store_user, update_done, j);
 }
 static void create_announce(struct user *u, void *data) {
 	(void)u;
@@ -178,7 +200,7 @@ static void change_continue(struct user_change *j) {
 		service_replace(&j->record.password, j->hash);
 		server_db(c->srv, store_user, create_done, j);
 	} else {
-		user_post(c->srv, j->target, apply_change, change_drop, j);
+		user_post(c->srv, j->target, prepare_change, change_drop, j);
 	}
 }
 static void hash_done(void *data, const char *err) {

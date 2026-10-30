@@ -18,6 +18,8 @@ struct server_fixture {
 	unsigned next_conn;
 	VEC(struct test_peer *) peers;
 };
+// Takes ownership of db through the fixture DB thread.
+void fixture_init_database(struct server_fixture *e, struct db *db, bool memory);
 void fixture_init(struct server_fixture *e, bool memory);
 void fixture_finish(struct server_fixture *e);
 [[nodiscard]] struct test_peer *fixture_upstream(struct server_fixture *e, const char *caps,

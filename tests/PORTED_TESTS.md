@@ -7,7 +7,7 @@ messages, limits) are not listed. The 17 integration scenarios of
 `tests/server.rs` (each run on both Tokio runtimes) are ported in phase 6
 (L2), in both DB modes.
 
-Ported so far: 164 of 165 unit tests (phases 0–9, 9b in progress); 17 of 17 scenarios.
+Ported so far: 165 of 165 unit tests (phases 0–10); 17 of 17 scenarios.
 
 Also compared against the Rust code by the differential harness
 `fuzz/diff_oracle.c` (oracle: `tests/oracle`, built by `tools/oracle.sh`).
@@ -75,7 +75,7 @@ Also compared against the Rust code by the differential harness
 | `src/database/turso/tests.rs` | `malformed_commit_responses_fail_without_replaying_writes` | `test_db_turso.c`: `test_malformed_commit_responses_fail_without_replaying_writes` |
 | `src/database/turso/tests.rs` | `binary_values_named_parameters_and_replication_index` | `test_db_turso.c`: `test_binary_values_named_parameters_and_replication_index` |
 | `src/database/turso/tests.rs` | `slow_http_request_does_not_block_an_independent_stream` | `test_db_turso.c`: `test_message_batch_keeps_appending_during_slow_commit` |
-| `src/database/turso/tests.rs` | `slow_storage_does_not_freeze_the_user_runtime_or_user_directory` | pending: phase 9b |
+| `src/database/turso/tests.rs` | `slow_storage_does_not_freeze_the_user_runtime_or_user_directory` | `test_turso_server.c`: `test_slow_storage_keeps_runtime_and_directory_responsive` |
 | `src/database/turso/tests.rs` | `cross_tenant_network_update_cannot_poison_routes_after_restart` | `test_db_turso.c`: `test_cross_tenant_network_update_cannot_poison_routes_after_restart` |
 | `src/database/turso/tests.rs` | `startup_and_recurring_expiry_never_send_file_maintenance_sql` | `test_db_turso.c`: `test_message_ids_survive_expiry_and_deleted_network_writes` |
 | `src/database/turso/tests.rs` | `buffered_history_search_targets_and_shutdown_include_pending_lines` | `test_db_turso.c`: `test_msgstore_history_merges_committed_and_pending_rows` |

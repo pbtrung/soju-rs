@@ -171,8 +171,14 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 				char *fields, *token;
 				parse_whox_options(str_from(irc_msg_param(q->data[0].msg, 1)),
 						   &fields, &token);
-				valid = strchr(fields, 'n') != nullptr &&
-					parse_whox_reply(msg, fields, &info, nullptr);
+				if (strchr(fields, 'n') != nullptr) {
+					struct whox_info parsed;
+					if (parse_whox_reply(msg, fields, &parsed, nullptr)) {
+						whox_info_free(&info);
+						info = parsed;
+						valid = true;
+					}
+				}
 				xfree(fields);
 				xfree(token);
 			}
