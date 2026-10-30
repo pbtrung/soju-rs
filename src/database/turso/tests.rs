@@ -2272,3 +2272,46 @@ fn delete_by_id_doesnt_search_every_tenant() {
     db.delete_channel(channels[1].id).unwrap();
     assert_eq!(probes(&cloud), 0);
 }
+
+/// A transient database failure while a user starts is retried: the user
+/// loads with all their networks once the database answers again.
+#[tokio::test(flavor = "current_thread")]
+async fn user_loading_retries_transient_failures() {
+    use crate::logger::Logger;
+    use crate::server::{Server, ServerConfig};
+    use crate::user::Event;
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let account = user(&db, "alice");
+    let mut net = Network::new("ircs://irc.example.org");
+    net.enabled = false;
+    db.store_network(account.id, &mut net).unwrap();
+    let name: String = db
+        .account_conn_for_test()
+        .query_row(
+            "SELECT name FROM UserDatabase WHERE user=?",
+            [account.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let srv = Server::new(db, Logger::new(false));
+    let mut config = ServerConfig::default();
+    config.basic.msg_store.driver = crate::config::MsgStoreDriver::Turso;
+    srv.set_config(config);
+    srv.start().unwrap();
+    // The user's task hasn't run yet on this single-threaded runtime
+    cloud.state.lock().unwrap().fail_sql = Some(name);
+    let handle = srv.get_user("alice").unwrap();
+    let (loaded, wait_loaded) = tokio::sync::oneshot::channel();
+    handle.send(Event::Run(Box::new(move |user| {
+        let _ = loaded.send(user.networks.len());
+    })));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cloud.state.lock().unwrap().fail_sql = None;
+    let networks = tokio::time::timeout(Duration::from_secs(10), wait_loaded)
+        .await
+        .expect("the user never loaded")
+        .unwrap();
+    assert_eq!(networks, 1);
+    srv.shutdown().await;
+}

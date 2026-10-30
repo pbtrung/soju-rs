@@ -10,94 +10,66 @@ use crate::downstream::{self, DownstreamConn, send_service_notice};
 use crate::irc::Tags;
 use crate::{logf, msg};
 
+/// Retry delays of a user's loading, doubling from the first.
+const STARTUP_RETRY_MIN: std::time::Duration = std::time::Duration::from_secs(1);
+const STARTUP_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
 impl User {
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
-        let user_id = self.record.id;
-        if self.srv.db.is_remote() {
-            let (user, prepared) = tokio::task::spawn_blocking(move || {
-                let prepared = self.msg_store.prepare();
-                (self, prepared)
-            })
-            .await
-            .expect("message store initialization task failed");
-            self = user;
-            if let Err(e) = prepared {
-                logf!(self.logger, "failed to prepare Turso message buffers: {e}");
-                return;
-            }
-        }
-        let networks = match db::run(&self.srv.db, move |db| db.list_networks(user_id)).await {
-            Ok(mut n) => {
-                n.sort_by_key(|n| n.id);
-                n
-            }
-            Err(e) => {
-                logf!(
-                    self.logger,
-                    "failed to list networks for user {:?}: {e}",
-                    self.record.username
-                );
-                self.close_msg_store();
-                return;
-            }
-        };
-
-        for record in networks {
-            let net_id = record.id;
-            let channels = match db::run(&self.srv.db, move |db| db.list_channels(net_id)).await {
-                Ok(c) => c,
-                Err(e) => {
-                    logf!(
-                        self.logger,
-                        "failed to list channels for user {:?}, network {:?}: {e}",
-                        self.record.username,
-                        record.get_name()
-                    );
-                    continue;
+        // A transient database error (e.g. a Turso timeout) must not leave
+        // the user unavailable, nor drop one of their networks, until
+        // restart: retry until everything is loaded. Events wait meanwhile,
+        // except a stop.
+        let mut delay = STARTUP_RETRY_MIN;
+        let mut early = std::collections::VecDeque::new();
+        let stopped = self.srv.stopped();
+        let networks = loop {
+            let load = Self::load_networks(
+                self.srv.clone(),
+                self.logger.clone(),
+                self.record.id,
+                self.has_persistent_msg_store(),
+            );
+            let loaded = if self.srv.db.is_remote() {
+                let (user, prepared) = tokio::task::spawn_blocking(move || {
+                    let prepared = self.msg_store.prepare();
+                    (self, prepared)
+                })
+                .await
+                .expect("message store initialization task failed");
+                self = user;
+                match prepared {
+                    Ok(()) => load.await,
+                    Err(e) => Err(e.context("failed to prepare Turso message buffers")),
                 }
+            } else {
+                load.await
             };
-            let targets =
-                match db::run(&self.srv.db, move |db| db.list_message_targets(net_id)).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        logf!(
-                            self.logger,
-                            "failed to list message targets for user {:?}, network {:?}: {e}",
-                            self.record.username,
-                            record.get_name()
-                        );
-                        continue;
-                    }
-                };
-            let mut network = Network::new(&self.logger, record, channels);
-            for mt in targets {
-                network.set_message_target(mt);
+            match loaded {
+                Ok(networks) => break networks,
+                Err(e) => logf!(self.logger, "failed to load, retrying in {delay:?}: {e:#}"),
             }
-            if self.has_persistent_msg_store() {
-                let receipts =
-                    db::run(&self.srv.db, move |db| db.list_delivery_receipts(net_id)).await;
-                match receipts {
-                    Ok(receipts) => {
-                        for rcpt in receipts {
-                            network.delivered.store_id(
-                                &rcpt.target,
-                                &rcpt.client,
-                                &rcpt.internal_msg_id,
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        logf!(
-                            self.logger,
-                            "failed to load delivery receipts for user {:?}, network {:?}: {e}",
-                            self.record.username,
-                            network.get_name()
-                        );
+            let retry = tokio::time::sleep(delay);
+            tokio::pin!(retry);
+            loop {
+                tokio::select! {
+                    _ = &mut retry => break,
+                    _ = stopped.cancelled() => {
                         self.close_msg_store();
                         return;
                     }
+                    ev = rx.recv() => match ev {
+                        None | Some(Event::Stop) => {
+                            self.close_msg_store();
+                            return;
+                        }
+                        Some(ev) => early.push_back(ev),
+                    },
                 }
             }
+            delay = (delay * 2).min(STARTUP_RETRY_MAX);
+        };
+        for network in networks {
             self.networks.push(network);
             let i = self.networks.len() - 1;
             self.start_network(i);
@@ -107,7 +79,8 @@ impl User {
         flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // These retain the input permits, so storage backpressure reaches
         // socket readers while PING/PONG and read-only commands stay live.
-        let mut deferred = std::collections::VecDeque::new();
+        // Events received while loading come first.
+        let mut deferred = early;
         loop {
             let capacity = self.msg_store.has_capacity();
             let ev = if capacity && !deferred.is_empty() {
@@ -186,6 +159,50 @@ impl User {
         } else {
             self.close_msg_store();
         }
+    }
+
+    /// Loads the user's networks with their channels, flagged targets and
+    /// delivery receipts.
+    /// Takes the user's fields: the user can't be borrowed across awaits.
+    async fn load_networks(
+        srv: std::sync::Arc<crate::server::Server>,
+        logger: crate::logger::Logger,
+        user_id: i64,
+        persistent: bool,
+    ) -> anyhow::Result<Vec<Network>> {
+        let mut records = db::run(&srv.db, move |db| db.list_networks(user_id))
+            .await
+            .map_err(|e| e.context("failed to list networks"))?;
+        records.sort_by_key(|n| n.id);
+        let mut networks = Vec::with_capacity(records.len());
+        for record in records {
+            let net_id = record.id;
+            let context = format!("network {:?}", record.get_name());
+            let channels = db::run(&srv.db, move |db| db.list_channels(net_id))
+                .await
+                .map_err(|e| e.context(format!("{context}: failed to list channels")))?;
+            let targets = db::run(&srv.db, move |db| db.list_message_targets(net_id))
+                .await
+                .map_err(|e| e.context(format!("{context}: failed to list message targets")))?;
+            let mut network = Network::new(&logger, record, channels);
+            for mt in targets {
+                network.set_message_target(mt);
+            }
+            if persistent {
+                let receipts = db::run(&srv.db, move |db| db.list_delivery_receipts(net_id))
+                    .await
+                    .map_err(|e| {
+                        e.context(format!("{context}: failed to load delivery receipts"))
+                    })?;
+                for rcpt in receipts {
+                    network
+                        .delivered
+                        .store_id(&rcpt.target, &rcpt.client, &rcpt.internal_msg_id);
+                }
+            }
+            networks.push(network);
+        }
+        Ok(networks)
     }
 
     fn close_msg_store(&mut self) {
