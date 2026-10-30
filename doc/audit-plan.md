@@ -122,7 +122,7 @@ Files over the limit today (2026-10-30):
 |------|------:|---------------------|
 | ~~`src/downstream/downstream.c`~~ | 2026 | **Done.** Its header says it combines four Rust modules (`mod.rs`, `send.rs`, `caps.rs`, `registration.rs`); `handle_cap` 103 lines. New layout (PLAN.md section 4): `downstream.c` lifecycle, loop table, cap tables; `receive.c` receive dispatch and pending input while busy; `send.c` sending, batches, labeled-response; `caps.c` CAP LS/LIST/REQ with `handle_cap` split per subcommand, ISUPPORT; `util.c` username unmarshalling, NickServ credentials, network attrs; `registration.c` PASS/USER/NICK, `try_register`; SASL and AUTHENTICATE move into `sasl.c`; pre-registration METADATA SUB into `sync.c`. Private declarations go in a new `downstream/internal.h` |
 | ~~`src/user/commands.c`~~ | 1183 | **Done** (`commands.c`, `cmd_util.c`, `cmd_channel.c`, `cmd_query.c`, `cmd_account.c`, `cmd_privmsg.c`, private `cmds.h`). Mirrors soju-rs `downstream/cmds/`: `commands.c` dispatch and BOUNCER (`user_handle_command` 204 lines becomes a command table); `channel_cmds.c` JOIN/PART/MODE/TOPIC/NAMES (basic.rs); `query_cmds.c` WHO/WHOIS/MONITOR and the WHO cache (query.rs); `privmsg.c` PRIVMSG/NOTICE/TAGMSG and broadcasts (privmsg.rs); `account_cmds.c` NICK/SETNAME/AUTHENTICATE (account.rs) |
-| `src/net/conn.c` | 938 | `conn.c` refcount, close/fail, setup timeout, views; `conn_write.c` write queue, rate timer, `flush_writes`, shutdown, `conn_format_line`; `conn_read.c` `conn_parse_line`, `process_lines`, TLS input, `on_read` |
+| ~~`src/net/conn.c`~~ | 938 | **Done** (conn.c 345, conn_read.c 267, conn_write.c 338). `conn.c` refcount, close/fail, setup timeout, views; `conn_write.c` write queue, rate timer, `flush_writes`, shutdown, `conn_format_line`; `conn_read.c` `conn_parse_line`, `process_lines`, TLS input, `on_read` |
 | `src/user/user.c` | 828 | `attach.c`: `attach_run` (101 lines, split into network selection, view creation and replay steps), `client_snapshot`, `register_done`; `user.c`: lifecycle, `start_run`, stop and event queue |
 | `src/db/hrana.c` | 808 | `hrana.c` protocol and value encoding; `hrana_pipeline.c` request pipelining (`pipeline` 124 lines) |
 | `src/config/config.c` | 741 | `parse_into` (337 lines) becomes table-driven, `{name, handler}` per block kind; handlers go in `config_directives.c` grouped by area; `config.c` keeps defaults, load/free, duration and float parsing. Directive order and error text stay identical, which the oracle `config`/`scfg` ops check |
@@ -321,7 +321,7 @@ benchmark shows a cliff.
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | split done: 6 files, largest 320 lines; audit open |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | splits done (channels.c 333, users.c 280, upstream.c 454, receive.c 212); `upstream_receive_take` still has complexity 27; audit open |
 | 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | |
-| 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | |
+| 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | split done; audit open |
 | 7 | Split `config.c`; audit config + scfg | 1 | M | |
 | 8 | Split `user.c`, `user/network.c`, the `db/` files, `service/user.c`, `http/client.c`; correctness audit of `user/`, `db/`, `msgstore/`, `service/` | 1 | L | |
 | 9 | Split the test and fuzz files; add the 500-line check to `tools/lint.sh` | 8 | S | |

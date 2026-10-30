@@ -1,5 +1,5 @@
-// Internals of net/conn.c shared with net/conn_framing.c (raw and
-// WebSocket framing)
+// Internals of the connection files (net/conn.c, conn_read.c, conn_write.c)
+// shared with net/conn_framing.c (raw and WebSocket framing)
 #pragma once
 
 #include "http/websocket.h"
@@ -77,3 +77,13 @@ void conn_frame_line(struct conn *c, const char *line, struct strbuf *out);
 // Appends a WebSocket close frame (once) to out; false if not WebSocket or
 // already sent
 [[nodiscard]] bool conn_frame_close(struct conn *c, struct strbuf *out);
+
+// Shared by net/conn.c, net/conn_read.c and net/conn_write.c
+void conn_become_open(struct conn *c);
+void conn_close_handles(struct conn *c);
+void conn_flush_tls_output(struct conn *c);
+void conn_notify_closed(struct conn *c, const struct err *err);
+void conn_plaintext(struct conn *c, const char *p, size_t n);
+void conn_process(struct conn *c);
+void conn_update_reading(struct conn *c);
+void conn_write_raw(struct conn *c);

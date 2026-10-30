@@ -541,7 +541,7 @@ src/
              messages.c receipts.c webpush.c routing.c message_buffer.c
   db/turso/  turso.c hrana.c platform.c controller_schema.sql
              tenant_schema.sql tenant_user_migration.sql
-  net/       listener.c conn.c tls.c proxyproto.c identd.c rate.c
+  net/       listener.c conn.c conn_read.c conn_write.c conn_framing.c tls.c proxyproto.c identd.c rate.c
   http/      request.c websocket.c client.c response.c
   downstream/ downstream.c receive.c send.c caps.c registration.c auth.c
              sasl.c sync.c util.c internal.h
