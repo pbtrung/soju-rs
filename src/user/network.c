@@ -35,6 +35,7 @@ void user_network_free(struct user_network *net) {
 	cmmap_free(&net->channels);
 	cmmap_free(&net->latest_times);
 	cmmap_free(&net->push_targets);
+	cmmap_free(&net->blocked_targets);
 	delivered_destroy(&net->delivered);
 	xfree(net->last_error);
 	xfree(net);
@@ -114,6 +115,7 @@ bool user_store_network(struct user *u, struct db_network *record, bool check_li
 		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
 		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
 		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->blocked_targets, CASEMAPPING_RFC1459, nullptr);
 		delivered_init(&net->delivered, CASEMAPPING_ASCII);
 		net->last_error = xstrdup("");
 		vec_push(&u->networks, net);
@@ -129,21 +131,28 @@ bool user_store_network(struct user *u, struct db_network *record, bool check_li
 	return true;
 }
 
-static void network_attrs(struct user_network *net, struct irc_tags *attrs) {
+static void network_attrs(struct user *u, struct user_network *net, struct irc_tags *attrs) {
 	fill_network_addr_attrs(attrs, &net->record);
 	irc_tags_set(attrs, "name", net->record.name);
-	irc_tags_set(attrs, "nickname",
-		     net->upstream != nullptr && net->upstream->attached ? net->upstream->nick
-									 : net->record.nick);
+	irc_tags_set(attrs, "nickname", db_get_nick(&u->record, &net->record));
+	if (net->record.username[0]) {
+		irc_tags_set(attrs, "username", net->record.username);
+	}
+	const char *realname = db_get_realname(&u->record, &net->record);
+	if (realname[0]) {
+		irc_tags_set(attrs, "realname", realname);
+	}
 	irc_tags_set(attrs, "state",
 		     net->upstream != nullptr && net->upstream->attached ? "connected"
 									 : "disconnected");
-	irc_tags_set(attrs, "error", net->last_error);
+	if (net->last_error[0]) {
+		irc_tags_set(attrs, "error", net->last_error);
+	}
 }
 
-static struct irc_msg *network_message(struct user_network *net) {
+static struct irc_msg *network_message(struct user *u, struct user_network *net) {
 	struct irc_tags attrs = IRC_TAGS_INIT;
-	network_attrs(net, &attrs);
+	network_attrs(u, net, &attrs);
 	AUTO_STRBUF struct strbuf text = STRBUF_INIT;
 	irc_tags_format(&attrs, &text);
 	AUTOFREE char *id = xasprintf("%lld", (long long)net->record.id);
@@ -157,7 +166,18 @@ void user_notify_network(struct user *u, struct user_network *net) {
 		struct user_client *dc = u->clients.data[i];
 		if (dc->parent_id == 0 &&
 		    cap_registry_is_enabled(&dc->caps, "soju.im/bouncer-networks-notify")) {
-			user_send_take(u, dc, network_message(net));
+			user_send_take(u, dc, network_message(u, net));
+		}
+	}
+}
+
+void user_notify_network_attrs(struct user *u, struct user_network *net, const char *attrs) {
+	AUTOFREE char *id = xasprintf("%lld", (long long)net->record.id);
+	for (size_t i = 0; i < u->clients.len; i++) {
+		struct user_client *dc = u->clients.data[i];
+		if (dc->parent_id == 0 &&
+		    cap_registry_is_enabled(&dc->caps, "soju.im/bouncer-networks-notify")) {
+			user_send_take(u, dc, IRC_MSG("BOUNCER", "NETWORK", id, attrs));
 		}
 	}
 }
@@ -165,7 +185,7 @@ void user_notify_network(struct user *u, struct user_network *net) {
 void user_send_networks(struct user *u, struct user_packet *p) {
 	p->send_networks = true;
 	for (size_t i = 0; i < u->networks.len; i++) {
-		vec_push(&p->network_messages, network_message(u->networks.data[i]));
+		vec_push(&p->network_messages, network_message(u, u->networks.data[i]));
 	}
 }
 

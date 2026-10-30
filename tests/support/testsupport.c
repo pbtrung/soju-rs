@@ -105,6 +105,10 @@ static const struct alloc_hooks cmocka_hooks = {
 };
 #endif
 
+#include "http/client.h"
+#include <openssl/crypto.h>
+#include <uv.h>
+
 int t_run(const char *name, const struct CMUnitTest *tests, size_t n) {
 	// Like soju (src/main/soju.c): writes to closed peers fail with EPIPE
 	signal(SIGPIPE, SIG_IGN);
@@ -116,6 +120,9 @@ int t_run(const char *name, const struct CMUnitTest *tests, size_t n) {
 #ifdef SOJU_MODE_DEBUG
 	alloc_set_hooks(nullptr);
 #endif
+	uv_library_shutdown();
+	http_client_global_cleanup();
+	OPENSSL_cleanup();
 	if (ref_dump_live(stderr) != 0) {
 		fprintf(stderr, "%s: objects left alive after the tests\n", name);
 		failed++;

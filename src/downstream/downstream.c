@@ -353,10 +353,6 @@ static char *batch_ref_cb(void *data) {
 }
 
 void downstream_send(struct downstream *dc, struct irc_msg *msg) {
-	if (is_numeric(msg->command) && msg->params.len > 0 &&
-	    cstr_eq(irc_msg_param(msg, 0), "*")) {
-		irc_msg_set_param(msg, 0, dc->nick);
-	}
 	const struct cap_registry *caps = &dc->caps;
 	if (!cap_registry_is_enabled(caps, "message-tags")) {
 		if (cstr_eq(msg->command, "TAGMSG")) {
@@ -1593,15 +1589,20 @@ static void finish_registration(struct downstream *dc) {
 	if (dc->client_name[0] == '\0') {
 		replace_str(&dc->client_name, fallback_client);
 	} else if (fallback_client[0] != '\0' && !cstr_eq(dc->client_name, fallback_client)) {
-		reply_and_close(dc, IRC_MSG(ERR_ERRONEUSNICKNAME, dc->nick,
+		reply_and_close(dc, IRC_MSG(ERR_ERRONEUSNICKNAME, "*",
 					    "Client name mismatch in usernames"));
 		return;
 	}
 	if (r->network_name[0] == '\0') {
 		replace_str(&r->network_name, fallback_network);
 	} else if (fallback_network[0] != '\0' && !cstr_eq(r->network_name, fallback_network)) {
-		reply_and_close(dc, IRC_MSG(ERR_ERRONEUSNICKNAME, dc->nick,
+		reply_and_close(dc, IRC_MSG(ERR_ERRONEUSNICKNAME, "*",
 					    "Network name mismatch in usernames"));
+		return;
+	}
+	if (cstr_eq(r->network_name, "*")) {
+		reply_and_close(dc, IRC_MSG(ERR_PASSWDMISMATCH, "*",
+					    "Multi-upstream mode is no longer supported"));
 		return;
 	}
 	dc->registered = true;
@@ -1715,6 +1716,10 @@ void downstream_input_done(struct downstream *dc) {
 	if (dc->conn != nullptr) {
 		conn_input_done(dc->conn);
 	}
+	if (dc->registered && !dc->closed) {
+		dc->busy = false;
+		drain_input(dc);
+	}
 }
 
 void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
@@ -1755,9 +1760,17 @@ void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
 		if (!dc->closed && dc->events.updated != nullptr) {
 			dc->events.updated(dc, dc->events.data);
 		}
+	} else if (cstr_eq(msg->command, "ISUPPORT")) {
+		begin_message(dc, msg);
+		downstream_send_isupport(dc, &dc->isupport);
+		downstream_end_command(dc);
 	} else if (cstr_eq(msg->command, "QUIT")) {
 		downstream_close(dc);
 	} else if (dc->events.message != nullptr) {
+		struct downstream *source = dc->has_parent ? downstream_lookup(dc->parent_id) : dc;
+		if (source != nullptr) {
+			source->busy = true;
+		}
 		dc->events.message(dc, msg, dc->events.data);
 		return;
 	} else {

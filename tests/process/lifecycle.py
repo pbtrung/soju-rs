@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -11,10 +12,12 @@ import time
 
 
 BIN = Path(sys.argv[1]).resolve()
+RUNNER = shlex.split(os.environ.get("SOJU_TEST_RUNNER", ""))
+SCALE = int(os.environ.get("SOJU_TEST_TIMEOUT_SCALE", "1"))
 
 
 def wait_for(predicate, timeout=10):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout * SCALE
     while time.monotonic() < deadline:
         if predicate():
             return
@@ -24,7 +27,7 @@ def wait_for(predicate, timeout=10):
 
 def connect(path):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(5)
+    sock.settimeout(5 * SCALE)
     sock.connect(str(path))
     return sock
 
@@ -40,8 +43,8 @@ def read_until(sock, marker):
 
 def ctl(config, *words, success=True):
     result = subprocess.run(
-        [str(BIN / "sojuctl"), "-config", str(config), *words],
-        capture_output=True, text=True, timeout=20,
+        RUNNER + [str(BIN / "sojuctl"), "-config", str(config), *words],
+        capture_output=True, text=True, timeout=20 * SCALE,
     )
     assert (result.returncode == 0) == success, (result.stdout, result.stderr)
     assert "Sanitizer" not in result.stderr, result.stderr
@@ -69,7 +72,7 @@ def scenario(exit_signal):
         )
         config.write_text(original)
         with (root / "server.log").open("w+") as log:
-            proc = subprocess.Popen([str(BIN / "soju"), "-config", str(config)], stderr=log)
+            proc = subprocess.Popen(RUNNER + [str(BIN / "soju"), "-config", str(config)], stderr=log)
             peers = []
             try:
                 wait_for(lambda: admin.exists() or proc.poll() is not None)
@@ -115,7 +118,7 @@ def scenario(exit_signal):
                 peers.append(pending_http)
                 pending_http.sendall(b"GET / HTTP/1.1\r\nHost:")
                 proc.send_signal(exit_signal)
-                assert proc.wait(timeout=10) == 0
+                assert proc.wait(timeout=10 * SCALE) == 0, proc.returncode
                 try:
                     assert pending_http.recv(1) == b""
                 except ConnectionResetError:
@@ -133,8 +136,8 @@ def scenario(exit_signal):
                 assert "Sanitizer" not in output and "objects left" not in output, output
         # Startup failures must drain any listeners already opened.
         config.write_text(original + "listen gopher://localhost\n")
-        failed = subprocess.run([str(BIN / "soju"), "-config", str(config)],
-            capture_output=True, text=True, timeout=15)
+        failed = subprocess.run(RUNNER + [str(BIN / "soju"), "-config", str(config)],
+            capture_output=True, text=True, timeout=15 * SCALE)
         assert failed.returncode == 1, failed.stderr
         assert "Sanitizer" not in failed.stderr and "live object" not in failed.stderr, failed.stderr
 

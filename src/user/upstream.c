@@ -82,6 +82,7 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 	AUTOFREE char *id = append(u, net, target, msg);
 	struct db_channel *ch = cmmap_get(&net->channels, target);
 	bool detached = ch != nullptr && ch->detached;
+	bool blocked = cmmap_has(&net->blocked_targets, irc_msg_prefix_name(msg));
 	if (detached && user_network_highlight(u, net, msg) &&
 	    (ch->reattach_on == FILTER_DEFAULT || ch->reattach_on == FILTER_HIGHLIGHT ||
 	     ch->reattach_on == FILTER_MESSAGE)) {
@@ -90,7 +91,8 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 	}
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
-		if (dc->network_id != net->record.id) {
+		if (dc->network_id != net->record.id ||
+		    (blocked && !strmap_has(&dc->metadata_subs, "soju.im/blocked"))) {
 			continue;
 		}
 		bool echo = dc->id == origin_id;
@@ -129,6 +131,10 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 		goto out;
 	}
 	const char *source = irc_msg_prefix_name(msg), *cmd = msg->command;
+	if (cstr_eq(cmd, "305") || cstr_eq(cmd, "306") ||
+	    (cstr_eq(cmd, "AWAY") && same(uc->casemap, source, uc->nick))) {
+		goto out;
+	}
 	if (cstr_eq(cmd, "PRIVMSG") || cstr_eq(cmd, "NOTICE") || cstr_eq(cmd, "TAGMSG") ||
 	    cstr_eq(cmd, "REDACT")) {
 		const char *target = irc_msg_param(msg, 0);
@@ -213,7 +219,9 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 	}
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
-		if (dc->network_id == net->record.id && (dc_id == 0 || dc_id == dc->id)) {
+		if (dc->network_id == net->record.id && (dc_id == 0 || dc_id == dc->id) &&
+		    (!cstr_eq(cmd, "INVITE") || !cmmap_has(&net->blocked_targets, source) ||
+		     strmap_has(&dc->metadata_subs, "soju.im/blocked"))) {
 			user_send_take(u, dc, irc_msg_clone(msg));
 		}
 	}
@@ -231,6 +239,7 @@ void user_upstream_state(struct upstream *uc, void *data) {
 	cmmap_set_casemapping(&net->delivered.targets, uc->casemap);
 	cmmap_set_casemapping(&net->latest_times, uc->casemap);
 	cmmap_set_casemapping(&net->push_targets, uc->casemap);
+	cmmap_set_casemapping(&net->blocked_targets, uc->casemap);
 	if (uc->attached && net->joined_generation != uc->generation) {
 		net->joined_generation = uc->generation;
 		strvec channels = {0}, keys = {0};
@@ -261,7 +270,11 @@ void user_upstream_state(struct upstream *uc, void *data) {
 		user_packet_send_take(p);
 	}
 	user_update_away_monitor(u, net);
-	user_notify_network(u, net);
+	if (net->notified_attached != uc->attached) {
+		net->notified_attached = uc->attached;
+		user_notify_network_attrs(
+			u, net, uc->attached ? "state=connected;error" : "state=disconnected");
+	}
 }
 
 void user_upstream_closed(struct upstream *uc, const char *reason, bool temporary, void *data) {
@@ -273,6 +286,12 @@ void user_upstream_closed(struct upstream *uc, const char *reason, bool temporar
 	}
 	xfree(net->last_error);
 	net->last_error = xstrdup(reason);
+	struct irc_tags attrs = IRC_TAGS_INIT;
+	irc_tags_set(&attrs, "error", reason);
+	AUTO_STRBUF struct strbuf text_attrs = STRBUF_INIT;
+	irc_tags_format(&attrs, &text_attrs);
+	user_notify_network_attrs(u, net, strbuf_cstr(&text_attrs));
+	irc_tags_free(&attrs);
 	net->joined_generation = 0;
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];

@@ -61,9 +61,14 @@ static void bouncer(struct user *u, struct user_client *dc, const struct irc_msg
 		db_network_free(&record);
 		return;
 	}
+	if (!attach && !detach && !cstr_eq(sub, "CHANGENETWORK") && !cstr_eq(sub, "DELNETWORK")) {
+		fail(p, "BOUNCER", "UNKNOWN_COMMAND", sub, "Unknown subcommand");
+		return;
+	}
 	long long id;
 	if (!str_parse_i64(str_from(irc_msg_param(msg, 1)), &id) || id <= 0) {
-		fail(p, "BOUNCER", "INVALID_NETID", sub, "Invalid network ID");
+		user_packet_add_take(p, IRC_MSG("FAIL", "BOUNCER", "INVALID_NETID", sub,
+						irc_msg_param(msg, 1), "Invalid network ID"));
 		return;
 	}
 	struct user_network *net = user_get_network(u, id);
@@ -73,7 +78,8 @@ static void bouncer(struct user *u, struct user_client *dc, const struct irc_msg
 		return;
 	}
 	if (net == nullptr) {
-		fail(p, "BOUNCER", "INVALID_NETID", sub, "Invalid network ID");
+		user_packet_add_take(p, IRC_MSG("FAIL", "BOUNCER", "INVALID_NETID", sub,
+						irc_msg_param(msg, 1), "Invalid network ID"));
 		return;
 	}
 	if (attach) {
@@ -163,7 +169,8 @@ static void monitor(struct user *u, struct user_client *dc, const struct irc_msg
 
 static bool local_query(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 			struct user_packet *p) {
-	const char *mask = irc_msg_trailing(msg);
+	const char *mask =
+		cstr_eq(msg->command, "WHO") ? irc_msg_param(msg, 0) : irc_msg_trailing(msg);
 	AUTOFREE char *cm = casemap_cstr(CASEMAPPING_ASCII, mask);
 	bool service = cstr_eq(cm, SERVICE_NICK_CM);
 	if (!service && dc->network_id != 0) {
@@ -175,9 +182,21 @@ static bool local_query(struct user *u, struct user_client *dc, const struct irc
 		if (service || self) {
 			user_packet_add_take(p, IRC_MSG("311", dc->nick, mask,
 							service ? SERVICE_NICK : u->record.username,
-							host, "*",
+							service ? SERVICE_NICK : dc->hostname, "*",
 							service ? SERVICE_REALNAME : dc->realname));
 			user_packet_add_take(p, IRC_MSG("312", dc->nick, mask, host, "soju"));
+			if (service || u->record.admin) {
+				user_packet_add_take(
+					p, IRC_MSG("313", dc->nick, mask,
+						   service ? "is the bouncer service"
+							   : "is a bouncer administrator"));
+			}
+			user_packet_add_take(p, IRC_MSG("330", dc->nick, mask,
+							service ? SERVICE_NICK : u->record.username,
+							"is logged in as"));
+			if (service) {
+				user_packet_add_take(p, IRC_MSG("335", dc->nick, mask, "is a bot"));
+			}
 		} else {
 			user_packet_add_take(
 				p, IRC_MSG("401", dc->nick, mask, "No such nick/channel"));
@@ -192,12 +211,13 @@ static bool local_query(struct user *u, struct user_client *dc, const struct irc
 			whox_info_set(&info, 't', token);
 			whox_info_set(&info, 'n', service ? SERVICE_NICK : dc->nick);
 			whox_info_set(&info, 'u', service ? SERVICE_NICK : u->record.username);
-			whox_info_set(&info, 'h', host);
+			whox_info_set(&info, 'h', service ? SERVICE_NICK : dc->hostname);
 			whox_info_set(&info, 's', host);
 			whox_info_set(&info, 'f',
-				      service || u->record.admin ? "H*"
-				      : dc->away != nullptr      ? "G"
-								 : "H");
+				      service               ? "H*B"
+				      : u->record.admin     ? "H*"
+				      : dc->away != nullptr ? "G"
+							    : "H");
 			whox_info_set(&info, 'a', service ? SERVICE_NICK : u->record.username);
 			whox_info_set(&info, 'r', service ? SERVICE_REALNAME : dc->realname);
 			user_packet_add_take(p, generate_whox_reply(fields, &info));
@@ -206,7 +226,7 @@ static bool local_query(struct user *u, struct user_client *dc, const struct irc
 			xfree(token);
 		}
 		user_packet_add_take(
-			p, IRC_MSG("315", dc->nick, irc_msg_param(msg, 0), "End of /WHO list"));
+			p, IRC_MSG("315", "*", irc_msg_param(msg, 0), "End of /WHO list"));
 	} else {
 		return false;
 	}
@@ -287,7 +307,12 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 	}
 	if (cstr_eq(cmd, "PING")) {
 		AUTOFREE char *host = server_hostname(u->srv);
-		user_packet_add_take(p, IRC_MSG("PONG", host, irc_msg_trailing(msg)));
+		if (msg->params.len > 1 && !cstr_eq(irc_msg_param(msg, 1), host)) {
+			user_packet_add_take(p, IRC_MSG("402", dc->nick, irc_msg_param(msg, 1),
+							"No such server"));
+		} else {
+			user_packet_add_take(p, IRC_MSG("PONG", host, irc_msg_param(msg, 0)));
+		}
 	} else if (cstr_eq(cmd, "PONG")) {
 		const char *token = irc_msg_trailing(msg);
 		static constexpr char prefix[] = "soju-msgid-";
@@ -304,6 +329,10 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		}
 	} else if (cstr_eq(cmd, "BOUNCER")) {
 		bouncer(u, dc, msg, p);
+	} else if (cstr_eq(cmd, "METADATA")) {
+		user_metadata(u, dc, msg, p);
+		irc_msg_free(msg);
+		return;
 	} else if (cstr_eq(cmd, "CHATHISTORY")) {
 		user_history(u, dc, msg, p);
 	} else if (cstr_eq(cmd, "MARKREAD") || cstr_eq(cmd, "READ")) {
@@ -337,6 +366,12 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 			if (cstr_eq(cmd, "PRIVMSG")) {
 				service_privmsg(u, dc, irc_msg_param(msg, 1));
 			}
+			goto out;
+		}
+		if (net == nullptr && cstr_eq(irc_msg_param(msg, 0), dc->nick)) {
+			struct irc_msg *echo = irc_msg_clone(msg);
+			irc_msg_set_prefix(echo, dc->nick, dc->username, dc->hostname);
+			user_packet_add_take(p, echo);
 			goto out;
 		}
 		if (uc == nullptr) {
@@ -385,17 +420,31 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 			user_packet_add_take(p, IRC_MSG("422", dc->nick, "No MOTD"));
 		}
 		server_config_unref(cfg);
+	} else if (cstr_eq(cmd, "PASS") || cstr_eq(cmd, "USER")) {
+		user_packet_add_take(p, IRC_MSG("462", dc->nick, "You may not reregister"));
+	} else if (cstr_eq(cmd, "INFO")) {
+		user_packet_add_take(p, IRC_MSG("371", dc->nick, "soju <https://soju.im>"));
+		user_packet_add_take(p, IRC_MSG("374", dc->nick, "End of INFO"));
+	} else if (cstr_eq(cmd, "MODE") && cstr_eq(irc_msg_param(msg, 0), dc->nick)) {
+		user_packet_add_take(p, IRC_MSG("221", dc->nick, "+"));
+	} else if (cstr_eq(cmd, "JOIN") || cstr_eq(cmd, "PART") || cstr_eq(cmd, "TOPIC") ||
+		   cstr_eq(cmd, "NAMES") || cstr_eq(cmd, "KICK") || cstr_eq(cmd, "INVITE")) {
+		user_packet_add_take(
+			p, IRC_MSG("400", "*", cmd,
+				   "Cannot interact with channels and users on the bouncer "
+				   "connection. Did you mean to use a specific network?"));
 	} else if (cstr_eq(cmd, "LIST")) {
 		user_packet_add_take(p, IRC_MSG("323", dc->nick, "End of /LIST"));
 	} else if (cstr_eq(cmd, "AUTHENTICATE")) {
 		user_packet_add_take(
 			p, IRC_MSG("907", dc->nick, "You have already authenticated using SASL"));
 	} else {
-		user_packet_add_take(p, IRC_MSG("421", dc->nick, cmd, "Unknown command"));
+		user_packet_add_take(p, IRC_MSG("421", "*", cmd, "Unknown command"));
 	}
 out:
 	for (size_t i = 0; i < p->messages.len; i++) {
-		if (p->messages.data[i]->prefix == nullptr) {
+		if (p->messages.data[i]->prefix == nullptr &&
+		    !cstr_eq(p->messages.data[i]->command, "BOUNCER")) {
 			server_set_prefix(u->srv, p->messages.data[i]);
 		}
 	}

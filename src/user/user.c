@@ -101,6 +101,7 @@ void user_client_free(struct user_client *dc) {
 	cap_registry_free(&dc->caps);
 	cmmap_free(&dc->monitored);
 	strmap_free(&dc->multiline);
+	strmap_free(&dc->metadata_subs);
 	strbuf_free(&dc->peer_cert);
 	xfree(dc);
 }
@@ -137,6 +138,10 @@ static struct user_client *client_snapshot(struct downstream *dc) {
 	}
 	cmmap_init(&c->monitored, dc->casemap, nullptr);
 	strmap_init(&c->multiline, free_multiline);
+	strmap_init(&c->metadata_subs, nullptr);
+	for (size_t it = 0; strmap_next(&dc->metadata_subs, &it, &key, nullptr);) {
+		strmap_set(&c->metadata_subs, key, nullptr);
+	}
 	strbuf_append_str(&c->peer_cert, strbuf_str(&dc->peer_cert));
 	return c;
 }
@@ -145,6 +150,14 @@ static void update_client(struct user *u, void *data) {
 	struct user_client *fresh = data, *dc = user_get_client(u, fresh->id);
 	if (dc != nullptr) {
 		dc->queued = fresh->queued;
+		xfree(dc->nick);
+		dc->nick = xstrdup(fresh->nick);
+		xfree(dc->username);
+		dc->username = xstrdup(fresh->username);
+		xfree(dc->hostname);
+		dc->hostname = xstrdup(fresh->hostname);
+		xfree(dc->realname);
+		dc->realname = xstrdup(fresh->realname);
 		cap_registry_free(&dc->caps);
 		dc->caps = fresh->caps;
 		cap_registry_init(&fresh->caps);
@@ -168,6 +181,7 @@ struct loaded_network {
 	struct db_network record;
 	db_channel_vec channels;
 	db_receipt_vec receipts;
+	db_message_target_vec targets;
 };
 struct load_networks {
 	int64_t user_id;
@@ -186,7 +200,8 @@ static void load_networks(struct db *db, void *data) {
 		vec_push(&j->networks, n);
 		struct loaded_network *out = &vec_last(&j->networks);
 		if (!db_list_channels(db, n.record.id, &out->channels, &j->err) ||
-		    !db_list_delivery_receipts(db, n.record.id, &out->receipts, &j->err)) {
+		    !db_list_delivery_receipts(db, n.record.id, &out->receipts, &j->err) ||
+		    !db_list_message_targets(db, n.record.id, &out->targets, &j->err)) {
 			break;
 		}
 	}
@@ -263,6 +278,14 @@ static void start_run(void *data) {
 		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
 		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
 		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->blocked_targets, CASEMAPPING_RFC1459, nullptr);
+		for (size_t k = 0; k < loaded->targets.len; k++) {
+			if (loaded->targets.data[k].blocked) {
+				cmmap_set(&net->blocked_targets, loaded->targets.data[k].target,
+					  nullptr);
+			}
+		}
+		db_message_target_vec_free(&loaded->targets);
 		delivered_init(&net->delivered, CASEMAPPING_ASCII);
 		for (size_t k = 0; k < loaded->channels.len; k++) {
 			struct db_channel *ch = xmalloc(sizeof(*ch));
@@ -472,8 +495,8 @@ static void attach_run(struct user *u, void *data) {
 		db_network_free(&n);
 	}
 	if ((dc->network_id != 0 || ev->network_name[0] != '\0') && net == nullptr) {
-		user_packet_add_take(p, IRC_MSG("FAIL", "BOUNCER", "INVALID_NETID",
-						ev->network_name, "Unknown network ID"));
+		AUTOFREE char *error = xasprintf("Failed to connect to \"%s\"", ev->network_name);
+		user_packet_add_take(p, IRC_MSG("464", "*", error));
 		p->close = true;
 		goto out;
 	}
@@ -497,7 +520,11 @@ static void attach_run(struct user *u, void *data) {
 		}
 	}
 out:
-	user_packet_send_take(p);
+	if (p->welcome && cap_registry_is_enabled(&dc->caps, "draft/metadata-2")) {
+		user_initial_metadata(u, dc, p);
+	} else {
+		user_packet_send_take(p);
+	}
 	if (ev->client == nullptr && net != nullptr &&
 	    !cap_registry_is_enabled(&dc->caps, "draft/chathistory")) {
 		bool first = true;
@@ -591,7 +618,6 @@ static void register_done(void *data) {
 			db_user_copy(record, &j->record);
 			user_start_take(j->srv, record);
 			attach_downstream(dc);
-			downstream_resume_input(dc);
 		}
 	}
 	if (j->found) {

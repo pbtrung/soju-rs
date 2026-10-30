@@ -16,6 +16,7 @@ struct user_client {
 	struct cap_registry caps;
 	struct cmmap monitored;
 	struct strmap multiline;
+	struct strmap metadata_subs;
 	bool impersonating, has_remote_ip;
 	struct ipaddr remote_ip;
 	struct strbuf peer_cert;
@@ -28,9 +29,12 @@ struct user_network {
 	struct delivered_store delivered;
 	struct cmmap latest_times; // timestamp *
 	// Targets with a Web Push notification a read marker should dismiss
-	struct cmmap push_targets; // timestamp *
+	struct cmmap push_targets;
+	struct cmmap
+		blocked_targets; // persisted metadata cache, set of source nicks // timestamp *
 	char *last_error;
 	uint64_t joined_generation;
+	bool notified_attached;
 };
 
 struct user {
@@ -86,6 +90,7 @@ void user_detach_channel(struct user *u, struct user_network *net, const char *c
 void user_attach_channel(struct user *u, struct user_network *net, const char *channel);
 void user_close_clients(struct user *u, const char *reason);
 void user_notify_network(struct user *u, struct user_network *net);
+void user_notify_network_attrs(struct user *u, struct user_network *net, const char *attrs);
 [[nodiscard]] bool user_network_highlight(const struct user *u, const struct user_network *net,
 					  const struct irc_msg *msg);
 [[nodiscard]] char *user_ident(int64_t id);

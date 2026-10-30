@@ -284,9 +284,10 @@ static bool handshake(X509 **chain, size_t n, EVP_PKEY *key, const struct strbuf
 	uv_pipe_open(ps, fds[0]);
 	uv_pipe_init(&loop, pc, 0);
 	uv_pipe_open(pc, fds[1]);
-	struct conn_options so = {.tls_server = sctx, .setup_timeout_ms = 5000};
-	struct conn_options co = {
-		.tls_client = cctx, .tls_host = "example.org", .setup_timeout_ms = 5000};
+	struct conn_options so = {.tls_server = sctx, .setup_timeout_ms = 5000 * T_TIMEOUT_SCALE};
+	struct conn_options co = {.tls_client = cctx,
+				  .tls_host = "example.org",
+				  .setup_timeout_ms = 5000 * T_TIMEOUT_SCALE};
 	s.c = conn_new((uv_stream_t *)ps, &so, &log, &tp_cb, &s);
 	c.c = conn_new((uv_stream_t *)pc, &co, &log, &tp_cb, &c);
 	struct irc_msg *m = IRC_MSG("PING", "x");

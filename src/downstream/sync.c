@@ -203,8 +203,4 @@ void downstream_welcome(struct downstream *dc, const struct downstream_sync *s) 
 						       : "No MOTD"));
 	}
 	server_config_unref(cfg);
-	if (cap_registry_is_enabled(&dc->caps, "draft/metadata-2")) {
-		irc_msg_vec msgs = {0};
-		downstream_send_batch(dc, "metadata", nullptr, 0, &msgs);
-	}
 }

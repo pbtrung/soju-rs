@@ -352,7 +352,7 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 				}
 			}
 		}
-	} else if (cstr_eq(cmd, "MODE") || cstr_eq(cmd, "324")) {
+	} else if (cstr_eq(cmd, "MODE") || cstr_eq(cmd, "324") || cstr_eq(cmd, "221")) {
 		bool numeric = cstr_eq(cmd, "324");
 		size_t target = numeric ? 1 : 0;
 		if (!need(msg, target + 2)) {
@@ -372,6 +372,9 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 				msg->params.len - target - 2, &e);
 			(void)applied;
 		} else if (same(uc, name, uc->nick)) {
+			if (cstr_eq(cmd, "221")) {
+				user_modes_free(&uc->modes);
+			}
 			bool applied = user_modes_apply(
 				&uc->modes, str_from(irc_msg_param(msg, target + 1)), &e);
 			(void)applied;

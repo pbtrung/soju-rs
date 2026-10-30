@@ -10,6 +10,8 @@ struct user_packet {
 	struct irc_msg *command;
 	irc_msg_vec messages;
 	irc_msg_vec network_messages;
+	VEC(irc_msg_vec) target_metadata;
+	bool metadata_updates_unbatched;
 	bool send_networks;
 	char *batch_type;
 	strvec batch_params;
@@ -69,3 +71,8 @@ void user_web_push_read(struct user *u, struct user_network *net, const char *ta
 // (the command must not be acknowledged now)
 [[nodiscard]] bool user_webpush_command(struct user *u, struct user_client *dc,
 					const struct irc_msg *msg, struct user_packet *p);
+
+void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg *msg,
+		   struct user_packet *p);
+
+void user_initial_metadata(struct user *u, const struct user_client *dc, struct user_packet *p);

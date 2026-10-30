@@ -46,6 +46,10 @@ void user_packet_free(void *data) {
 	irc_msg_free(p->command);
 	irc_msg_vec_free(&p->messages);
 	irc_msg_vec_free(&p->network_messages);
+	for (size_t i = 0; i < p->target_metadata.len; i++) {
+		irc_msg_vec_free(&p->target_metadata.data[i]);
+	}
+	vec_free(&p->target_metadata);
 	xfree(p->batch_type);
 	strvec_free(&p->batch_params);
 	for (size_t i = 0; i < sizeof(p->state_strings) / sizeof(*p->state_strings); i++) {
@@ -92,7 +96,27 @@ static void deliver(void *data) {
 			downstream_send_batch(dc, "soju.im/bouncer-networks", nullptr, 0,
 					      &p->network_messages);
 		}
-		if (p->batch_type != nullptr) {
+		if (p->welcome && cap_registry_is_enabled(&dc->caps, "draft/metadata-2")) {
+			irc_msg_vec empty = {0};
+			downstream_send_batch(dc, "metadata", nullptr, 0, &empty);
+			for (size_t i = 0; i < p->target_metadata.len; i++) {
+				downstream_send_batch(dc, "metadata", nullptr, 0,
+						      &p->target_metadata.data[i]);
+			}
+		}
+		if (p->metadata_updates_unbatched) {
+			AUTOFREE char *batch =
+				downstream_begin_batch(dc, "metadata", nullptr, 0, nullptr);
+			for (size_t i = 0; i < p->messages.len; i++) {
+				struct irc_msg *msg = p->messages.data[i];
+				if (!cstr_eq(msg->command, "METADATA")) {
+					irc_tags_set(&msg->tags, "batch", batch);
+				}
+				downstream_send(dc, msg);
+			}
+			vec_clear(&p->messages);
+			downstream_end_batch(dc, batch);
+		} else if (p->batch_type != nullptr) {
 			downstream_send_batch(dc, p->batch_type,
 					      (const char *const *)p->batch_params.data,
 					      p->batch_params.len, &p->messages);
@@ -111,6 +135,9 @@ static void deliver(void *data) {
 		}
 		if (p->welcome || p->sync) {
 			user_downstream_updated(dc, nullptr);
+			if (p->welcome && !dc->has_parent) {
+				downstream_resume_input(dc);
+			}
 		}
 	}
 	if (p->ack) {

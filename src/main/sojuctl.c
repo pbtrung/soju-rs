@@ -1,5 +1,7 @@
 // The admin client always talks to the running server, except for the
 // explicit offline Turso bootstrap command.
+#include <openssl/crypto.h>
+#include "http/client.h"
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -163,5 +165,7 @@ int main(int argc, char *argv[]) {
 	err_free(error);
 	config_free(&config);
 	flags_parsed_free(&parsed);
+	http_client_global_cleanup();
+	OPENSSL_cleanup();
 	return ok ? 0 : 1;
 }

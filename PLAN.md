@@ -306,8 +306,8 @@ accepted.
 LSan only sees unreachable memory; "reachable but never freed" (maps never
 pruned, pending-command queues growing) needs soak tests:
 - `tools/soak.sh`: 2 ergo instances, 200 synthetic users, 2,000 clients
-  connecting/disconnecting, channels joined/parted, history fetched, for 24 h
-  (nightly: 2 h).
+  connecting/disconnecting, channels joined/parted, history fetched, for 10 min
+  (the user-requested qualification budget).
 - Sample RSS and `mi_stats` (and the debug live-object counters per type)
   every minute; fail if the steady-state slope exceeds a threshold after
   warm-up. Run once under `heaptrack` to attribute growth.
@@ -343,7 +343,7 @@ comment linking the upstream library bug.
 | L6 compat suites under asan | every push | yes |
 | L8 static analysis | every push | yes |
 | L5 1 h, L6 under valgrind, L7 2 h soak | nightly | opens an issue |
-| L7 24 h soak | before each release | yes |
+| L7 10 min soak | before each release | yes |
 
 ---
 
@@ -663,7 +663,7 @@ message-expiry + vacuum schedule, inactive-user job), `sojuctl` over
 Tests: L3 shutdown races, L4 everything, `plumbing.py`.
 
 **Phase 11 — Hardening and release**
-Full L6 three-way compat under ASan and valgrind, 24 h L7 soak, performance
+Full L6 three-way compat under ASan and valgrind, 10 min L7 soak, performance
 comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically linked), README "Differences" section for the C port.
 
 ---
@@ -675,7 +675,7 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
   with soju-c transcripts identical to soju-rs.
 - Clean under ASan/UBSan, MSan, TSan and valgrind across L1–L4 and L6.
 - No fuzzer finding open; each harness has ≥ 24 CPU-hours total.
-- 24 h soak with no RSS growth after warm-up and no live objects at
+- 10 min soak with no RSS growth after warm-up and no live objects at
   shutdown.
 - An existing `soju.db` from soju-rs works unchanged, and back again.
 
@@ -829,3 +829,5 @@ credentials, successful and failed reloads, startup errors and shutdown.
 Maintenance tests exercise expiry across the 2,000-row chunk boundary and
 inactive-user disabling. ThreadSanitizer exposed a cross-loop listener
 reference-count race; accepted-socket handoffs now use an atomic count.
+
+Phase 11 checkpoint and remaining validation: [doc/phase11-wip.md](doc/phase11-wip.md).

@@ -45,6 +45,9 @@ typedef void (*http_client_done_fn)(void *data, const struct http_response *resp
 
 // curl_global_init, once (cleaned up at exit)
 void http_client_global_init(void);
+// Final process teardown, after every HTTP request/worker has stopped and
+// before OPENSSL_cleanup. Idempotent; no HTTP operations may follow it.
+void http_client_global_cleanup(void);
 // Sends the request (taken: req is reset) on the current loop
 void http_client_send(uv_loop_t *loop, struct http_client_request *req, http_client_done_fn done,
 		      void *data);

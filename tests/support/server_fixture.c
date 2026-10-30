@@ -84,7 +84,7 @@ void fixture_finish(struct server_fixture *e) {
 		close(e->listener);
 	}
 	server_stop(&e->srv);
-	uint64_t deadline = uv_hrtime() + 10000000000ULL;
+	uint64_t deadline = uv_hrtime() + (10000000000ULL * T_TIMEOUT_SCALE);
 	while (!server_is_idle(&e->srv) && uv_hrtime() < deadline) {
 		usleep(1000);
 	}
@@ -124,7 +124,7 @@ void peer_send_take(struct test_peer *p, struct irc_msg *msg) {
 }
 
 struct irc_msg *peer_read(struct test_peer *p) {
-	uint64_t deadline = uv_hrtime() + 10000000000ULL;
+	uint64_t deadline = uv_hrtime() + (10000000000ULL * T_TIMEOUT_SCALE);
 	while (uv_hrtime() < deadline) {
 		char *nl =
 			p->pending.len > 0 ? memchr(p->pending.buf, '\n', p->pending.len) : nullptr;
@@ -199,7 +199,7 @@ void peer_sync(struct test_peer *p) {
 struct test_peer *fixture_upstream(struct server_fixture *e, const char *caps,
 				   const char *isupport) {
 	struct pollfd fd = {.fd = e->listener, .events = POLLIN};
-	assert_int_equal(poll(&fd, 1, 10000), 1);
+	assert_int_equal(poll(&fd, 1, 10000 * T_TIMEOUT_SCALE), 1);
 	int client = accept(e->listener, nullptr, nullptr);
 	if (client < 0) {
 		fail_msg("accept failed");
@@ -320,7 +320,7 @@ static void run_user(struct user *u, void *data) {
 void fixture_run_user(struct server_fixture *e, user_run_fn fn, void *data) {
 	struct user_call call = {.fn = fn, .data = data};
 	user_post(&e->srv, e->user.id, run_user, nullptr, &call);
-	uint64_t deadline = uv_hrtime() + 10000000000ULL;
+	uint64_t deadline = uv_hrtime() + (10000000000ULL * T_TIMEOUT_SCALE);
 	while (!atomic_load(&call.done) && uv_hrtime() < deadline) {
 		usleep(1000);
 	}

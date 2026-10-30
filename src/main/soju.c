@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <uv.h>
 
+#include "http/client.h"
 #include "base/ref.h"
 #include "config/flags.h"
 #include "config/config.h"
@@ -59,6 +60,7 @@ int main(int argc, char *argv[]) {
 	}
 	flags_parsed_free(&parsed);
 	uv_library_shutdown();
+	http_client_global_cleanup();
 	OPENSSL_cleanup();
 	if (ref_dump_live(stderr) != 0) {
 		return 70;

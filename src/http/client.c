@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 // The HTTP client on libcurl's multi interface, driven by the loop: one
 // multi handle per loop thread, created with its first request and freed
 // once it has none left, so an idle loop holds no handle
@@ -69,16 +70,20 @@ struct call {
 
 static thread_local struct curl_loop *current;
 static pthread_once_t global_once = PTHREAD_ONCE_INIT;
+static atomic_bool global_ready;
 
-static void global_cleanup(void) {
-	curl_global_cleanup();
+void http_client_global_cleanup(void) {
+	if (atomic_exchange(&global_ready, false)) {
+		curl_global_cleanup();
+	}
 }
 
 static void global_init(void) {
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
 		abort();
 	}
-	atexit(global_cleanup);
+	atomic_store(&global_ready, true);
+	atexit(http_client_global_cleanup);
 }
 
 static void timer_closed(uv_handle_t *h) {

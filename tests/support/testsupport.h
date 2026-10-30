@@ -40,3 +40,10 @@ struct irc_msg;
 void t_assert_msg_str(const struct irc_msg *m, const char *want, const char *file, int line);
 // Asserts that a strbuf holds want
 #define assert_sb_eq(sb, want) t_assert_str_eq(strbuf_str(sb), (want), __FILE__, __LINE__)
+
+// Real cryptography, scheduling and shutdown are much slower under Memcheck.
+#ifdef SOJU_MODE_VALGRIND
+#define T_TIMEOUT_SCALE 20
+#else
+#define T_TIMEOUT_SCALE 1
+#endif
