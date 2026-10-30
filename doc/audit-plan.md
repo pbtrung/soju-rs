@@ -75,8 +75,11 @@ and `tools/metrics.sh` (lizard, from PATH or `build/venv`).
 | `src/` functions over 80 lines | 36 |
 | `src/` functions with cyclomatic complexity over 15 | 104 |
 
-Not yet run: the clang-tidy report with extra checks, `scan-build` and
-`-fanalyzer`, 1 CPU-hour per fuzzer, the oracle pass rate.
+Done: the clang-tidy report with the extra and disabled checks, triaged
+in audit-findings.md (A-01 to A-08); nothing above S3.
+
+Not yet run: GCC `-fanalyzer`, 1 CPU-hour per fuzzer, the oracle pass
+rate.
 
 ---
 
@@ -307,7 +310,7 @@ benchmark shows a cliff.
 
 | # | Work | Depends on | Size | Status |
 |---|------|------------|------|--------|
-| 1 | Phase A tooling + baseline | — | S | coverage, metrics done |
+| 1 | Phase A tooling + baseline | — | S | coverage, metrics, clang-tidy done |
 | 2 | Split `downstream.c` | 1 | M | |
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |
