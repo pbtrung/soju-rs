@@ -86,4 +86,57 @@ static void test_slow_storage_keeps_runtime_and_directory_responsive(void **stat
 	fixture_finish(&e);
 	turso_mock_stop(m);
 }
-T_MAIN(cmocka_unit_test(test_slow_storage_keeps_runtime_and_directory_responsive))
+struct failing {
+	struct turso_mock *mock;
+	struct db *db;
+};
+static void fail_user_database(struct server_fixture *e, void *data) {
+	struct failing *f = data;
+	char *name = turso_mock_linked_name(f->db, e->user.id);
+	pthread_mutex_lock(&f->mock->mu);
+	xfree(f->mock->st.fail_sql);
+	f->mock->st.fail_sql = name;
+	pthread_mutex_unlock(&f->mock->mu);
+}
+
+struct networks {
+	uv_sem_t done;
+	size_t count;
+};
+static void count_networks(struct user *u, void *data) {
+	struct networks *n = data;
+	n->count = u->networks.len;
+	uv_sem_post(&n->done);
+}
+
+// A transient database failure while a user starts is retried: the user
+// loads with all their networks once the database answers again
+static void test_user_loading_retries_transient_failures(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct server_fixture e;
+	struct failing f = {m, db};
+	fixture_init_database_hook(&e, db, false, fail_user_database, &f);
+	// The first load fails meanwhile
+	usleep(300000);
+	pthread_mutex_lock(&m->mu);
+	xfree(m->st.fail_sql);
+	m->st.fail_sql = nullptr;
+	pthread_mutex_unlock(&m->mu);
+	struct networks n = {0};
+	uint64_t deadline = uv_hrtime() + 10000000000ULL;
+	do {
+		usleep(100000);
+		assert_true(uv_hrtime() < deadline);
+		assert_int_equal(uv_sem_init(&n.done, 0), 0);
+		user_post(&e.srv, e.user.id, count_networks, nullptr, &n);
+		uv_sem_wait(&n.done);
+		uv_sem_destroy(&n.done);
+	} while (n.count == 0);
+	assert_int_equal(n.count, 1);
+	fixture_finish(&e);
+	turso_mock_stop(m);
+}
+T_MAIN(cmocka_unit_test(test_slow_storage_keeps_runtime_and_directory_responsive),
+       cmocka_unit_test(test_user_loading_retries_transient_failures))

@@ -1094,6 +1094,86 @@ static void test_cross_tenant_network_update_cannot_poison_routes_after_restart(
 	turso_mock_stop(m);
 }
 
+static void clear_requests(struct turso_mock *m) {
+	pthread_mutex_lock(&m->mu);
+	for (size_t i = 0; i < m->st.requests.len; i++) {
+		xfree(m->st.requests.data[i]);
+	}
+	vec_clear(&m->st.requests);
+	pthread_mutex_unlock(&m->mu);
+}
+
+// Requests searching the user databases for a row's owner
+static size_t owner_probes(struct turso_mock *m) {
+	pthread_mutex_lock(&m->mu);
+	size_t n = 0;
+	for (size_t i = 0; i < m->st.requests.len; i++) {
+		n += strstr(m->st.requests.data[i], "SELECT id FROM") != nullptr;
+	}
+	pthread_mutex_unlock(&m->mu);
+	return n;
+}
+
+// Deleting a channel or subscription by ID, e.g. on PART, reaches its
+// owner's database only: its route is remembered when it's listed or
+// stored, also by a newly started server
+static void test_delete_by_id_doesnt_search_every_tenant(void **state) {
+	(void)state;
+	struct turso_mock *m = turso_mock_start();
+	struct db *db = turso_mock_database(m);
+	struct db_user users[5];
+	for (int i = 0; i < 5; i++) {
+		AUTOFREE char *name = xasprintf("u%d", i);
+		users[i] = turso_mock_user(db, name);
+	}
+	struct db_network net = network(db, users[0].id, "ircs://irc.example.org");
+	struct db_channel channels[2];
+	for (int i = 0; i < 2; i++) {
+		db_channel_init(&channels[i]);
+		xfree(channels[i].name);
+		channels[i].name = xstrdup(i == 0 ? "#a" : "#b");
+		assert_true(db_store_channel(db, net.id, &channels[i], nullptr));
+	}
+	struct db_webpush_subscription sub;
+	db_webpush_subscription_init(&sub);
+	xfree(sub.endpoint);
+	sub.endpoint = xstrdup("https://push.example.org/1");
+	assert_true(db_store_webpush_subscription(db, users[0].id, net.id, &sub, nullptr));
+
+	clear_requests(m);
+	assert_true(db_delete_channel(db, channels[0].id, nullptr));
+	assert_true(db_delete_webpush_subscription(db, sub.id, nullptr));
+	assert_int_equal(owner_probes(m), 0);
+
+	// A restarted server learns routes as users start
+	db_close(db);
+	db = turso_mock_database(m);
+	for (int i = 0; i < 5; i++) {
+		db_network_vec nets = {0};
+		assert_true(db_list_networks(db, users[i].id, &nets, nullptr));
+		for (size_t k = 0; k < nets.len; k++) {
+			db_channel_vec chs = {0};
+			assert_true(db_list_channels(db, nets.data[k].id, &chs, nullptr));
+			db_channel_vec_free(&chs);
+		}
+		db_network_vec_free(&nets);
+	}
+	clear_requests(m);
+	assert_true(db_delete_channel(db, channels[1].id, nullptr));
+	assert_int_equal(owner_probes(m), 0);
+
+	db_close(db);
+	for (int i = 0; i < 2; i++) {
+		db_channel_free(&channels[i]);
+	}
+	db_webpush_subscription_free(&sub);
+	db_network_free(&net);
+	for (int i = 0; i < 5; i++) {
+		db_user_free(&users[i]);
+	}
+	turso_mock_stop(m);
+}
+
 // clang-format off
 T_MAIN(cmocka_unit_test(test_provisioning_authentication_isolation_and_restart),
        cmocka_unit_test(test_creation_and_deletion_resume_after_failure),
@@ -1116,5 +1196,6 @@ T_MAIN(cmocka_unit_test(test_provisioning_authentication_isolation_and_restart),
        cmocka_unit_test(test_failed_background_batch_recovers_with_overlay_intact),
        cmocka_unit_test(test_partial_batch_flushes_when_polled_after_interval),
        cmocka_unit_test(test_large_logical_message_stays_within_encoded_body_budget),
-       cmocka_unit_test(test_cross_tenant_network_update_cannot_poison_routes_after_restart))
+       cmocka_unit_test(test_cross_tenant_network_update_cannot_poison_routes_after_restart),
+       cmocka_unit_test(test_delete_by_id_doesnt_search_every_tenant))
 // clang-format on

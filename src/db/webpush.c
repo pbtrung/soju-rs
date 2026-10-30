@@ -2,6 +2,7 @@
 // database/sqlite/webpush.rs)
 #include "base/alloc.h"
 #include "db/internal.h"
+#include "db/turso.h"
 
 bool db_list_webpush_configs(struct db *db, db_webpush_config_vec *out, struct err **err) {
 	struct db_conn *dbc = db->account;
@@ -81,6 +82,7 @@ bool db_list_webpush_subscriptions(struct db *db, int64_t user_id, int64_t netwo
 	if (dbc == nullptr) {
 		return false;
 	}
+	size_t start = out->len;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "SELECT id, endpoint, created_at, updated_at, key_auth, key_p256dh, "
@@ -115,6 +117,12 @@ bool db_list_webpush_subscriptions(struct db *db, int64_t user_id, int64_t netwo
 		ok = db_sql_err(dbc, err);
 	}
 	db_finalize(st);
+	// Deleting a subscription by ID, e.g. when a push service reports it
+	// expired, would otherwise search every Turso user database for it
+	for (size_t k = start; ok && db->cloud != nullptr && k < out->len; k++) {
+		ok = turso_remember(db->cloud, "WebPushSubscription", user_id, out->data[k].id,
+				    err);
+	}
 	return ok;
 }
 
@@ -178,7 +186,8 @@ bool db_store_webpush_subscription(struct db *db, int64_t user_id, int64_t netwo
 	if (ok && s->id == 0) {
 		s->id = db_last_insert_rowid(dbc);
 	}
-	return ok;
+	return ok && (db->cloud == nullptr ||
+		      turso_remember(db->cloud, "WebPushSubscription", user_id, s->id, err));
 }
 
 bool db_delete_webpush_subscription(struct db *db, int64_t id, struct err **err) {

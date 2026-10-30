@@ -2,6 +2,8 @@
 #include "server_fixture.h"
 #include "base/alloc.h"
 #include "service/service.h"
+#include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 static void test_broadcast(void **state) {
@@ -284,6 +286,25 @@ static void test_sasl_errors(void **state) {
 	peer_send(dc, "AUTHENTICATE AHRlc3QAc2VjcmV0");
 	m = peer_until(dc, "903");
 	irc_msg_free(m);
+
+	// Repeated wrong passwords close the connection
+	struct test_peer *bad = fixture_connect(&e);
+	peer_send(bad, "CAP REQ sasl");
+	irc_msg_free(peer_until(bad, "CAP"));
+	for (int attempt = 1; attempt <= 3; attempt++) {
+		peer_send(bad, "AUTHENTICATE PLAIN");
+		irc_msg_free(peer_until(bad, "AUTHENTICATE"));
+		peer_send(bad, "AUTHENTICATE AHRlc3QAd3Jvbmc=");
+		irc_msg_free(peer_until(bad, "904"));
+		if (attempt < 3) {
+			// Still open
+			peer_send(bad, "CAP LIST");
+			irc_msg_free(peer_until(bad, "CAP"));
+		}
+	}
+	m = peer_until(bad, "ERROR");
+	assert_string_equal(irc_msg_param(m, 0), "Too many authentication failures");
+	irc_msg_free(m);
 	fixture_finish(&e);
 }
 
@@ -353,6 +374,67 @@ static void test_chat_history_limit(void **state) {
 	assert_string_equal(irc_msg_param(history.data[0], 1), "msg 2");
 	assert_string_equal(irc_msg_param(history.data[1], 1), "msg 3");
 	irc_msg_vec_free(&history);
+	fixture_finish(&e);
+}
+
+// A peer sending commands before registration without reading their
+// replies is disconnected, rather than having them buffered
+static void test_unread_replies_before_registration(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *p = fixture_connect(&e);
+	// Each request of a few bytes queues a much longer reply
+	static const char line[] = "CAP LS 302\r\n";
+	for (int i = 0; i < 5000; i++) {
+		// The server stops reading once it closes the connection
+		if (send(p->fd, line, sizeof(line) - 1, MSG_NOSIGNAL) <= 0) {
+			break;
+		}
+	}
+	// Not reading until now, then draining to EOF
+	size_t received = 0;
+	char buf[65536];
+	uint64_t deadline = uv_hrtime() + 10000000000ULL;
+	for (;;) {
+		struct pollfd fd = {.fd = p->fd, .events = POLLIN};
+		assert_true(uv_hrtime() < deadline);
+		if (poll(&fd, 1, 100) <= 0) {
+			continue;
+		}
+		ssize_t n = recv(p->fd, buf, sizeof(buf), 0);
+		if (n <= 0) {
+			break;
+		}
+		received += (size_t)n;
+	}
+	// Far less than the replies to all requests
+	assert_true(received < (size_t)5000 * 500);
+	fixture_finish(&e);
+}
+
+// Replies to messages for a network not attached keep their label
+static void test_multiplex_not_attached_label(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	(void)up;
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, false,
+			 "batch message-tags labeled-response soju.im/bouncer-networks "
+			 "soju.im/multiplex");
+	peer_send(dc, "@soju.im/network=12345;label=L1 PRIVMSG #chan x");
+	struct irc_msg *m = peer_until(dc, "FAIL");
+	assert_string_equal(irc_tags_get_or_empty(&m->tags, "label"), "L1");
+	assert_string_equal(irc_msg_param(m, 0), "PRIVMSG");
+	assert_string_equal(irc_msg_param(m, 1), "NETWORK_NOT_ATTACHED");
+	assert_non_null(m->prefix);
+	irc_msg_free(m);
+	peer_send(dc, "@soju.im/network=12345;label=L2 PING x");
+	m = peer_until(dc, "ACK");
+	assert_string_equal(irc_tags_get_or_empty(&m->tags, "label"), "L2");
+	irc_msg_free(m);
 	fixture_finish(&e);
 }
 
@@ -1177,5 +1259,7 @@ T_MAIN(cmocka_unit_test(test_service_deleted_identity),
        cmocka_unit_test(test_upstream_malformed_messages), cmocka_unit_test(test_cap_req_removal),
        cmocka_unit_test(test_sasl_errors), cmocka_unit_test(test_upstream_clock_skew),
        cmocka_unit_test(test_chat_history_limit), cmocka_unit_test(test_unread_targets),
-       cmocka_unit_test(test_blocked_users), cmocka_unit_test(test_multiplex),
+       cmocka_unit_test(test_blocked_users),
+       cmocka_unit_test(test_unread_replies_before_registration),
+       cmocka_unit_test(test_multiplex_not_attached_label), cmocka_unit_test(test_multiplex),
        cmocka_unit_test(test_multiplex_unsupported), cmocka_unit_test(test_multiline))

@@ -57,6 +57,8 @@ struct user {
 	VEC(struct push_delay *) push_delays; // highlights waiting to be pushed
 	// Mentions waiting to be stored (user/mention.c), nullptr if none
 	struct mention_batch *mentions;
+	// The retry of a failed loading, nullptr if loaded
+	struct load_retry *load_retry;
 };
 
 // Local lookup only. No user pointer may cross a loop boundary.

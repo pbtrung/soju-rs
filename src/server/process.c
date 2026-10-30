@@ -67,8 +67,15 @@ static void configuration_loaded(void *data, struct server_config *config,
 	}
 	atomic_store(&p->client_cert_auth, config->cfg.basic.client_cert_auth);
 	if (p->initialized) {
+		struct server_config *cur = server_config_get(&p->server);
+		bool expiry_changed =
+			cur->cfg.basic.message_expiry != config->cfg.basic.message_expiry;
+		server_config_unref(cur);
 		server_config_reload(&p->server, config);
 		log_info(&p->log, "configuration reloaded");
+		if (expiry_changed) {
+			maintenance_request_vacuum(p->maintenance);
+		}
 	} else {
 		p->loaded = config;
 	}
@@ -261,7 +268,10 @@ int server_run(const char *config_path, const strvec *extra_listeners, bool debu
 	uv_signal_start(&p.interrupt, on_signal, SIGINT);
 	uv_timer_init(zero, &p.shutdown);
 	p.shutdown.data = &p;
-	if (!start_listeners(&p, extra_listeners) || !server_start(&p.server, &p.error)) {
+	// Users start before clients can connect to them, after the maintenance
+	// which would hold the database while they run
+	maintenance_startup(&p.server);
+	if (!server_start(&p.server, &p.error) || !start_listeners(&p, extra_listeners)) {
 		log_info(&p.log, "%s", err_msg(p.error));
 		stop(&p);
 	} else {

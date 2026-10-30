@@ -26,6 +26,12 @@ static void finish(void *data) {
 }
 
 void fixture_init_database(struct server_fixture *e, struct db *db, bool memory) {
+	fixture_init_database_hook(e, db, memory, nullptr, nullptr);
+}
+
+void fixture_init_database_hook(struct server_fixture *e, struct db *db, bool memory,
+				void (*before_start)(struct server_fixture *e, void *data),
+				void *data) {
 	*e = (struct server_fixture){.listener = -1};
 	const char *loops = getenv("SOJU_LOOPS"), *delay = getenv("SOJU_DB_DELAY");
 	unsigned long long count = 1, ms = 0;
@@ -56,6 +62,9 @@ void fixture_init_database(struct server_fixture *e, struct db *db, bool memory)
 	xfree(e->network.name);
 	e->network.name = xstrdup("testnet");
 	assert_true(db_store_network(db, e->user.id, &e->network, nullptr));
+	if (before_start != nullptr) {
+		before_start(e, data);
+	}
 	assert_true(db_thread_start(&e->loops.loops[0].uv, db, (unsigned)ms, &e->db, nullptr));
 	server_init(&e->srv, &e->loops, e->db);
 	struct server_config *cfg = server_config_default();

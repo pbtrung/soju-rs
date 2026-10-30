@@ -1090,6 +1090,13 @@ static void sasl_job_free(struct sasl_job *j) {
 	xfree(j);
 }
 
+// Failed SASL attempts after which an unregistered connection is closed:
+// each one costs a password hash, and the hashing queue is shared by
+// everyone's logins
+static constexpr unsigned MAX_AUTH_FAILURES = 3;
+
+static void reply_and_close(struct downstream *dc, struct irc_msg *m);
+
 // Ends an asynchronous SASL exchange: err nullptr on success
 static void sasl_finish(struct sasl_job *j, const char *internal, const char *external) {
 	struct downstream *dc = downstream_lookup(j->dc_id);
@@ -1104,6 +1111,12 @@ static void sasl_finish(struct sasl_job *j, const char *internal, const char *ex
 		downstream_end_sasl(
 			dc, IRC_MSG(ERR_SASLFAIL, dc->nick,
 				    external != nullptr ? external : "Authentication failed"));
+		if (dc->reg != nullptr && ++dc->reg->auth_failures >= MAX_AUTH_FAILURES) {
+			sasl_job_free(j);
+			dc->busy = false;
+			reply_and_close(dc, IRC_MSG("ERROR", "Too many authentication failures"));
+			return;
+		}
 	} else {
 		bool impersonating = j->impersonating;
 		set_auth_username(dc, impersonating ? j->identity_username : j->username,
@@ -1634,6 +1647,12 @@ static void maybe_register(struct downstream *dc) {
 	try_register(dc);
 }
 
+// Output waiting to be sent above which an unregistered connection is
+// closed: a peer sending commands without reading their replies (e.g.
+// CAP LS, a few bytes for hundreds) would otherwise make the server hold
+// up to MAX_QUEUED_BYTES per connection before even authenticating
+static constexpr size_t MAX_UNREGISTERED_QUEUED_BYTES = (size_t)256 << 10U;
+
 static void handle_message_unregistered(struct downstream *dc, struct irc_msg *msg) {
 	atomic_fetch_add(&dc->srv->metrics.downstream_in_messages_total, 1);
 	begin_message(dc, msg);
@@ -1664,6 +1683,9 @@ static void handle_message_unregistered(struct downstream *dc, struct irc_msg *m
 		AUTOFREE char *q = utf8_debug_cstr(str_from(redacted));
 		AUTOFREE char *line = xasprintf("failed to handle IRC command %s: %s", q, fatal);
 		fail_connection(dc, line);
+	} else if (!dc->closed && conn_queued_bytes(dc->conn) > MAX_UNREGISTERED_QUEUED_BYTES) {
+		log_info(&dc->log, "closing connection: replies not read before registration");
+		conn_close(dc->conn);
 	}
 }
 
@@ -1741,13 +1763,18 @@ void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
 						   ? downstream_find_attached(dc->id, id)
 						   : nullptr;
 		if (child == nullptr) {
+			// Late messages for a network the client just detached are
+			// expected. The reply (an ACK for PING/PONG) carries the
+			// message's label.
+			downstream_begin_command(dc, msg);
 			if (!cstr_eq(msg->command, "PING") && !cstr_eq(msg->command, "PONG")) {
-				downstream_begin_command(dc, msg);
-				downstream_send(dc, IRC_MSG("FAIL", msg->command,
-							    "NETWORK_NOT_ATTACHED", tag,
-							    "Network not attached"));
-				downstream_end_command(dc);
+				struct irc_msg *fail = IRC_MSG("FAIL", msg->command,
+							       "NETWORK_NOT_ATTACHED", tag,
+							       "Network not attached");
+				server_set_prefix(dc->srv, fail);
+				downstream_send(dc, fail);
 			}
+			downstream_end_command(dc);
 			irc_msg_free(msg);
 			downstream_input_done(dc);
 			return;

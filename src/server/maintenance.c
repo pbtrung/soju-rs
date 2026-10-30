@@ -10,10 +10,10 @@ struct maintenance {
 	struct server *srv;
 	uv_timer_t timer;
 	unsigned refs;
-	bool stopped, active, first, local, expire, initial;
+	// vacuum: this run vacuums local SQLite; vacuum_requested: the next one
+	bool stopped, active, local, expire, initial, vacuum, vacuum_requested;
 	struct timestamp before, inactive_before;
 	bool check_inactive;
-	double free_ratio;
 	size_t deleted, total;
 	strvec inactive;
 	struct err *error;
@@ -85,9 +85,6 @@ static void run_batch(struct db *db, void *data) {
 		    !db_list_inactive_usernames(db, m->inactive_before, &m->inactive, &m->error)) {
 			return;
 		}
-		if (m->expire && m->local && !db_free_page_ratio(db, &m->free_ratio, &m->error)) {
-			return;
-		}
 	}
 	if (!m->expire || atomic_load(&m->srv->shutting_down)) {
 		return;
@@ -98,7 +95,7 @@ static void run_batch(struct db *db, void *data) {
 	m->total += m->deleted;
 	if (m->deleted < EXPIRY_CHUNK && m->local) {
 		bool ok = (m->total == 0 || db_optimize(db, &m->error)) &&
-			  (!(m->first || m->free_ratio >= 0.25) || db_vacuum(db, &m->error)) &&
+			  (!m->vacuum || db_vacuum(db, &m->error)) &&
 			  db_shrink_memory(db, &m->error);
 		(void)ok;
 	}
@@ -127,10 +124,12 @@ static void batch_done(void *data) {
 		m->active = false;
 	}
 	if (!m->stopped) {
-		if (!m->active) {
-			m->first = false;
-		}
-		uv_timer_start(&m->timer, tick, m->active ? 10 : DAILY_MS, 0);
+		// A vacuum requested meanwhile runs right away
+		uv_timer_start(&m->timer, tick,
+			       m->active             ? 10
+			       : m->vacuum_requested ? 0
+						     : DAILY_MS,
+			       0);
 	}
 	unref(m);
 }
@@ -149,6 +148,8 @@ static void tick(uv_timer_t *timer) {
 		m->inactive_before = before_now(cfg->cfg.basic.disable_inactive_users_delay);
 		server_config_unref(cfg);
 		m->active = m->initial = true;
+		m->vacuum = m->vacuum_requested;
+		m->vacuum_requested = false;
 		m->total = 0;
 	}
 	m->refs++;
@@ -159,11 +160,71 @@ struct maintenance *maintenance_start(struct server *srv) {
 	REF_TRACK(&m->ref, "maintenance");
 	m->srv = srv;
 	m->refs = 1;
-	m->first = true;
 	uv_timer_init(&srv->loops->loops[0].uv, &m->timer);
 	m->timer.data = m;
+	// The startup expiry already ran, see maintenance_startup: this first
+	// run checks inactive users
 	uv_timer_start(&m->timer, tick, 0, 0);
 	return m;
+}
+
+void maintenance_request_vacuum(struct maintenance *m) {
+	if (m == nullptr || m->stopped) {
+		return;
+	}
+	m->vacuum_requested = true;
+	if (!m->active) {
+		uv_timer_start(&m->timer, tick, 0, 0);
+	}
+}
+
+struct startup_job {
+	struct timestamp before;
+	bool local;
+	size_t total;
+	double free_ratio;
+	struct err *error;
+};
+static void startup_run(struct db *db, void *data) {
+	struct startup_job *j = data;
+	size_t deleted;
+	do {
+		if (!db_delete_messages_before(db, j->before, EXPIRY_CHUNK, &deleted, &j->error)) {
+			return;
+		}
+		j->total += deleted;
+	} while (deleted == EXPIRY_CHUNK);
+	if (j->local) {
+		bool ok = (j->total == 0 || db_optimize(db, &j->error)) &&
+			  db_free_page_ratio(db, &j->free_ratio, &j->error) &&
+			  db_vacuum(db, &j->error) && db_shrink_memory(db, &j->error);
+		(void)ok;
+	}
+}
+
+void maintenance_startup(struct server *srv) {
+	struct server_config *cfg = server_config_get(srv);
+	struct startup_job j = {
+		.before = before_now(cfg->cfg.basic.message_expiry),
+		.local = cfg->cfg.basic.msg_store_driver == MSG_STORE_DB,
+	};
+	bool expire = cfg->cfg.basic.message_expiry != 0 &&
+		      cfg->cfg.basic.msg_store_driver != MSG_STORE_MEMORY;
+	server_config_unref(cfg);
+	if (!expire) {
+		return;
+	}
+	log_info(&srv->log, "running message expiry");
+	db_thread_call(srv->db, startup_run, &j);
+	if (j.error != nullptr) {
+		log_info(&srv->log, "failed to delete expired messages: %s", err_msg(j.error));
+		err_free(j.error);
+		return;
+	}
+	log_info(&srv->log, "deleted %zu expired messages", j.total);
+	if (j.local) {
+		log_info(&srv->log, "vacuumed db (%.0f%% of it was free)", j.free_ratio * 100);
+	}
 }
 static void closed(uv_handle_t *handle) {
 	unref(handle->data);

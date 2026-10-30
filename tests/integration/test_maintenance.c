@@ -8,6 +8,7 @@ struct maintenance_test {
 	uv_sem_t ready;
 	size_t old_rows, remaining;
 	bool enabled;
+	double free_ratio;
 };
 static void start(void *data) {
 	struct maintenance_test *test = data;
@@ -54,6 +55,12 @@ static void inspect(struct db *db, void *data) {
 	assert_true(found);
 	test->enabled = record.enabled;
 	db_user_free(&record);
+	assert_true(db_free_page_ratio(db, &test->free_ratio, nullptr));
+}
+static void startup(void *data) {
+	struct maintenance_test *test = data;
+	maintenance_startup(&test->fixture->srv);
+	uv_sem_post(&test->ready);
 }
 static void test_chunked_expiry_and_inactive_users(void **state) {
 	(void)state;
@@ -79,4 +86,25 @@ static void test_chunked_expiry_and_inactive_users(void **state) {
 	uv_sem_destroy(&test.ready);
 	fixture_finish(&fixture);
 }
-T_MAIN(cmocka_unit_test(test_chunked_expiry_and_inactive_users))
+// Startup expiry deletes everything expired at once, then vacuums: no
+// page freed by the deletion is left
+static void test_startup_expiry_vacuums(void **state) {
+	(void)state;
+	struct server_fixture fixture;
+	fixture_init(&fixture, false);
+	struct maintenance_test test = {.fixture = &fixture, .old_rows = 4500};
+	db_thread_call(fixture.db, seed, &test);
+	struct server_config *cfg = server_config_default();
+	cfg->cfg.basic.message_expiry = 86400000000000ULL;
+	server_config_set(&fixture.srv, cfg);
+	assert_int_equal(uv_sem_init(&test.ready, 0), 0);
+	loop_post(&fixture.loops.loops[0], startup, nullptr, &test);
+	uv_sem_wait(&test.ready);
+	uv_sem_destroy(&test.ready);
+	db_thread_call(fixture.db, inspect, &test);
+	assert_int_equal(test.remaining, 0);
+	assert_true(test.free_ratio == 0.0);
+	fixture_finish(&fixture);
+}
+T_MAIN(cmocka_unit_test(test_chunked_expiry_and_inactive_users),
+       cmocka_unit_test(test_startup_expiry_vacuums))

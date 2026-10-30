@@ -251,6 +251,7 @@ bool db_list_channels(struct db *db, int64_t network_id, db_channel_vec *out, st
 	if (dbc == nullptr) {
 		return false;
 	}
+	size_t start = out->len;
 	struct db_stmt *st =
 		db_prepare(dbc,
 			   "SELECT\n"
@@ -284,6 +285,12 @@ bool db_list_channels(struct db *db, int64_t network_id, db_channel_vec *out, st
 	}
 	bool ok = rc == SQLITE_DONE || db_sql_err(dbc, err);
 	db_finalize(st);
+	// Deleting a channel by ID, e.g. on PART, would otherwise search every
+	// Turso user database for it
+	int64_t owner = db->cloud != nullptr ? turso_owner(db->cloud, "Network", network_id) : 0;
+	for (size_t i = start; ok && owner != 0 && i < out->len; i++) {
+		ok = turso_remember(db->cloud, "Channel", owner, out->data[i].id, err);
+	}
 	return ok;
 }
 
@@ -354,7 +361,8 @@ bool db_store_channel(struct db *db, int64_t network_id, struct db_channel *c, s
 	if (ok && c->id == 0) {
 		c->id = db_last_insert_rowid(dbc);
 	}
-	return ok;
+	int64_t owner = db->cloud != nullptr ? turso_owner(db->cloud, "Network", network_id) : 0;
+	return ok && (owner == 0 || turso_remember(db->cloud, "Channel", owner, c->id, err));
 }
 
 bool db_delete_channel(struct db *db, int64_t id, struct err **err) {

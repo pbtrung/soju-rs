@@ -218,6 +218,123 @@ static void free_channel(void *data) {
 	xfree(ch);
 }
 
+static void free_loaded(struct load_networks *j) {
+	for (size_t i = 0; i < j->networks.len; i++) {
+		struct loaded_network *n = &j->networks.data[i];
+		db_network_free(&n->record);
+		db_channel_vec_free(&n->channels);
+		db_receipt_vec_free(&n->receipts);
+		db_message_target_vec_free(&n->targets);
+	}
+	vec_free(&j->networks);
+	err_free(j->err);
+}
+
+// Retry delays of a user's loading, doubling from the first
+static constexpr uint64_t LOAD_RETRY_MIN_MS = 1000;
+static constexpr uint64_t LOAD_RETRY_MAX_MS = 60000;
+
+// Owns its timer: the user may be freed before it's closed
+struct load_retry {
+	uv_timer_t timer;
+	struct server *srv;
+	int64_t user_id;
+	uint64_t delay_ms;
+};
+
+static void load_retry_closed(uv_handle_t *h) {
+	struct load_retry *r = h->data;
+	atomic_fetch_sub(&r->srv->pending_work, 1);
+	xfree(r);
+}
+
+static void load_user(struct user *u);
+
+static void load_retry_fired(uv_timer_t *t) {
+	struct load_retry *r = t->data;
+	struct user *u = user_lookup(r->srv, r->user_id);
+	if (u != nullptr && u->load_retry == r && !u->stopped) {
+		load_user(u);
+	}
+}
+
+void user_load_retry_stop(struct user *u) {
+	if (u->load_retry != nullptr) {
+		uv_timer_stop(&u->load_retry->timer);
+		uv_close((uv_handle_t *)&u->load_retry->timer, load_retry_closed);
+		u->load_retry = nullptr;
+	}
+}
+
+// Loads the user's networks with their channels, receipts and flagged
+// targets as a whole. A transient database error (e.g. a Turso timeout)
+// must not leave the user without one of their networks until restart:
+// the load is retried until it succeeds or the user stops.
+static void load_user(struct user *u) {
+	struct server *srv = u->srv;
+	struct load_networks j = {.user_id = u->record.id};
+	db_thread_call(srv->db, load_networks, &j);
+	if (j.err != nullptr) {
+		struct load_retry *r = u->load_retry;
+		if (r == nullptr) {
+			r = xcalloc(1, sizeof(*r));
+			*r = (struct load_retry){
+				.srv = srv, .user_id = u->record.id, .delay_ms = LOAD_RETRY_MIN_MS};
+			atomic_fetch_add(&srv->pending_work, 1);
+			uv_timer_init(&u->loop->uv, &r->timer);
+			r->timer.data = r;
+			u->load_retry = r;
+		} else {
+			r->delay_ms = r->delay_ms * 2 < LOAD_RETRY_MAX_MS ? r->delay_ms * 2
+									  : LOAD_RETRY_MAX_MS;
+		}
+		log_info(&srv->log, "user \"%s\": failed to load, retrying in %llu ms: %s",
+			 u->record.username, (unsigned long long)r->delay_ms, err_msg(j.err));
+		free_loaded(&j);
+		uv_timer_start(&r->timer, load_retry_fired, r->delay_ms, 0);
+		return;
+	}
+	user_load_retry_stop(u);
+	for (size_t i = 0; i < j.networks.len; i++) {
+		struct loaded_network *loaded = &j.networks.data[i];
+		struct user_network *net = xcalloc(1, sizeof(*net));
+		net->record = loaded->record;
+		net->last_error = xstrdup("");
+		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
+		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
+		cmmap_init(&net->blocked_targets, CASEMAPPING_RFC1459, nullptr);
+		for (size_t k = 0; k < loaded->targets.len; k++) {
+			if (loaded->targets.data[k].blocked) {
+				cmmap_set(&net->blocked_targets, loaded->targets.data[k].target,
+					  nullptr);
+			}
+		}
+		db_message_target_vec_free(&loaded->targets);
+		delivered_init(&net->delivered, CASEMAPPING_ASCII);
+		for (size_t k = 0; k < loaded->channels.len; k++) {
+			struct db_channel *ch = xmalloc(sizeof(*ch));
+			*ch = loaded->channels.data[k];
+			cmmap_set(&net->channels, ch->name, ch);
+		}
+		vec_free(&loaded->channels);
+		for (size_t k = 0; k < loaded->receipts.len; k++) {
+			struct db_delivery_receipt *r = &loaded->receipts.data[k];
+			delivered_set(&net->delivered, r->target, r->client, r->internal_msg_id);
+		}
+		db_receipt_vec_free(&loaded->receipts);
+		vec_push(&u->networks, net);
+		if (u->record.enabled) {
+			user_network_start(u, net);
+		}
+	}
+	vec_free(&j.networks);
+	// Clients connected while loading learn about the networks
+	for (size_t i = 0; i < u->networks.len && u->clients.len > 0; i++) {
+		user_notify_network(u, u->networks.data[i]);
+	}
+}
+
 struct start_event {
 	struct server *srv;
 	struct db_user *record;
@@ -265,46 +382,7 @@ static void start_run(void *data) {
 	*id = u->record.id;
 	strmap_set(&srv->users, u->record.username, id);
 	pthread_mutex_unlock(&srv->users_mu);
-	struct load_networks j = {.user_id = u->record.id};
-	db_thread_call(srv->db, load_networks, &j);
-	if (j.err != nullptr) {
-		log_info(&srv->log, "failed to load user networks: %s", err_msg(j.err));
-	}
-	for (size_t i = 0; i < j.networks.len; i++) {
-		struct loaded_network *loaded = &j.networks.data[i];
-		struct user_network *net = xcalloc(1, sizeof(*net));
-		net->record = loaded->record;
-		net->last_error = xstrdup("");
-		cmmap_init(&net->channels, CASEMAPPING_ASCII, free_channel);
-		cmmap_init(&net->latest_times, CASEMAPPING_ASCII, xfree);
-		cmmap_init(&net->push_targets, CASEMAPPING_ASCII, xfree);
-		cmmap_init(&net->blocked_targets, CASEMAPPING_RFC1459, nullptr);
-		for (size_t k = 0; k < loaded->targets.len; k++) {
-			if (loaded->targets.data[k].blocked) {
-				cmmap_set(&net->blocked_targets, loaded->targets.data[k].target,
-					  nullptr);
-			}
-		}
-		db_message_target_vec_free(&loaded->targets);
-		delivered_init(&net->delivered, CASEMAPPING_ASCII);
-		for (size_t k = 0; k < loaded->channels.len; k++) {
-			struct db_channel *ch = xmalloc(sizeof(*ch));
-			*ch = loaded->channels.data[k];
-			cmmap_set(&net->channels, ch->name, ch);
-		}
-		vec_free(&loaded->channels);
-		for (size_t k = 0; k < loaded->receipts.len; k++) {
-			struct db_delivery_receipt *r = &loaded->receipts.data[k];
-			delivered_set(&net->delivered, r->target, r->client, r->internal_msg_id);
-		}
-		db_receipt_vec_free(&loaded->receipts);
-		vec_push(&u->networks, net);
-		if (u->record.enabled) {
-			user_network_start(u, net);
-		}
-	}
-	vec_free(&j.networks);
-	err_free(j.err);
+	load_user(u);
 	atomic_fetch_sub(&srv->pending_work, 1);
 }
 
@@ -384,6 +462,7 @@ static void stop_user(struct user *u, void *data) {
 	vec_free(&u->clients);
 	user_web_push_stop(u);
 	user_mentions_stop(u);
+	user_load_retry_stop(u);
 	msgstore_destroy(&u->store);
 	pthread_mutex_lock(&u->srv->users_mu);
 	strmap_remove(&u->srv->users, u->record.username);

@@ -56,6 +56,12 @@ void turso_close(struct turso *t);
 					  struct err **err);
 [[nodiscard]] bool turso_remember_network(struct turso *t, int64_t user, int64_t network,
 					  struct err **err);
+// Caches the owner of a network, channel or subscription (table is a
+// literal), so that operations by its ID don't search every user database
+[[nodiscard]] bool turso_remember(struct turso *t, const char *table, int64_t user, int64_t id,
+				  struct err **err);
+// The cached owner of a row, 0 if unknown
+[[nodiscard]] int64_t turso_owner(struct turso *t, const char *table, int64_t id);
 // A new connection to a user's database, on its own stream (message
 // writers); nullptr if the user is unknown
 [[nodiscard]] struct hrana *turso_fork_user(struct turso *t, int64_t id, struct err **err);

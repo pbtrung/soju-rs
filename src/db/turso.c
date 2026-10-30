@@ -489,20 +489,38 @@ struct hrana *turso_fork_user(struct turso *t, int64_t id, struct err **err) {
 	return h;
 }
 
-bool turso_remember_network(struct turso *t, int64_t user, int64_t network, struct err **err) {
+bool turso_remember(struct turso *t, const char *table, int64_t user, int64_t id,
+		    struct err **err) {
 	pthread_mutex_lock(&t->mu);
 	for (size_t i = 0; i < t->routes.len; i++) {
 		struct turso_route *r = &t->routes.data[i];
-		if (cstr_eq(r->table, "Network") && r->id == network) {
+		if (cstr_eq(r->table, table) && r->id == id) {
 			bool same = r->user == user;
 			pthread_mutex_unlock(&t->mu);
 			return same ||
-			       err_set(err, 0, "duplicate Network ID across Turso user databases");
+			       err_set(err, 0, "duplicate %s ID across Turso user databases",
+				       table);
 		}
 	}
-	vec_push(&t->routes, ((struct turso_route){"Network", network, user}));
+	vec_push(&t->routes, ((struct turso_route){table, id, user}));
 	pthread_mutex_unlock(&t->mu);
 	return true;
+}
+
+bool turso_remember_network(struct turso *t, int64_t user, int64_t network, struct err **err) {
+	return turso_remember(t, "Network", user, network, err);
+}
+
+int64_t turso_owner(struct turso *t, const char *table, int64_t id) {
+	pthread_mutex_lock(&t->mu);
+	int64_t user = 0;
+	for (size_t i = 0; i < t->routes.len && user == 0; i++) {
+		if (cstr_eq(t->routes.data[i].table, table) && t->routes.data[i].id == id) {
+			user = t->routes.data[i].user;
+		}
+	}
+	pthread_mutex_unlock(&t->mu);
+	return user;
 }
 
 // IDs of networks, channels and subscriptions are random 63-bit row IDs in

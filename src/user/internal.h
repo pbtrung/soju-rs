@@ -78,6 +78,8 @@ void user_record_mention(struct user *u, int64_t net_id, const char *target_cm,
 			 struct timestamp time);
 // Stores the mentions waiting to be stored
 void user_mentions_stop(struct user *u);
+// Cancels a pending retry of the user's loading
+void user_load_retry_stop(struct user *u);
 
 void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		   struct user_packet *p);

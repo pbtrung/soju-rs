@@ -145,6 +145,10 @@ bool conn_is_closed(const struct conn *c) {
 	return c->closed;
 }
 
+size_t conn_queued_bytes(const struct conn *c) {
+	return c->queued_bytes;
+}
+
 size_t conn_queued(const struct conn *c) {
 	return c->queue.len - c->queue_head + (c->rate_line != nullptr ? 1 : 0) +
 	       (c->raw_out.len > 0 ? 1 : 0);

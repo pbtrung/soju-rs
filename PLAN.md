@@ -9,7 +9,7 @@ Other open items: phase 1's long fuzzing budget and dedicated L5 harnesses;
 phase 2's migration check uses upstream's version 0 and 30 schemas rather
 than a Go soju v0.11 database. The full phase-exit matrix and long fuzzing
 budgets remain separate from the per-commit checks below.
-Source of truth for behaviour: soju-rs `main` at v0.99.23 (`c350574`), ~33k
+Source of truth for behaviour: soju-rs `main` at v0.99.24 (`6b9bf15`), ~33k
 lines of Rust in 90 files (plan first written against v0.99.15, `02acf7d`;
 section 8 lists what changed on `main` since then). This branch (`c-port`) starts empty; the Rust tree
 stays on `main` and is used as a reference and as a test oracle.
@@ -585,8 +585,9 @@ fuzzers vs. the Rust oracle. This phase has the highest bug density per line;
 it gets the longest fuzzing before moving on (≥ 8 CPU-hours per harness).
 
 **Phase 2 — Database**
-Schema (local SQLite schema 33: rowid `Message` table, `MessageTextIndex`,
-`MessageIdHighWater`), migrations (from every historical upstream version),
+Schema (local SQLite schema 35: `Message` clustered by `(target, time, id)`
+with text-only ID and time indexes, `MessageIdHighWater` reservations,
+`TargetHighlight`), migrations (from every historical upstream version),
 all queries, DB thread with job queue, bcrypt via the CPU-job limiter.
 Message IDs are never reused (high-water mark recorded before deletes);
 expiry deletes 2000 rows at a time with a 10 ms pause.
@@ -727,7 +728,7 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
 ## 8. Changes on `main` since v0.99.15
 
 Folded into the sections above; listed here so the next rebase of this plan
-starts from `c350574` (v0.99.23).
+starts from `6b9bf15` (v0.99.24).
 
 | Commit | Change | Plan impact |
 |--------|--------|-------------|
@@ -736,6 +737,7 @@ starts from `c350574` (v0.99.23).
 | `e0957f3` | `soju.im/multiplex` | goals, phase 4, L2/L3/L5 |
 | `e3a3349` | `MessageTextIndex` (schema 31) | phase 2 |
 | `d478f60`…`c350574` | Turso Cloud storage, write batching, schemas 32–33, clustered tenant `Message`, SASL NAK and registration-timer fixes | goals, deps, layout, phase 9b, L4 |
+| `dde6fd8`…`6b9bf15` | v0.99.24: clustered local `Message` (schema 34), `soju.im/unread` and `TargetHighlight` (schema 35), Turso channel/subscription routes, startup maintenance before users and listeners, load retries, SASL attempt limit, unregistered output limit, Web Push address ranges, multiplex labels. The keepalive-permit fix doesn't apply: the C user loop waits for storage capacity itself | phases 2, 4, 5, 9b, 10 |
 
 ## Implementation validation: phases 4–7
 

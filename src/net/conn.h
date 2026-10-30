@@ -122,6 +122,8 @@ void conn_shutdown(struct conn *c);
 [[nodiscard]] bool conn_is_closed(const struct conn *c);
 // The number of messages queued and not written yet
 [[nodiscard]] size_t conn_queued(const struct conn *c);
+// The accounted size of the messages queued and not written yet
+[[nodiscard]] size_t conn_queued_bytes(const struct conn *c);
 // A message delivered by the message callback has been processed
 void conn_input_done(struct conn *c);
 

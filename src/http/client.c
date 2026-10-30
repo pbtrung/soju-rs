@@ -285,28 +285,48 @@ static struct curl_loop *get_loop(uv_loop_t *loop) {
 	return cl;
 }
 
+static bool internal_v4(uint32_t a) {
+	unsigned o1 = a >> 24U, o2 = (a >> 16U) & 0xffU, o3 = (a >> 8U) & 0xffU;
+	return o1 == 0 || // "this network"
+	       o1 == 127 || (o1 >= 224 && o1 <= 239) || // loopback, multicast
+	       o1 == 10 || (o1 == 172 && (o2 & 0xf0U) == 16) || (o1 == 192 && o2 == 168) ||
+	       (o1 == 169 && o2 == 254) || // link-local
+	       (o1 == 100 && (o2 & 0xc0U) == 64) || // shared space (CGNAT, metadata)
+	       (o1 == 192 && o2 == 0 && o3 == 0) || // IETF protocol assignments
+	       (o1 == 198 && (o2 & 0xfeU) == 18) || // benchmarking
+	       o1 >= 240; // reserved, broadcast
+}
+
+// Not globally reachable, or a gateway to such an address (an IPv6 address
+// embedding an IPv4 one)
 bool http_is_internal_ip(const struct sockaddr *sa) {
-	if (sa->sa_family == AF_INET6) {
-		const uint8_t *b = ((const struct sockaddr_in6 *)sa)->sin6_addr.s6_addr;
-		static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
-		if (memcmp(b, mapped, 12) != 0) {
-			static const uint8_t zero[16] = {0};
-			bool loopback = memcmp(b, zero, 15) == 0 && b[15] == 1;
-			return loopback || memcmp(b, zero, 16) == 0 || b[0] == 0xff ||
-			       (b[0] & 0xfeU) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0U) == 0x80);
-		}
-		struct sockaddr_in v4 = {.sin_family = AF_INET};
-		memcpy(&v4.sin_addr, b + 12, 4);
-		return http_is_internal_ip((const struct sockaddr *)&v4);
+	if (sa->sa_family == AF_INET) {
+		return internal_v4(ntohl(((const struct sockaddr_in *)sa)->sin_addr.s_addr));
 	}
-	if (sa->sa_family != AF_INET) {
+	if (sa->sa_family != AF_INET6) {
 		return false;
 	}
-	uint32_t a = ntohl(((const struct sockaddr_in *)sa)->sin_addr.s_addr);
-	unsigned o1 = a >> 24U, o2 = (a >> 16U) & 0xffU;
-	return o1 == 127 || a == 0 || (o1 >= 224 && o1 <= 239) || o1 == 10 ||
-	       (o1 == 172 && (o2 & 0xf0U) == 16) || (o1 == 192 && o2 == 168) ||
-	       (o1 == 169 && o2 == 254);
+	const uint8_t *b = ((const struct sockaddr_in6 *)sa)->sin6_addr.s6_addr;
+	uint32_t low = ((uint32_t)b[12] << 24U) | ((uint32_t)b[13] << 16U) |
+		       ((uint32_t)b[14] << 8U) | b[15];
+	static const uint8_t zero[16] = {0};
+	static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+	static const uint8_t nat64[12] = {0, 0x64, 0xff, 0x9b};
+	static const uint8_t nat64_local[6] = {0, 0x64, 0xff, 0x9b, 0, 1};
+	if (memcmp(b, mapped, 12) == 0) {
+		return internal_v4(low);
+	}
+	bool loopback = memcmp(b, zero, 15) == 0 && b[15] == 1;
+	return loopback || memcmp(b, zero, 16) == 0 || b[0] == 0xff || // multicast
+	       (b[0] & 0xfeU) == 0xfc || // unique local
+	       (b[0] == 0xfe && (b[1] & 0xc0U) == 0x80) || // link-local
+	       (b[0] == 0xfe && (b[1] & 0xc0U) == 0xc0) || // site-local
+	       (memcmp(b, zero, 12) == 0 && internal_v4(low)) || // IPv4-compatible
+	       (memcmp(b, nat64, 12) == 0 && internal_v4(low)) || // NAT64
+	       memcmp(b, nat64_local, 6) == 0 || // local-use NAT64
+	       (b[0] == 0x20 && b[1] == 0x02 && // 6to4
+		internal_v4(((uint32_t)b[2] << 24U) | ((uint32_t)b[3] << 16U) |
+			    ((uint32_t)b[4] << 8U) | b[5]));
 }
 
 bool http_check_external_url(const char *url, struct err **err) {
@@ -398,7 +418,8 @@ static void setup(struct call *c, const struct http_client_request *req) {
 	curl_easy_setopt(e, CURLOPT_ERRORBUFFER, c->errbuf);
 	curl_easy_setopt(e, CURLOPT_NOSIGNAL, 1L);
 	curl_easy_setopt(e, CURLOPT_PROTOCOLS_STR, "http,https");
-	curl_easy_setopt(e, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+	// External-only requests (Web Push) never downgrade to plain HTTP
+	curl_easy_setopt(e, CURLOPT_REDIR_PROTOCOLS_STR, c->external_only ? "https" : "http,https");
 	curl_easy_setopt(e, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
 	curl_easy_setopt(e, CURLOPT_TIMEOUT_MS, (long)req->timeout_ms);
 	// Like reqwest's default policy: credentials are only sent to the

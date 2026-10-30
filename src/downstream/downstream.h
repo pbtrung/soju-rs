@@ -68,6 +68,7 @@ struct registration {
 	bool negotiating_caps;
 	char *auth_username;
 	bool server_checked;
+	unsigned auth_failures; // failed SASL attempts, see MAX_AUTH_FAILURES
 };
 
 struct label_ctx {

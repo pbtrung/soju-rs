@@ -4,7 +4,7 @@
 # The soju-rs sources are a git worktree in build/soju-main.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-rev="${SOJU_RS_REV:-c350574}"
+rev="${SOJU_RS_REV:-6b9bf15}"
 if [[ ! -e build/soju-main/.git ]]; then
 	mkdir -p build
 	git worktree add --detach build/soju-main "$rev" >/dev/null

@@ -20,6 +20,11 @@ struct server_fixture {
 };
 // Takes ownership of db through the fixture DB thread.
 void fixture_init_database(struct server_fixture *e, struct db *db, bool memory);
+// Like fixture_init_database, calling before_start(e, data) once the user and
+// network are stored, before the server starts
+void fixture_init_database_hook(struct server_fixture *e, struct db *db, bool memory,
+				void (*before_start)(struct server_fixture *e, void *data),
+				void *data);
 void fixture_init(struct server_fixture *e, bool memory);
 void fixture_finish(struct server_fixture *e);
 [[nodiscard]] struct test_peer *fixture_upstream(struct server_fixture *e, const char *caps,
