@@ -22,6 +22,8 @@ if(SOJU_MODE STREQUAL "valgrind")
 	# malloc library to intercept (mimalloc reports to it via MI_TRACK)
 	set(CMAKE_TEST_LAUNCHER ${VALGRIND} --error-exitcode=99 --leak-check=full
 		--show-leak-kinds=all --errors-for-leak-kinds=all --track-origins=yes
+		# Deep enough for suppressions to see library callers
+		--num-callers=40
 		--soname-synonyms=somalloc=NONE
 		--suppressions=${CMAKE_SOURCE_DIR}/tests/valgrind.supp)
 endif()

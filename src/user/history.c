@@ -24,7 +24,7 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 	     around = cstr_eq(sub, "AROUND");
 	if (msg->params.len == 0) {
 		user_packet_add_take(
-			p, IRC_MSG("461", dc->nick, "CHATHISTORY", "Not enough parameters"));
+			p, IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
 		return;
 	}
 	if (!targets && !between && !around && !cstr_eq(sub, "BEFORE") && !cstr_eq(sub, "AFTER") &&
@@ -34,7 +34,7 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 	}
 	if (msg->params.len < (between ? 5U : 4U)) {
 		user_packet_add_take(
-			p, IRC_MSG("461", dc->nick, "CHATHISTORY", "Not enough parameters"));
+			p, IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
 		return;
 	}
 	struct user_network *net = user_get_network(u, dc->network_id);
@@ -171,6 +171,100 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 	err_free(err);
 }
 
+// soju.im/search (soju-rs handle_search)
+void user_search(struct user *u, struct user_client *dc, const struct irc_msg *msg,
+		 struct user_packet *p) {
+	if (dc->queued + dc->history_pending > 10 * MAX_CHAT_HISTORY_LIMIT) {
+		fail(p, "SEARCH", "TEMPORARILY_UNAVAILABLE", "*", nullptr,
+		     "Too many messages waiting to be sent, try again later");
+		return;
+	}
+	if (u->store.db == nullptr) {
+		user_packet_add_take(p, IRC_MSG("421", dc->nick, "SEARCH", "Unknown command"));
+		return;
+	}
+	if (msg->params.len < 1) {
+		user_packet_add_take(p,
+				     IRC_MSG("461", "*", "SEARCH", "Not enough parameters"));
+		return;
+	}
+	static constexpr size_t SEARCH_MAX_LIMIT = 100;
+	struct irc_tags attrs = IRC_TAGS_INIT;
+	irc_tags_parse(&attrs, str_from(irc_msg_param(msg, 0)));
+	struct user_network *net = nullptr;
+	struct db_message_options o = {.limit = SEARCH_MAX_LIMIT, .take_last = true};
+	AUTOFREE char *in = nullptr;
+	const char *invalid = nullptr, *reason = nullptr;
+	for (size_t i = 0; i < attrs.v.len && invalid == nullptr; i++) {
+		const char *name = attrs.v.data[i].key, *value = attrs.v.data[i].value;
+		if (cstr_eq(name, "before") || cstr_eq(name, "after")) {
+			struct db_time t = {0};
+			t.set = parse_server_time(str_from(value), &t.t);
+			if (!t.set) {
+				invalid = name;
+				reason = "Invalid criteria";
+			} else if (cstr_eq(name, "after")) {
+				o.after_time = t;
+			} else {
+				o.before_time = t;
+			}
+		} else if (cstr_eq(name, "from")) {
+			o.sender = value;
+		} else if (cstr_eq(name, "in")) {
+			net = user_get_network(u, dc->network_id);
+			if (net == nullptr) {
+				invalid = name;
+				reason = "Cannot search on bouncer connection";
+			} else {
+				enum casemapping cm = net->upstream != nullptr
+							      ? net->upstream->casemap
+							      : CASEMAPPING_RFC1459;
+				xfree(in);
+				in = casemap_cstr(cm, value);
+			}
+		} else if (cstr_eq(name, "text")) {
+			o.text = value;
+		} else if (cstr_eq(name, "limit")) {
+			long long limit;
+			if (!str_parse_i64(str_from(value), &limit) || limit <= 0) {
+				invalid = name;
+				reason = "Invalid limit";
+			} else {
+				o.limit = (size_t)limit;
+			}
+		}
+	}
+	if (invalid == nullptr && net == nullptr) {
+		invalid = "in";
+		reason = "The in parameter is mandatory";
+	}
+	if (invalid != nullptr) {
+		fail(p, "SEARCH", "INVALID_PARAMS", invalid, nullptr, reason);
+		irc_tags_free(&attrs);
+		return;
+	}
+	if (o.limit > SEARCH_MAX_LIMIT) {
+		o.limit = SEARCH_MAX_LIMIT;
+	}
+	struct err *err = nullptr;
+	if (!msgstore_query(&u->store, net->record.id, in, &o, &p->messages, &err)) {
+		irc_msg_vec_free(&p->messages);
+		log_info(&u->srv->log, "failed fetching messages for search: %s", err_msg(err));
+		err_free(err);
+		user_packet_add_take(p, IRC_MSG("FAIL", "SEARCH", "INTERNAL_ERROR",
+						"Messages could not be retrieved"));
+		irc_tags_free(&attrs);
+		return;
+	}
+	irc_tags_free(&attrs);
+	p->batch_type = xstrdup("soju.im/search");
+	if (p->messages.len > 0) {
+		p->history_count = p->messages.len;
+		p->history_user = u->record.id;
+		dc->history_pending += p->history_count;
+	}
+}
+
 struct read_job {
 	int64_t network;
 	char *target;
@@ -261,7 +355,7 @@ void user_read_marker(struct user *u, struct user_client *dc, const struct irc_m
 		AUTOFREE char *bound =
 			time != nullptr ? xasprintf("timestamp=%s", time) : xstrdup("*");
 		struct irc_msg *reply = IRC_MSG(msg->command, target, bound);
-		irc_msg_set_prefix(reply, dc->nick, dc->username, dc->hostname);
+		irc_msg_set_prefix(reply, DOWNSTREAM_SELF_PREFIX, "", "");
 		user_packet_add_take(p, reply);
 		if (broadcast) {
 			for (size_t i = 0; i < u->clients.len; i++) {

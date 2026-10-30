@@ -39,7 +39,7 @@ HANDLER(server_notice) {
 	AUTOFREE char *host = server_hostname(c->srv);
 	AUTOFREE char *target = xasprintf("$%s", host);
 	struct irc_msg *msg = IRC_MSG("NOTICE", target, args[0]);
-	irc_msg_set_prefix(msg, SERVICE_NICK, SERVICE_NICK, host);
+	irc_msg_set_prefix(msg, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
 	pthread_mutex_lock(&c->srv->users_mu);
 	size_t count = strmap_len(&c->srv->users);
 	pthread_mutex_unlock(&c->srv->users_mu);

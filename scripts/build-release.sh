@@ -42,4 +42,5 @@ for target in "${@:-gnu musl}"; do
     '
   done
 done
-(cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+# Only this version's archives: dist/ may hold other builds
+(cd dist && sha256sum ./soju-"$version"-*.tar.gz > SHA256SUMS)

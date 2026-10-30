@@ -24,6 +24,8 @@ struct upstream_events {
 	void (*state)(struct upstream *uc, void *data);
 	void (*closed)(struct upstream *uc, const char *reason, bool temporary, void *data);
 	void (*detach)(struct upstream *uc, const char *channel, void *data);
+	// A joined channel's NAMES ended: its state is complete
+	void (*channel_complete)(struct upstream *uc, const char *channel, void *data);
 	void *data;
 };
 

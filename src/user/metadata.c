@@ -268,5 +268,8 @@ void user_initial_metadata(struct user *u, const struct user_client *dc, struct 
 				   .client = dc->id,
 				   .reply = p,
 				   .initial = true};
-	server_db(u->srv, run_metadata, metadata_done, j);
+	// Synchronous: the welcome must reach the client before any later
+	// packet of the user, e.g. a sync when the upstream connects
+	db_thread_call(u->srv->db, run_metadata, j);
+	apply_metadata(u, j);
 }

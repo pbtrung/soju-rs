@@ -62,6 +62,11 @@ void downstream_sasl_free(struct downstream_sasl *s);
 [[nodiscard]] bool downstream_sasl_next(struct downstream_sasl *s, const struct str *response,
 					struct strbuf **challenge, struct err **err);
 
+// A message prefix name standing for the receiving connection's own prefix
+// (nick!user@host), filled in when sent: the user's loop only has a
+// snapshot of it, which lags behind e.g. during the welcome
+static constexpr char DOWNSTREAM_SELF_PREFIX[] = "\x01self";
+
 struct registration {
 	char *nick, *username, *pass, *network_name;
 	int64_t network_id;

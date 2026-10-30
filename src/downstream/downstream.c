@@ -393,6 +393,8 @@ void downstream_send(struct downstream *dc, struct irc_msg *msg) {
 	if (msg->prefix != nullptr && cstr_eq(msg->prefix->name, "*")) {
 		// "*" is a sentinel value to simplify upstream message handling
 		irc_msg_clear_prefix(msg);
+	} else if (msg->prefix != nullptr && cstr_eq(msg->prefix->name, DOWNSTREAM_SELF_PREFIX)) {
+		irc_msg_set_prefix(msg, dc->nick, dc->username, dc->hostname);
 	}
 	if ((msg->prefix == nullptr || msg->prefix->name[0] == '\0') && is_numeric(msg->command)) {
 		// Numerics must always carry a source

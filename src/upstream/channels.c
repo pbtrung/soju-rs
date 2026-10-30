@@ -132,13 +132,12 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		}
 		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 0));
 		if (same(uc, source, uc->nick)) {
-			if (ch == nullptr) {
-				ch = new_channel(uc, irc_msg_param(msg, 0));
+			// A JOIN of a channel we're in starts it over
+			if (ch != nullptr) {
+				cmmap_del(&uc->channels, irc_msg_param(msg, 0));
 			}
-			if (msg->prefix != nullptr) {
-				replace(&uc->username, msg->prefix->user);
-				replace(&uc->hostname, msg->prefix->host);
-			}
+			ch = new_channel(uc, irc_msg_param(msg, 0));
+			upstream_send_take(uc, IRC_MSG("MODE", ch->name));
 			upstream_notify_state(uc);
 		}
 		if (ch != nullptr) {
@@ -275,6 +274,7 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		}
 		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 2));
 		if (ch == nullptr) {
+			// NAMES on a channel we have not joined, forward to downstream
 			return true;
 		}
 		enum channel_status status;
@@ -310,15 +310,29 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 				free_member(ms);
 			}
 		}
+		// A joined channel's members: sent with its state on RPL_ENDOFNAMES
+		return false;
 	} else if (cstr_eq(cmd, "366")) {
 		if (!need(msg, 2)) {
 			return false;
 		}
 		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 1));
-		if (ch != nullptr) {
-			ch->complete = true;
-			upstream_notify_state(uc);
+		if (ch == nullptr) {
+			// NAMES on a channel we have not joined, forward to downstream
+			return true;
 		}
+		// The channel's state is sent to downstreams instead (soju-rs
+		// forward_channel)
+		if (ch->complete) {
+			log_info(&uc->log, "received unexpected RPL_ENDOFNAMES");
+			return false;
+		}
+		ch->complete = true;
+		upstream_notify_state(uc);
+		if (uc->events.channel_complete != nullptr) {
+			uc->events.channel_complete(uc, ch->name, uc->events.data);
+		}
+		return false;
 	} else if (cstr_eq(cmd, "TOPIC") || cstr_eq(cmd, "332") || cstr_eq(cmd, "331") ||
 		   cstr_eq(cmd, "333")) {
 		bool topic = cstr_eq(cmd, "TOPIC"), who = cstr_eq(cmd, "333");

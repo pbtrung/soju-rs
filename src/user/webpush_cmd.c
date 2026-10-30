@@ -332,12 +332,12 @@ static void unreg(struct user *u, struct user_client *dc, const struct irc_msg *
 bool user_webpush_command(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 			  struct user_packet *p) {
 	if (!cap_registry_is_enabled(&dc->caps, "soju.im/webpush")) {
-		user_packet_add_take(p, IRC_MSG("421", dc->nick, msg->command, "Unknown command"));
+		user_packet_add_take(p, IRC_MSG("421", "*", msg->command, "Unknown command"));
 		return false;
 	}
 	if (msg->params.len < 1) {
 		user_packet_add_take(
-			p, IRC_MSG("461", dc->nick, msg->command, "Not enough parameters"));
+			p, IRC_MSG("461", "*", msg->command, "Not enough parameters"));
 		return false;
 	}
 	const char *sub = irc_msg_param(msg, 0);
@@ -349,7 +349,7 @@ bool user_webpush_command(struct user *u, struct user_client *dc, const struct i
 		size_t need = cstr_eq(sub, "REGISTER") ? 3 : 2;
 		if (msg->params.len < need) {
 			user_packet_add_take(
-				p, IRC_MSG("461", dc->nick, msg->command, "Not enough parameters"));
+				p, IRC_MSG("461", "*", msg->command, "Not enough parameters"));
 			return false;
 		}
 		if (cstr_eq(sub, "REGISTER")) {

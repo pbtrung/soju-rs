@@ -56,11 +56,21 @@ static void message(struct conn *c, struct irc_msg *msg, void *data) {
 	loop_post(uc->loop, input_run, input_done, in);
 }
 
+// soju-rs user::upstream_closed: a registered connection closed without
+// a read error has no error
 static void closed(struct conn *c, const struct err *err, void *data) {
 	struct upstream *uc = upstream_lookup((uintptr_t)data);
-	if (uc != nullptr && uc->conn == c) {
-		upstream_disconnect(uc, err != nullptr ? err_msg(err) : "EOF", true);
+	if (uc == nullptr || uc->conn != c) {
+		return;
 	}
+	AUTOFREE char *reason =
+		!uc->registered ? xasprintf("failed to register: failed to read message: %s",
+					    err != nullptr ? err_msg(err) : "EOF")
+		: err != nullptr
+			? xasprintf("failed to handle messages: failed to read IRC command: %s",
+				    err_msg(err))
+			: xstrdup("");
+	upstream_disconnect(uc, reason, true);
 }
 
 static void ready(struct conn *c, void *data) {
@@ -117,7 +127,8 @@ static void connected(uv_connect_t *req, int status) {
 			try_address(d);
 			return;
 		}
-		AUTOFREE char *reason = go_errno_message(status);
+		AUTOFREE char *errno_text = go_errno_message(status);
+		AUTOFREE char *reason = xasprintf("failed to connect: %s", errno_text);
 		upstream_disconnect(uc, reason, true);
 		dial_free(d);
 		return;
@@ -152,7 +163,8 @@ static void connected(uv_connect_t *req, int status) {
 				     strbuf_str(&uc->network.sasl.external_key.data), &err);
 		if (tls == nullptr) {
 			uv_close((uv_handle_t *)d->stream, stream_closed);
-			upstream_disconnect(uc, err_msg(err), false);
+			AUTOFREE char *reason = xasprintf("failed to connect: %s", err_msg(err));
+			upstream_disconnect(uc, reason, false);
 			err_free(err);
 			dial_free(d);
 			return;
@@ -196,7 +208,9 @@ static void resolved(uv_getaddrinfo_t *req, int status, struct addrinfo *address
 		return;
 	}
 	if (status < 0 || addresses == nullptr) {
-		upstream_disconnect(uc, status < 0 ? uv_strerror(status) : "no addresses", true);
+		AUTOFREE char *reason = xasprintf(
+			"failed to connect: %s", status < 0 ? uv_strerror(status) : "no addresses");
+		upstream_disconnect(uc, reason, true);
 		dial_free(d);
 		return;
 	}
@@ -215,7 +229,8 @@ void upstream_connect(struct upstream *uc) {
 	struct url url = {0};
 	struct err *err = nullptr;
 	if (!network_url(uc->network.addr, &url, &err)) {
-		upstream_disconnect(uc, err_msg(err), false);
+		AUTOFREE char *reason = xasprintf("failed to connect: %s", err_msg(err));
+		upstream_disconnect(uc, reason, false);
 		err_free(err);
 		return;
 	}
@@ -237,7 +252,7 @@ void upstream_connect(struct upstream *uc) {
 	if (!d->tls && !cstr_eq(url.scheme, "irc+insecure")) {
 		url_free(&url);
 		dial_free(d);
-		upstream_disconnect(uc, "unsupported upstream scheme", false);
+		upstream_disconnect(uc, "failed to connect: unsupported upstream scheme", false);
 		return;
 	}
 	if (!split_host_port(str_from(url.host), &d->host, &d->port, nullptr)) {

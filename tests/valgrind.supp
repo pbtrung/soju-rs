@@ -1,2 +1,26 @@
 # Valgrind suppressions. Each entry needs a comment linking the upstream
 # bug it works around (PLAN.md 2.4).
+
+# libcurl built with ngtcp2 (Arch Linux) calls ngtcp2_crypto_ossl_init when
+# it creates a handle; ngtcp2 keeps the OpenSSL ciphers and KDFs it fetches
+# in static variables, and curl_global_cleanup doesn't release them, so
+# they are still reachable after OPENSSL_cleanup:
+# https://github.com/curl/curl/pull/22363
+{
+   curl-22363-ngtcp2-crypto-ossl-init
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:ngtcp2_crypto_ossl_init
+}
+# The same references keep OpenSSL's algorithm store alive, and with it the
+# DRBG instantiated when libcurl seeds its random generator (RAND_status):
+# https://github.com/curl/curl/pull/22363
+{
+   curl-22363-openssl-drbg-kept-by-ngtcp2
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:RAND_status
+   obj:*/libcurl.so*
+}

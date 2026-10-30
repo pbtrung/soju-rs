@@ -113,7 +113,7 @@ static void test_webpush_command(void **state) {
 	fixture_register(&e, plain, false, "");
 	peer_send(plain, "WEBPUSH REGISTER https://example.org/x a=b");
 	AUTOFREE char *r = reply(plain, "421");
-	assert_string_equal(r, "test WEBPUSH Unknown command");
+	assert_string_equal(r, "* WEBPUSH Unknown command");
 
 	struct test_peer *p = fixture_connect(&e);
 	peer_send(p, "CAP LS 302");
@@ -135,9 +135,9 @@ static void test_webpush_command(void **state) {
 	static const struct {
 		const char *line, *command, *reply;
 	} cases[] = {
-		{"WEBPUSH", "461", "test WEBPUSH Not enough parameters"},
+		{"WEBPUSH", "461", "* WEBPUSH Not enough parameters"},
 		{"WEBPUSH REGISTER https://example.org/x", "461",
-		 "test WEBPUSH Not enough parameters"},
+		 "* WEBPUSH Not enough parameters"},
 		{"WEBPUSH FOO", "FAIL", "WEBPUSH INVALID_PARAMS FOO Unknown command"},
 		{"WEBPUSH REGISTER https://example.org/x auth=x", "FAIL",
 		 "WEBPUSH INVALID_PARAMS REGISTER Missing auth or p256dh key"},

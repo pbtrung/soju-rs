@@ -696,7 +696,7 @@ static void tls_input(struct conn *c, const char *p, size_t n) {
 		enum tls_status st = tls_session_handshake(&c->tls);
 		flush_tls_output(c);
 		if (st == TLS_ERROR) {
-			conn_fail_msg(c, "%s", c->tls.error);
+			conn_fail_msg(c, "tls: %s", c->tls.error);
 			return;
 		}
 		if (!c->tls.handshake_done) {
@@ -713,7 +713,7 @@ static void tls_input(struct conn *c, const char *p, size_t n) {
 	strbuf_free(&plain);
 	flush_tls_output(c);
 	if (st == TLS_ERROR) {
-		conn_fail_msg(c, "%s", c->tls.error);
+		conn_fail_msg(c, "tls: %s", c->tls.error);
 	} else if (st == TLS_CLOSED) {
 		c->eof = true;
 	}
@@ -834,7 +834,7 @@ struct conn *conn_new(uv_stream_t *stream, const struct conn_options *opts,
 		enum tls_status st = tls_session_handshake(&c->tls);
 		flush_tls_output(c);
 		if (st == TLS_ERROR) {
-			conn_fail_msg(c, "%s", c->tls.error);
+			conn_fail_msg(c, "tls: %s", c->tls.error);
 		}
 		conn_unref(c);
 	}

@@ -3,6 +3,7 @@
 #include <assert.h>
 
 #include "base/alloc.h"
+#include "base/utf8.h"
 #include "irc/genmsg.h"
 #include "net/url.h"
 
@@ -21,6 +22,7 @@ void user_network_start(struct user *u, struct user_network *net) {
 					 .state = user_upstream_state,
 					 .closed = user_upstream_closed,
 					 .detach = user_upstream_detach,
+					 .channel_complete = user_upstream_channel_complete,
 					 .data = (void *)(uintptr_t)u->record.id};
 	net->upstream = upstream_new(u->srv, &u->record, &net->record, &events);
 	upstream_connect(net->upstream);
@@ -54,34 +56,64 @@ static void network_job(struct db *db, void *data) {
 	(void)ok;
 }
 
+// soju-rs User::check_network
+static bool check_network(const struct user *u, const struct db_network *record,
+			  const struct user_network *net, struct err **err) {
+	struct url url;
+	if (!network_url(record->addr, &url, err)) {
+		return false;
+	}
+	bool ok = true;
+	bool tcp = cstr_eq(url.scheme, "ircs") || cstr_eq(url.scheme, "irc+insecure");
+	bool unix = cstr_eq(url.scheme, "irc+unix") || cstr_eq(url.scheme, "unix");
+	if (url.has_user) {
+		ok = err_set(err, 0, "%s:// URL must not have username and password information",
+			     url.scheme);
+	} else if (url.query[0] != '\0') {
+		ok = err_set(err, 0, "%s:// URL must not have query values", url.scheme);
+	} else if (url.fragment[0] != '\0') {
+		ok = err_set(err, 0, "%s:// URL must not have a fragment", url.scheme);
+	} else if (tcp && url.host[0] == '\0') {
+		ok = err_set(err, 0, "%s:// URL must have a host", url.scheme);
+	} else if (tcp && url.path[0] != '\0') {
+		ok = err_set(err, 0, "%s:// URL must not have a path", url.scheme);
+	} else if (unix && !u->record.admin) {
+		ok = err_set(err, 0, "non-admin users cannot add networks with a unix address");
+	} else if (unix && url.host[0] != '\0') {
+		ok = err_set(err, 0, "%s:// URL must not have a host", url.scheme);
+	} else if (unix && url.path[0] == '\0') {
+		ok = err_set(err, 0, "%s:// URL must have a path", url.scheme);
+	} else if (!tcp && !unix) {
+		AUTOFREE char *q = utf8_debug_cstr(str_from(url.scheme));
+		ok = err_set(err, 0, "unknown URL scheme %s", q);
+	}
+	url_free(&url);
+	if (!ok) {
+		return false;
+	}
+	const char *name = db_network_get_name(record);
+	if (name[0] == '\0') {
+		return err_set(err, 0, "network name cannot be empty");
+	}
+	if (name[0] == '-') {
+		// Can be mixed up with flags when sending commands to the service
+		return err_set(err, 0, "network name cannot start with a dash character");
+	}
+	for (size_t i = 0; i < u->networks.len; i++) {
+		struct user_network *other = u->networks.data[i];
+		if (other != net && cstr_eq(db_network_get_name(&other->record), name)) {
+			AUTOFREE char *q = utf8_debug_cstr(str_from(name));
+			return err_set(err, 0, "a network with the name %s already exists", q);
+		}
+	}
+	return true;
+}
+
 bool user_store_network(struct user *u, struct db_network *record, bool check_limit,
 			struct err **err) {
 	struct user_network *net = user_get_network(u, record->id);
 	if (record->id != 0 && net == nullptr) {
 		return err_set(err, 0, "unknown network");
-	}
-	if (record->addr[0] == '\0') {
-		return err_set(err, 0, "network address cannot be empty");
-	}
-	const char *name = db_network_get_name(record);
-	if (name[0] == '-' || cstr_eq(name, "*")) {
-		return err_set(err, 0, "invalid network name");
-	}
-	for (size_t i = 0; i < u->networks.len; i++) {
-		struct user_network *other = u->networks.data[i];
-		if (other != net && cstr_eq(db_network_get_name(&other->record), name)) {
-			return err_set(err, 0, "a network with the name %s already exists", name);
-		}
-	}
-	struct url url;
-	if (!network_url(record->addr, &url, err)) {
-		return false;
-	}
-	bool valid = cstr_eq(url.scheme, "ircs") || cstr_eq(url.scheme, "irc+insecure") ||
-		     cstr_eq(url.scheme, "irc+unix");
-	url_free(&url);
-	if (!valid) {
-		return err_set(err, 0, "unknown URL scheme");
 	}
 	if (check_limit && record->enabled && (net == nullptr || !net->record.enabled)) {
 		struct server_config *cfg = server_config_get(u->srv);
@@ -94,8 +126,11 @@ bool user_store_network(struct user *u, struct db_network *record, bool check_li
 			enabled += u->networks.data[i]->record.enabled;
 		}
 		if (limit >= 0 && enabled >= (uint64_t)limit) {
-			return err_set(err, 0, "maximum number of networks reached");
+			return err_set(err, 0, "maximum number of enabled networks reached");
 		}
+	}
+	if (!check_network(u, record, net, err)) {
+		return false;
 	}
 	struct network_job j = {.user_id = u->record.id};
 	db_network_copy(&j.record, record);

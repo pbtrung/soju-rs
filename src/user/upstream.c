@@ -111,8 +111,7 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 				user_network_highlight(u, net, msg) ? "highlight" : "message",
 				target, irc_msg_prefix_name(msg), irc_msg_param(msg, 1));
 			struct irc_msg *notice = IRC_MSG("NOTICE", dc->nick, text);
-			AUTOFREE char *host = server_hostname(u->srv);
-			irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK, host);
+			irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
 			user_packet_add_take(p, notice);
 		}
 		if (id[0] != '\0' && !cap_registry_is_enabled(&dc->caps, "draft/chathistory") &&
@@ -274,6 +273,8 @@ void user_upstream_state(struct upstream *uc, void *data) {
 	cmmap_set_casemapping(&net->blocked_targets, uc->casemap);
 	if (uc->attached && net->joined_generation != uc->generation) {
 		net->joined_generation = uc->generation;
+		xfree(net->last_error);
+		net->last_error = xstrdup("");
 		strvec channels = {0}, keys = {0};
 		const char *name;
 		void *v;
@@ -309,6 +310,24 @@ void user_upstream_state(struct upstream *uc, void *data) {
 	}
 }
 
+static void network_notice(struct user *u, struct user_network *net, const char *text,
+			   bool bouncer_networks) {
+	for (size_t i = 0; i < u->clients.len; i++) {
+		struct user_client *dc = u->clients.data[i];
+		if (dc->network_id != net->record.id ||
+		    (!bouncer_networks &&
+		     cap_registry_is_enabled(&dc->caps, "soju.im/bouncer-networks"))) {
+			continue;
+		}
+		struct irc_msg *notice = IRC_MSG("NOTICE", dc->nick, text);
+		irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
+		user_send_take(u, dc, notice);
+	}
+}
+
+// soju-rs handle_upstream_disconnected and UpstreamConnectionError: reason
+// is empty when the connection closed without error, e.g. after the server
+// closed a registered connection
 void user_upstream_closed(struct upstream *uc, const char *reason, bool temporary, void *data) {
 	(void)temporary;
 	struct user *u = user_lookup(uc->srv, (int64_t)(uintptr_t)data);
@@ -316,26 +335,52 @@ void user_upstream_closed(struct upstream *uc, const char *reason, bool temporar
 	if (net == nullptr || net->upstream != uc || u->stopped) {
 		return;
 	}
+	net->joined_generation = 0;
+	const char *name = db_network_get_name(&net->record);
+	if (uc->attached && net->last_error[0] == '\0') {
+		AUTOFREE char *text = xasprintf("disconnected from %s", name);
+		network_notice(u, net, text, false);
+	}
+	if (reason[0] == '\0') {
+		return;
+	}
+	AUTOFREE char *err = xasprintf("connection error: %s", reason);
+	if (net->record.enabled && !cstr_eq(net->last_error, err)) {
+		AUTOFREE char *text =
+			xasprintf("failed connecting/registering to %s: %s", name, err);
+		network_notice(u, net, text, true);
+	}
 	xfree(net->last_error);
-	net->last_error = xstrdup(reason);
+	net->last_error = xstrdup(err);
 	struct irc_tags attrs = IRC_TAGS_INIT;
-	irc_tags_set(&attrs, "error", reason);
+	irc_tags_set(&attrs, "error", err);
 	AUTO_STRBUF struct strbuf text_attrs = STRBUF_INIT;
 	irc_tags_format(&attrs, &text_attrs);
 	user_notify_network_attrs(u, net, strbuf_cstr(&text_attrs));
 	irc_tags_free(&attrs);
-	net->joined_generation = 0;
+}
+
+// soju-rs RPL_ENDOFNAMES: the channel's state for each downstream, unless
+// detached
+void user_upstream_channel_complete(struct upstream *uc, const char *channel, void *data) {
+	struct user *u = user_lookup(uc->srv, (int64_t)(uintptr_t)data);
+	struct user_network *net = u != nullptr ? user_get_network(u, uc->network.id) : nullptr;
+	if (net == nullptr || net->upstream != uc || u->stopped) {
+		return;
+	}
+	struct db_channel *saved = cmmap_get(&net->channels, channel);
+	struct upstream_channel *ch = cmmap_get(&uc->channels, channel);
+	if (ch == nullptr || (saved != nullptr && saved->detached)) {
+		return;
+	}
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
 		if (dc->network_id != net->record.id) {
 			continue;
 		}
-		AUTOFREE char *text = xasprintf("disconnected from %s: %s",
-						db_network_get_name(&net->record), reason);
-		struct irc_msg *notice = IRC_MSG("NOTICE", dc->nick, text);
-		AUTOFREE char *host = server_hostname(u->srv);
-		irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK, host);
-		user_send_take(u, dc, notice);
+		struct user_packet *p = user_packet_new(dc, nullptr);
+		user_forward_channel(u, net, dc, p, ch);
+		user_packet_send_take(p);
 	}
 }
 

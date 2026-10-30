@@ -51,7 +51,9 @@ static void bouncer(struct user *u, struct user_client *dc, const struct irc_msg
 		if (!update_network_attrs(&record, &attrs, sub, &error)) {
 			user_packet_add_take(p, error);
 		} else if (!user_store_network(u, &record, true, &err)) {
-			fail(p, "BOUNCER", "UNKNOWN_ERROR", sub, err_msg(err));
+			AUTOFREE char *text =
+				xasprintf("Failed to create network: %s", err_msg(err));
+			fail(p, "BOUNCER", "UNKNOWN_ERROR", sub, text);
 		} else {
 			AUTOFREE char *id = xasprintf("%lld", (long long)record.id);
 			user_packet_add_take(p, IRC_MSG("BOUNCER", "ADDNETWORK", id));
@@ -104,7 +106,9 @@ static void bouncer(struct user *u, struct user_client *dc, const struct irc_msg
 		if (!update_network_attrs(&record, &attrs, sub, &error)) {
 			user_packet_add_take(p, error);
 		} else if (!user_store_network(u, &record, true, &err)) {
-			fail(p, "BOUNCER", "UNKNOWN_ERROR", sub, err_msg(err));
+			AUTOFREE char *text =
+				xasprintf("Failed to update network: %s", err_msg(err));
+			fail(p, "BOUNCER", "UNKNOWN_ERROR", sub, text);
 		} else {
 			user_packet_add_take(
 				p, IRC_MSG("BOUNCER", "CHANGENETWORK", irc_msg_param(msg, 1)));
@@ -335,6 +339,8 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		return;
 	} else if (cstr_eq(cmd, "CHATHISTORY")) {
 		user_history(u, dc, msg, p);
+	} else if (cstr_eq(cmd, "SEARCH")) {
+		user_search(u, dc, msg, p);
 	} else if (cstr_eq(cmd, "MARKREAD") || cstr_eq(cmd, "READ")) {
 		user_read_marker(u, dc, msg, p);
 	} else if (cstr_eq(cmd, "MONITOR")) {
@@ -347,7 +353,7 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		xfree(dc->away);
 		dc->away = msg->params.len > 0 ? xstrdup(irc_msg_param(msg, 0)) : nullptr;
 		user_packet_add_take(
-			p, IRC_MSG(dc->away != nullptr ? "306" : "305", dc->nick,
+			p, IRC_MSG(dc->away != nullptr ? "306" : "305", "*",
 				   dc->away != nullptr ? "You have been marked as being away"
 						       : "You are no longer marked as being away"));
 		if (net != nullptr) {
@@ -358,11 +364,21 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 	} else if (cstr_eq(cmd, "PRIVMSG") || cstr_eq(cmd, "NOTICE") || cstr_eq(cmd, "TAGMSG")) {
 		if (msg->params.len < (cstr_eq(cmd, "TAGMSG") ? 1U : 2U)) {
 			user_packet_add_take(
-				p, IRC_MSG("461", dc->nick, cmd, "Not enough parameters"));
+				p, IRC_MSG("461", "*", cmd, "Not enough parameters"));
 			goto out;
 		}
 		AUTOFREE char *canonical = casemap_cstr(CASEMAPPING_ASCII, irc_msg_param(msg, 0));
 		if (cstr_eq(canonical, SERVICE_NICK_CM)) {
+			if (enabled(dc, "echo-message")) {
+				struct irc_msg *echo = irc_msg_clone(msg);
+				irc_tags_clear(&echo->tags);
+				copy_client_tags(&echo->tags, &msg->tags);
+				AUTOFREE char *now = format_server_time_cstr(timestamp_now());
+				irc_tags_set(&echo->tags, "time", now);
+				irc_msg_set_prefix(echo, DOWNSTREAM_SELF_PREFIX, "", "");
+				// Before the service's replies
+				user_send_take(u, dc, echo);
+			}
 			if (cstr_eq(cmd, "PRIVMSG")) {
 				service_privmsg(u, dc, irc_msg_param(msg, 1));
 			}
@@ -370,7 +386,7 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		}
 		if (net == nullptr && cstr_eq(irc_msg_param(msg, 0), dc->nick)) {
 			struct irc_msg *echo = irc_msg_clone(msg);
-			irc_msg_set_prefix(echo, dc->nick, dc->username, dc->hostname);
+			irc_msg_set_prefix(echo, DOWNSTREAM_SELF_PREFIX, "", "");
 			user_packet_add_take(p, echo);
 			goto out;
 		}
@@ -443,8 +459,10 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 	}
 out:
 	for (size_t i = 0; i < p->messages.len; i++) {
+		// Like soju-rs, BOUNCER and CHATHISTORY TARGETS replies have none
 		if (p->messages.data[i]->prefix == nullptr &&
-		    !cstr_eq(p->messages.data[i]->command, "BOUNCER")) {
+		    !cstr_eq(p->messages.data[i]->command, "BOUNCER") &&
+		    !cstr_eq(p->messages.data[i]->command, "CHATHISTORY")) {
 			server_set_prefix(u->srv, p->messages.data[i]);
 		}
 	}

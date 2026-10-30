@@ -387,8 +387,9 @@ void upstream_tick(struct upstream *uc, uint64_t now_ms) {
 	    uc->deadline != 0 && now_ms >= uc->deadline) {
 		upstream_disconnect(uc,
 				    uc->state == UPSTREAM_REGISTERING
-					    ? "connection registration timed out"
-					    : "connection timed out",
+					    ? "failed to register: failed to read message: "
+					      "registration timed out"
+					    : "failed to connect: i/o timeout",
 				    true);
 		return;
 	}
@@ -488,6 +489,11 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 	if (parent != nullptr && dc_id == 0) {
 		dc_id = parent->downstream_id;
 	}
+	// soju-rs forwards an upstream batch only as the labeled response of a
+	// labeled downstream command: messages of other batches lose their tag
+	if (parent != nullptr && parent->label[0] == '\0') {
+		irc_tags_remove(&msg->tags, "batch");
+	}
 	irc_tags_remove(&msg->tags, "label");
 	if (label[0] != '\0') {
 		irc_tags_set(&msg->tags, "label", label);
@@ -508,7 +514,7 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 				multiline_batch_init(b->multiline, irc_msg_clone(msg));
 			}
 			strmap_set(&uc->batches, ref + 1, b);
-			if (b->multiline != nullptr) {
+			if (b->multiline != nullptr || b->label[0] == '\0') {
 				goto out;
 			}
 		} else if (ref[0] == '-') {
@@ -537,7 +543,11 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 				free_batch(b);
 				goto out;
 			}
+			bool hidden = b->label[0] == '\0';
 			free_batch(b);
+			if (hidden) {
+				goto out;
+			}
 		}
 	} else if (parent != nullptr && parent->multiline != nullptr) {
 		struct multiline_limits limits = multiline_limits_default();
@@ -548,13 +558,28 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 		goto out;
 	}
 	if (cstr_eq(msg->command, "ERROR")) {
-		upstream_disconnect(uc, irc_msg_trailing(msg), true);
+		// soju-rs: a handler error, which only aborts registration; a
+		// registered connection is then closed by the server
+		AUTOFREE char *text = xasprintf("fatal server error: %s", irc_msg_param(msg, 0));
+		if (uc->registered) {
+			log_info(&uc->log, "failed to handle message: %s", text);
+			goto out;
+		}
+		struct irc_msg *bare = irc_msg_clone(msg);
+		irc_tags_clear(&bare->tags);
+		AUTOFREE char *line = irc_msg_to_string(bare);
+		irc_msg_free(bare);
+		AUTOFREE char *q = utf8_debug_cstr(str_from(line));
+		AUTOFREE char *reason =
+			xasprintf("failed to register: failed to handle message %s: %s", q, text);
+		upstream_disconnect(uc, reason, true);
 		goto out;
 	}
 	if (!uc->registered &&
 	    (cstr_eq(msg->command, ERR_PASSWDMISMATCH) ||
 	     cstr_eq(msg->command, ERR_ERRONEUSNICKNAME) || cstr_eq(msg->command, "FAIL"))) {
-		AUTOFREE char *reason = upstream_registration_error(msg);
+		AUTOFREE char *error = upstream_registration_error(msg);
+		AUTOFREE char *reason = xasprintf("failed to register: %s", error);
 		upstream_disconnect(uc, reason, upstream_registration_temporary(msg));
 		goto out;
 	}

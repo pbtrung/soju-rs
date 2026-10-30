@@ -1,6 +1,7 @@
 #include "user/internal.h"
 
 #include "base/alloc.h"
+#include "base/utf8.h"
 #include "irc/genmsg.h"
 
 static void copy_caps(struct cap_registry *out, const struct cap_registry *in) {
@@ -166,8 +167,7 @@ void user_service_reply(struct user *u, uint64_t dc_id, const char *text) {
 		return;
 	}
 	struct irc_msg *msg = IRC_MSG("PRIVMSG", dc->nick, text);
-	AUTOFREE char *host = server_hostname(u->srv);
-	irc_msg_set_prefix(msg, SERVICE_NICK, SERVICE_NICK, host);
+	irc_msg_set_prefix(msg, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
 	user_send_take(u, dc, msg);
 }
 
@@ -216,25 +216,60 @@ void user_packet_sync(struct user *u, struct user_network *net, struct user_pack
 	p->sync = !welcome;
 }
 
-void user_channel_replay(struct user *u, struct user_network *net, const struct user_client *dc,
-			 struct user_packet *p, const struct upstream_channel *ch) {
-	(void)u;
+struct read_receipt_job {
+	int64_t network;
+	const char *target;
+	struct db_read_receipt record;
+	bool found;
+	struct err *err;
+};
+static void get_read_receipt(struct db *db, void *data) {
+	struct read_receipt_job *j = data;
+	bool ok = db_get_read_receipt(db, j->network, j->target, &j->record, &j->found, &j->err);
+	(void)ok;
+}
+
+// soju-rs downstream::forward_channel: a complete channel's state, after
+// its JOIN
+void user_forward_channel(struct user *u, struct user_network *net, const struct user_client *dc,
+			  struct user_packet *p, const struct upstream_channel *ch) {
 	struct upstream *uc = net->upstream;
-	struct irc_msg *join = IRC_MSG("JOIN", ch->name);
-	irc_msg_set_prefix(join, uc->nick, uc->username, uc->hostname);
-	if (cap_registry_is_enabled(&dc->caps, "extended-join")) {
-		irc_msg_add_param(join, uc->account[0] != '\0' ? uc->account : "*");
-		irc_msg_add_param(join, uc->realname);
-	}
-	user_packet_add_take(p, join);
+	// RPL_NOTOPIC isn't sent on JOIN
 	if (ch->topic[0] != '\0') {
-		user_packet_add_take(p, IRC_MSG("332", uc->nick, ch->name, ch->topic));
+		user_packet_add_take(p, IRC_MSG("332", dc->nick, ch->name, ch->topic));
 		if (ch->topic_who[0] != '\0') {
 			AUTOFREE char *time = xasprintf(
 				"%lld", (long long)(ch->topic_time.set ? ch->topic_time.t.sec
 								       : -62135596800LL));
 			user_packet_add_take(
-				p, IRC_MSG("333", uc->nick, ch->name, ch->topic_who, time));
+				p, IRC_MSG("333", dc->nick, ch->name, ch->topic_who, time));
+		}
+	}
+	const char *read_cmd = cap_registry_is_enabled(&dc->caps, "draft/read-marker") ? "MARKREAD"
+			       : cap_registry_is_enabled(&dc->caps, "soju.im/read")    ? "READ"
+										       : nullptr;
+	if (read_cmd != nullptr) {
+		AUTOFREE char *target = casemap_cstr(uc->casemap, ch->name);
+		struct read_receipt_job j = {.network = net->record.id, .target = target};
+		db_thread_call(u->srv->db, get_read_receipt, &j);
+		if (j.err != nullptr) {
+			AUTOFREE char *q = utf8_debug_cstr(str_from(ch->name));
+			log_info(&u->srv->log, "failed to get the read receipt for %s: %s", q,
+				 err_msg(j.err));
+			err_free(j.err);
+		} else {
+			AUTOFREE char *time =
+				j.found && j.record.timestamp.set
+					? format_server_time_cstr(j.record.timestamp.t)
+					: nullptr;
+			AUTOFREE char *ts =
+				time != nullptr ? xasprintf("timestamp=%s", time) : xstrdup("*");
+			struct irc_msg *m = IRC_MSG(read_cmd, ch->name, ts);
+			irc_msg_set_prefix(m, DOWNSTREAM_SELF_PREFIX, "", "");
+			user_packet_add_take(p, m);
+		}
+		if (j.found) {
+			db_read_receipt_free(&j.record);
 		}
 	}
 	if (!cap_registry_is_enabled(&dc->caps, "no-implicit-names") &&
@@ -254,4 +289,17 @@ void user_channel_replay(struct user *u, struct user_network *net, const struct 
 				     (const char *const *)members.data, members.len);
 		strvec_free(&members);
 	}
+}
+
+void user_channel_replay(struct user *u, struct user_network *net, const struct user_client *dc,
+			 struct user_packet *p, const struct upstream_channel *ch) {
+	struct upstream *uc = net->upstream;
+	struct irc_msg *join = IRC_MSG("JOIN", ch->name);
+	irc_msg_set_prefix(join, DOWNSTREAM_SELF_PREFIX, "", "");
+	if (cap_registry_is_enabled(&dc->caps, "extended-join")) {
+		irc_msg_add_param(join, uc->account[0] != '\0' ? uc->account : "*");
+		irc_msg_add_param(join, uc->realname);
+	}
+	user_packet_add_take(p, join);
+	user_forward_channel(u, net, dc, p, ch);
 }

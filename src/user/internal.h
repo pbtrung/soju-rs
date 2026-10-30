@@ -30,10 +30,14 @@ void user_packet_free(void *data);
 void user_packet_add_take(struct user_packet *p, struct irc_msg *msg);
 void user_packet_sync(struct user *u, struct user_network *net, struct user_packet *p,
 		      bool welcome);
+void user_forward_channel(struct user *u, struct user_network *net, const struct user_client *dc,
+			  struct user_packet *p, const struct upstream_channel *ch);
 void user_channel_replay(struct user *u, struct user_network *net, const struct user_client *dc,
 			 struct user_packet *p, const struct upstream_channel *ch);
 void user_history(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		  struct user_packet *reply);
+void user_search(struct user *u, struct user_client *dc, const struct irc_msg *msg,
+		 struct user_packet *reply);
 void user_read_marker(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		      struct user_packet *reply);
 void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg *msg,
@@ -43,6 +47,7 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 void user_upstream_state(struct upstream *uc, void *data);
 void user_upstream_closed(struct upstream *uc, const char *reason, bool temporary, void *data);
 void user_upstream_detach(struct upstream *uc, const char *channel, void *data);
+void user_upstream_channel_complete(struct upstream *uc, const char *channel, void *data);
 void user_network_start(struct user *u, struct user_network *net);
 void user_network_free(struct user_network *net);
 void user_client_free(struct user_client *dc);

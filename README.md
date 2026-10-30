@@ -6,9 +6,8 @@ upstream IRC servers on behalf of its users and adds features on top:
 multiple users and networks, detached channels, chat history playback and
 many [IRCv3] extensions.
 
-> **Status:** process glue is implemented. `soju` runs the server and
-> `sojuctl` sends commands through its Unix admin socket. Release qualification
-> is in progress; see [PLAN.md](PLAN.md).
+> **Status:** it follows soju-rs v0.99.24 (database schema 35). Phase 11
+> qualification results are in [doc/phase11-wip.md](doc/phase11-wip.md).
 
 ## Features
 
@@ -35,6 +34,22 @@ file, reads and writes the same `soju.db` and speaks the same IRC protocol.
   MSan, TSan and valgrind, and fuzzed
 
 The soju-rs README on `main` lists the ways this differs from upstream soju.
+
+## Differences from soju-rs
+
+- Linux x86_64 only, with glibc or musl; no aarch64 builds. The binaries
+  link OpenSSL, libcurl and llhttp (and libxcrypt on glibc) dynamically;
+  the other libraries are linked statically.
+- NUL bytes in received lines become U+FFFD: C strings can't hold them.
+- One libuv event loop per CPU (`SOJU_LOOPS` overrides the count), a single
+  one on a single CPU, like soju-rs's choice between Tokio runtimes.
+- With `message-store turso`, a user's event loop waits for storage
+  capacity when both message buffers are full, rather than holding back
+  that user's input while keeping PING/PONG flowing.
+- TLS and HTTP error messages come from OpenSSL and libcurl rather than
+  rustls and reqwest.
+- `soju -build-info` prints the compiler, build mode and library versions.
+- Versions are numbered independently of soju-rs: this is v0.99.0.
 
 ## Installing
 
