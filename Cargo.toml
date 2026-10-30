@@ -23,7 +23,7 @@ path = "src/bin/sojuctl.rs"
 [dependencies]
 aes-gcm = "0.11.1"
 anyhow = "1.0.104"
-aws-lc-rs = "1.18.2"
+aws-lc-rs = "1.19.0"
 base64 = "0.23.1"
 bcrypt = "0.19.3"
 chrono = "0.4.45"
@@ -55,7 +55,7 @@ tokio = { version = "1.54.1", features = ["full"] }
 tokio-rustls = "0.26.6"
 tokio-tungstenite = "0.30.0"
 tokio-util = "0.7.20"
-webpki-roots = "1.0.10"
+webpki-roots = "1.0.11"
 
 [profile.release]
 lto = "thin"
