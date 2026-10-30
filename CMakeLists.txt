@@ -49,7 +49,7 @@ target_compile_options(soju_core PRIVATE ${SOJU_WARNINGS})
 target_compile_definitions(soju_core PUBLIC _GNU_SOURCE
 	"SOJU_MODE_$<UPPER_CASE:$<MAKE_C_IDENTIFIER:${SOJU_MODE}>>=1")
 target_link_libraries(soju_core PUBLIC
-	soju::curl soju::ssl soju::crypto soju::uv soju::utf8proc soju::yyjson
+	soju::llhttp soju::curl soju::ssl soju::crypto soju::uv soju::utf8proc soju::yyjson
 	soju::sqlite3 soju::xcrypt)
 configure_file(src/version.h.in "${CMAKE_BINARY_DIR}/gen/version.h" @ONLY)
 

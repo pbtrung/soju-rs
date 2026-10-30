@@ -491,6 +491,11 @@ static void *handle(void *arg) {
 	}
 	if (contains_sql(body, m->st.delay_before_sql)) {
 		unsigned ms = m->st.delay_before_ms;
+		m->st.before_sql_entered = true;
+		pthread_cond_broadcast(&m->gate);
+		while (m->st.hold_before_sql && !m->stop) {
+			pthread_cond_wait(&m->gate, &m->mu);
+		}
 		xfree(m->st.delay_before_sql);
 		m->st.delay_before_sql = nullptr;
 		pthread_mutex_unlock(&m->mu);
@@ -618,6 +623,7 @@ static void free_string(void *p) {
 struct turso_mock *turso_mock_start(void) {
 	struct turso_mock *m = xcalloc(1, sizeof(*m));
 	pthread_mutex_init(&m->mu, nullptr);
+	pthread_cond_init(&m->gate, nullptr);
 	strmap_init(&m->st.databases, free_string);
 	strmap_init(&m->st.streams, stream_free);
 	m->st.close_idle_streams = true;
@@ -658,6 +664,7 @@ sqlite3 *turso_mock_open(struct turso_mock *m, const char *name) {
 void turso_mock_stop(struct turso_mock *m) {
 	pthread_mutex_lock(&m->mu);
 	m->stop = true;
+	pthread_cond_broadcast(&m->gate);
 	pthread_mutex_unlock(&m->mu);
 	pthread_join(m->thread, nullptr);
 	for (size_t i = 0; i < m->handlers.len; i++) {
@@ -680,6 +687,7 @@ void turso_mock_stop(struct turso_mock *m) {
 	xfree(m->st.delay_before_sql);
 	vec_free(&m->st.request_sizes);
 	strvec_free(&m->st.requests);
+	pthread_cond_destroy(&m->gate);
 	pthread_mutex_destroy(&m->mu);
 	xfree(m);
 }

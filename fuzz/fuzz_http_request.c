@@ -15,7 +15,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	struct http_request req;
 	size_t used = 0;
 	enum http_parse_result r = http_parse_request(in, &req, &used);
-	if (r != HTTP_REQUEST) {
+	if (r != HTTP_REQUEST_READY) {
 		return 0;
 	}
 	if (used == 0 || used > size || used > HTTP_MAX_HEADER_BYTES ||
@@ -25,7 +25,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	// The head alone parses to the same request
 	struct http_request again;
 	size_t used2 = 0;
-	if (http_parse_request(str_new(in.p, used), &again, &used2) != HTTP_REQUEST ||
+	if (http_parse_request(str_new(in.p, used), &again, &used2) != HTTP_REQUEST_READY ||
 	    used2 != used || strcmp(again.method, req.method) != 0 ||
 	    strcmp(again.target, req.target) != 0 || again.headers.len != req.headers.len ||
 	    again.content_length != req.content_length || again.keep_alive != req.keep_alive) {

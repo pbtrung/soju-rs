@@ -380,7 +380,7 @@ uninstrumented system library.
 |---------------|---------------|-------|
 | tokio (runtime, timers, signals, process) | **libuv** | one loop thread per CPU (one on a single CPU, like the `current_thread` flavor) + DB thread + threadpool |
 | tokio-rustls, rustls, aws-lc-rs, webpki-roots, rustls-native-certs | **OpenSSL 3** (system, dynamic) | our own TLS-over-libuv layer using memory BIOs; system trust store via `SSL_CTX_set_default_verify_paths` |
-| hyper, tokio-tungstenite | in-tree `http/request.c`, `http/websocket.c`, `server/http.c` on `net/conn` (decision 11) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
+| hyper, tokio-tungstenite | system **llhttp** through `http/request.c`; `http/websocket.c`, `server/http.c` on `net/conn` (decision 11) | HTTP/1.1 server, WebSocket, `/socket`, `/icon`, Prometheus |
 | reqwest | **libcurl** (system, dynamic) multi interface on libuv (decision 12) | OAuth2, HTTP auth, Web Push; internal IPs refused at every connect |
 | reqwest (blocking Turso worker), rusqlite overlay | **libcurl** easy interface on the DB thread (blocking, like the Rust worker), yyjson | Turso Hrana pipelines and Platform API; the DB thread blocks on its reply like the Rust HTTP worker; in-memory SQLite overlay for buffered messages |
 | mimalloc | **mimalloc** | `MI_SECURE` in release |
@@ -705,14 +705,14 @@ comparison with soju-rs, release builds (x86_64 glibc and musl, dynamically link
     strings can't hold them). Values decoded from data where NUL may occur
     (e.g. message ID targets) are kept length-aware instead.
 11. The HTTP server and WebSocket are **in-tree** (phase 8), not
-    libwebsockets: `http/request.c` (HTTP/1.1 request heads),
+    libwebsockets: system llhttp through `http/request.c` (HTTP/1.1 request heads),
     `http/websocket.c` (RFC 6455 framing) and `server/http.c` (routes),
     on top of `net/conn` with raw and WebSocket framings. HTTP and IRC
     connections then share one TLS layer, write queue, byte cap, input
     backpressure and lifetime model (rule 8), and a WebSocket connection is
     an ordinary `struct conn` for the downstream code. lws's adoption API
     can't take bytes already read and would need one context per loop for
-    rule 1. Both parsers have fuzz harnesses (`fuzz_ws_frame`,
+    rule 1. Both protocol adapters have fuzz harnesses (`fuzz_ws_frame`,
     `fuzz_http_request`).
 12. The HTTP client is **libcurl** (phase 9), the system library linked
     dynamically like OpenSSL, through its multi interface on each loop

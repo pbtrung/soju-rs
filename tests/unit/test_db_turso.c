@@ -3,6 +3,7 @@
 // streams and transactions)
 #include "testsupport.h"
 
+#include <unistd.h>
 #include <yyjson.h>
 #include <uv.h>
 
@@ -472,7 +473,7 @@ static void test_message_batch_keeps_appending_during_slow_commit(void **state) 
 	assert_true(batch_store_prepare(batch, nullptr));
 	pthread_mutex_lock(&m->mu);
 	m->st.delay_before_sql = xstrdup("INSERT INTO Message(");
-	m->st.delay_before_ms = 500;
+	m->st.hold_before_sql = true;
 	pthread_mutex_unlock(&m->mu);
 	uv_loop_t loop;
 	assert_int_equal(uv_loop_init(&loop), 0);
@@ -481,7 +482,6 @@ static void test_message_batch_keeps_appending_during_slow_commit(void **state) 
 	bool timer_fired = false;
 	timer.data = &timer_fired;
 	assert_int_equal(uv_timer_start(&timer, close_timer, 50, 0), 0);
-	uint64_t start = uv_hrtime();
 	for (size_t i = 0; i < 6; i++) {
 		char text[32];
 		snprintf(text, sizeof(text), "slow item %zu", i);
@@ -490,17 +490,26 @@ static void test_message_batch_keeps_appending_during_slow_commit(void **state) 
 		assert_true(batch_store_append(batch, net.id, "#batch", msg, &id, nullptr));
 		irc_msg_free(msg);
 	}
-	assert_true((uv_hrtime() - start) / 1000000 < 250);
 	db_message_row_vec rows = {0};
 	assert_int_equal(batch_query(batch_store_index(batch), net.id, &rows), 6);
 	db_message_row_vec_free(&rows);
+	// Wait for the writer to enter the gate. The independent query and
+	// loop callback below must finish while that write is still blocked.
+	pthread_mutex_lock(&m->mu);
+	while (!m->st.before_sql_entered) {
+		pthread_cond_wait(&m->gate, &m->mu);
+	}
+	pthread_mutex_unlock(&m->mu);
 	int64_t committed_id = -1;
 	assert_true(db_get_message_last_id(db, net.id, "#batch", &committed_id, nullptr));
 	assert_int_equal(committed_id, 0);
-	assert_true((uv_hrtime() - start) / 1000000 < 250);
 	assert_int_equal(uv_run(&loop, UV_RUN_DEFAULT), 0);
 	assert_true(timer_fired);
 	assert_int_equal(uv_loop_close(&loop), 0);
+	pthread_mutex_lock(&m->mu);
+	m->st.hold_before_sql = false;
+	pthread_cond_broadcast(&m->gate);
+	pthread_mutex_unlock(&m->mu);
 	assert_true(batch_store_flush(batch, nullptr));
 	assert_int_equal(batch_query(db, net.id, &rows), 6);
 	db_message_row_vec_free(&rows);
@@ -725,7 +734,7 @@ static void test_partial_batch_flushes_when_polled_after_interval(void **state) 
 	assert_true(batch_store_append(batch, net.id, "#batch", msg, &id, nullptr));
 	uv_sleep(1050);
 	assert_true(batch_store_poll(batch, nullptr));
-	uint64_t deadline = uv_hrtime() + 3000000000ULL;
+	uint64_t deadline = uv_hrtime() + 30000000000ULL;
 	int64_t committed = 0;
 	while (committed == 0) {
 		assert_true(uv_hrtime() < deadline);

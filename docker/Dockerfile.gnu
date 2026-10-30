@@ -10,7 +10,7 @@ FROM docker.io/library/archlinux:latest
 RUN pacman -Syu --noconfirm --needed \
 		gcc clang compiler-rt llvm lld clang-tools-extra \
 		cmake ninja make perl pkgconf patch \
-		openssl libxcrypt curl valgrind shellcheck ripgrep \
+		openssl libxcrypt curl llhttp valgrind shellcheck ripgrep \
 		bash coreutils diffutils file findutils grep sed tar gzip xz util-linux \
 	&& printf '[core-debug]\nServer = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n' >>/etc/pacman.conf \
 	&& pacman -Sy --noconfirm glibc-debug \

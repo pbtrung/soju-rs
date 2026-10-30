@@ -130,3 +130,8 @@ if(SOJU_USE_MIMALLOC)
 		IMPORTED_OBJECTS "${mi_obj}"
 		INTERFACE_INCLUDE_DIRECTORIES "${P}/include")
 endif()
+
+# HTTP syntax is provided by the distribution's llhttp security updates.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LLHTTP REQUIRED IMPORTED_TARGET libllhttp>=9.0)
+add_library(soju::llhttp ALIAS PkgConfig::LLHTTP)

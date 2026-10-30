@@ -37,6 +37,7 @@ struct turso_mock_state {
 	unsigned delay_ms;
 	char *delay_before_sql; // one request containing this SQL waits first
 	unsigned delay_before_ms;
+	bool hold_before_sql, before_sql_entered; // deterministic slow-write gate
 	size_t max_body; // 0: none; bigger requests get HTTP 413
 	size_t max_batch_lines; // 0: none; bigger message batches time out
 	VEC(size_t) request_sizes;
@@ -47,6 +48,7 @@ struct turso_mock_state {
 
 struct turso_mock {
 	pthread_mutex_t mu;
+	pthread_cond_t gate;
 	struct turso_mock_state st;
 	char *root; // directory of the database files
 	char url[64];

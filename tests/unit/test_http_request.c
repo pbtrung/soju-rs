@@ -19,7 +19,7 @@ static void test_request(void **state) {
 			"rest";
 	struct http_request req;
 	size_t used;
-	assert_int_equal(parse(s, &req, &used), HTTP_REQUEST);
+	assert_int_equal(parse(s, &req, &used), HTTP_REQUEST_READY);
 	assert_int_equal(used, strlen(s) - 4);
 	assert_string_equal(req.method, "GET");
 	assert_string_equal(req.target, "/socket?x=1");
@@ -46,7 +46,7 @@ static void test_incomplete(void **state) {
 		assert_int_equal(http_parse_request(str_new(s, n), &req, &used), HTTP_NEED_MORE);
 	}
 	// LF line endings are accepted too
-	assert_int_equal(parse("GET / HTTP/1.0\nHost: x\n\n", &req, &used), HTTP_REQUEST);
+	assert_int_equal(parse("GET / HTTP/1.0\nHost: x\n\n", &req, &used), HTTP_REQUEST_READY);
 	assert_false(req.keep_alive);
 	http_request_free(&req);
 }
@@ -57,13 +57,13 @@ static void test_framing(void **state) {
 	size_t used;
 	assert_int_equal(parse("POST / HTTP/1.1\r\nContent-Length: 12\r\nConnection: close\r\n\r\n",
 			       &req, &used),
-			 HTTP_REQUEST);
+			 HTTP_REQUEST_READY);
 	assert_int_equal(req.content_length, 12);
 	assert_false(req.keep_alive);
 	http_request_free(&req);
 	assert_int_equal(
 		parse("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", &req, &used),
-		HTTP_REQUEST);
+		HTTP_REQUEST_READY);
 	assert_true(req.chunked);
 	http_request_free(&req);
 	static const char *const bad[] = {

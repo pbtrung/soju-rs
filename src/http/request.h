@@ -31,7 +31,7 @@ struct http_request {
 
 enum http_parse_result {
 	HTTP_NEED_MORE,
-	HTTP_REQUEST, // a request was parsed
+	HTTP_REQUEST_READY, // a request was parsed
 	HTTP_BAD_REQUEST, // 400
 	HTTP_HEADERS_TOO_LARGE, // 431
 };

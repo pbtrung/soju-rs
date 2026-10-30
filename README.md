@@ -44,7 +44,7 @@ Requirements:
 - Linux (glibc or musl)
 - GCC or Clang with C23 support
 - CMake 3.29 or newer and Ninja
-- OpenSSL 3, libcurl and libxcrypt (development packages)
+- OpenSSL 3, libcurl, llhttp 9 and libxcrypt (development packages)
 - Network access during the first configure
 
 Other dependencies (libuv, SQLite, mimalloc, utf8proc,
