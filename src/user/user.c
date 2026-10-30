@@ -595,7 +595,7 @@ static void attach_run(struct user *u, void *data) {
 			struct upstream_channel *ch = v;
 			struct db_channel *saved = cmmap_get(&net->channels, name);
 			if (ch->complete && (saved == nullptr || !saved->detached)) {
-				user_channel_replay(u, net, dc, p, ch);
+				user_channel_replay(u, net, dc, p, ch, true);
 			}
 		}
 	}

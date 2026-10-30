@@ -359,6 +359,9 @@ static char *batch_ref_cb(void *data) {
 
 void downstream_send(struct downstream *dc, struct irc_msg *msg) {
 	const struct cap_registry *caps = &dc->caps;
+	if (dc->forced_batch != nullptr && !irc_tags_contains(&msg->tags, "batch")) {
+		irc_tags_set(&msg->tags, "batch", dc->forced_batch);
+	}
 	if (!cap_registry_is_enabled(caps, "message-tags")) {
 		if (cstr_eq(msg->command, "TAGMSG")) {
 			irc_msg_free(msg);
@@ -1770,9 +1773,9 @@ void downstream_receive_take(struct downstream *dc, struct irc_msg *msg) {
 			// message's label.
 			downstream_begin_command(dc, msg);
 			if (!cstr_eq(msg->command, "PING") && !cstr_eq(msg->command, "PONG")) {
-				struct irc_msg *fail = IRC_MSG("FAIL", msg->command,
-							       "NETWORK_NOT_ATTACHED", tag,
-							       "Network not attached");
+				struct irc_msg *fail =
+					IRC_MSG("FAIL", msg->command, "NETWORK_NOT_ATTACHED", tag,
+						"Network not attached");
 				server_set_prefix(dc->srv, fail);
 				downstream_send(dc, fail);
 			}

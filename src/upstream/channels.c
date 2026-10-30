@@ -43,18 +43,24 @@ void upstream_channels_init(struct upstream *uc) {
 	cmmap_init(&uc->users, uc->casemap, free_user);
 }
 
-static struct upstream_user *cache_user(struct upstream *uc, const struct irc_prefix *prefix) {
+// soju-rs cache_user_info: create is false for messages which only update
+// the info of a user we already know
+static struct upstream_user *cache_user(struct upstream *uc, const struct irc_prefix *prefix,
+					bool create) {
 	if (prefix == nullptr || prefix->name[0] == '\0') {
 		return nullptr;
 	}
 	struct upstream_user *u = cmmap_get(&uc->users, prefix->name);
 	if (u == nullptr) {
+		if (!create) {
+			return nullptr;
+		}
 		u = xcalloc(1, sizeof(*u));
 		u->nickname = xstrdup(prefix->name);
 		u->username = xstrdup("");
 		u->hostname = xstrdup("");
 		u->server = xstrdup("");
-		u->flags = xstrdup("H");
+		u->flags = xstrdup("");
 		u->account = xstrdup("");
 		u->realname = xstrdup("");
 		cmmap_set(&uc->users, prefix->name, u);
@@ -120,6 +126,41 @@ static struct upstream_channel *new_channel(struct upstream *uc, const char *nam
 	return ch;
 }
 
+// soju-rs should_cache_user_info: we keep the info of the users we MONITOR
+// or share a channel with
+static bool should_cache(struct upstream *uc, const char *nick) {
+	if (same(uc, nick, uc->nick) || cmmap_has(&uc->monitored, nick)) {
+		return true;
+	}
+	void *v;
+	for (size_t it = 0; cmmap_next(&uc->channels, &it, nullptr, &v);) {
+		if (cmmap_has(&((struct upstream_channel *)v)->members, nick)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void forget_user(struct upstream *uc, const char *nick) {
+	if (!should_cache(uc, nick)) {
+		cmmap_del(&uc->users, nick);
+	}
+}
+
+// Forgets a channel we left, and the users we don't share a channel with
+// anymore
+static void forget_channel(struct upstream *uc, const char *name) {
+	struct upstream_channel *ch = cmmap_take(&uc->channels, name);
+	if (ch == nullptr) {
+		return;
+	}
+	const char *nick;
+	for (size_t it = 0; cmmap_next(&ch->members, &it, &nick, nullptr);) {
+		forget_user(uc, nick);
+	}
+	free_channel(ch);
+}
+
 static bool need(struct irc_msg *msg, size_t n) {
 	return msg->params.len >= n;
 }
@@ -133,9 +174,7 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 0));
 		if (same(uc, source, uc->nick)) {
 			// A JOIN of a channel we're in starts it over
-			if (ch != nullptr) {
-				cmmap_del(&uc->channels, irc_msg_param(msg, 0));
-			}
+			forget_channel(uc, irc_msg_param(msg, 0));
 			ch = new_channel(uc, irc_msg_param(msg, 0));
 			upstream_send_take(uc, IRC_MSG("MODE", ch->name));
 			upstream_notify_state(uc);
@@ -144,7 +183,18 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 			struct membership_set *ms = xcalloc(1, sizeof(*ms));
 			cmmap_set(&ch->members, source, ms);
 		}
-		struct upstream_user *u = cache_user(uc, msg->prefix);
+		struct upstream_user *u = cache_user(uc, msg->prefix, true);
+		if (u != nullptr && cap_registry_is_enabled(&uc->caps, "away-notify")) {
+			// The H/G flag is updated by AWAY messages, and B (bot mode)
+			// can't be tracked after the JOIN
+			const char *bot = strmap_get(&uc->isupport.m, "BOT");
+			AUTOFREE char *flags =
+				xasprintf("H%s", irc_tags_contains(&msg->tags, "bot") &&
+								 bot != nullptr && strlen(bot) == 1
+							 ? bot
+							 : "");
+			replace(&u->flags, flags);
+		}
 		if (u != nullptr && need(msg, 3)) {
 			replace(&u->account, irc_msg_param(msg, 1));
 			replace(&u->realname, irc_msg_param(msg, 2));
@@ -186,13 +236,19 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 			struct irc_prefix prefix = {.name = info.nickname,
 						    .user = info.username,
 						    .host = info.hostname};
-			struct upstream_user *u = cache_user(uc, &prefix);
+			struct upstream_user *u = should_cache(uc, info.nickname)
+							  ? cache_user(uc, &prefix, true)
+							  : nullptr;
 			if (u != nullptr) {
 				if (info.server[0] != '\0') {
 					replace(&u->server, info.server);
 				}
 				if (info.flags[0] != '\0') {
-					replace(&u->flags, info.flags);
+					AUTO_STRBUF struct strbuf flags = STRBUF_INIT;
+					strip_member_prefixes(&flags, str_from(info.flags),
+							      uc->memberships.data,
+							      uc->memberships.len);
+					replace(&u->flags, strbuf_cstr(&flags));
 				}
 				if (info.account[0] != '\0') {
 					replace(&u->account, info.account);
@@ -230,23 +286,26 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		if (!need(msg, kick ? 2 : 1)) {
 			return false;
 		}
-		const char *nick = kick ? irc_msg_param(msg, 1) : source;
+		AUTOFREE char *nick = xstrdup(kick ? irc_msg_param(msg, 1) : source);
 		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 0));
 		if (same(uc, nick, uc->nick)) {
-			cmmap_del(&uc->channels, irc_msg_param(msg, 0));
+			forget_channel(uc, irc_msg_param(msg, 0));
 		} else if (ch != nullptr) {
 			cmmap_del(&ch->members, nick);
+			forget_user(uc, nick);
 		}
 	} else if (cstr_eq(cmd, "QUIT") || cstr_eq(cmd, "NICK")) {
 		bool nick = cstr_eq(cmd, "NICK");
 		if (source[0] == '\0' || (nick && !need(msg, 1))) {
 			return false;
 		}
+		strvec_free(&uc->event_channels);
 		void *v;
 		for (size_t it = 0; cmmap_next(&uc->channels, &it, nullptr, &v);) {
 			struct upstream_channel *ch = v;
 			struct membership_set *ms = cmmap_take(&ch->members, source);
 			if (ms != nullptr) {
+				strvec_push(&uc->event_channels, ch->name);
 				if (nick) {
 					cmmap_set(&ch->members, irc_msg_param(msg, 0), ms);
 				} else {
@@ -341,6 +400,10 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		}
 		struct upstream_channel *ch =
 			cmmap_get(&uc->channels, irc_msg_param(msg, topic ? 0 : 1));
+		// The topic of a channel we're in is sent with its state, or
+		// to the clients asking for it (soju-rs only forwards the first
+		// RPL_TOPICWHOTIME)
+		bool forward = topic || ch == nullptr || (who && ch->topic_who[0] == '\0');
 		if (ch != nullptr) {
 			if (who) {
 				replace(&ch->topic_who, irc_msg_param(msg, 2));
@@ -361,11 +424,30 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 								    msg->prefix->host)
 							: xstrdup("");
 					replace(&ch->topic_who, prefix);
-					ch->topic_time =
-						(struct db_time){.set = true, .t = timestamp_now()};
+					struct timestamp t;
+					if (!parse_server_time(str_from(irc_tags_get_or_empty(
+								       &msg->tags, "time")),
+							       &t)) {
+						t = timestamp_now();
+					}
+					ch->topic_time = (struct db_time){.set = true, .t = t};
 				}
 			}
 		}
+		return forward;
+	} else if (cstr_eq(cmd, "329")) {
+		if (!need(msg, 3)) {
+			return false;
+		}
+		struct upstream_channel *ch = cmmap_get(&uc->channels, irc_msg_param(msg, 1));
+		if (ch == nullptr) {
+			return true;
+		}
+		// Only the first one is forwarded, the clients asking get it
+		// from us
+		bool first = ch->creation_time[0] == '\0';
+		replace(&ch->creation_time, irc_msg_param(msg, 2));
+		return first;
 	} else if (cstr_eq(cmd, "MODE") || cstr_eq(cmd, "324") || cstr_eq(cmd, "221")) {
 		bool numeric = cstr_eq(cmd, "324");
 		size_t target = numeric ? 1 : 0;
@@ -375,9 +457,12 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		const char *name = irc_msg_param(msg, target);
 		struct upstream_channel *ch = cmmap_get(&uc->channels, name);
 		struct err *e = nullptr;
+		bool forward = true;
 		if (ch != nullptr) {
 			if (numeric) {
 				channel_modes_free(&ch->modes);
+				forward = !ch->has_modes;
+				ch->has_modes = true;
 			}
 			bool applied = apply_channel_modes(
 				&ch->modes, &ch->members, uc->memberships.data, uc->memberships.len,
@@ -394,21 +479,21 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 			(void)applied;
 		}
 		err_free(e);
+		return forward;
 	} else if (cstr_eq(cmd, "ACCOUNT") || cstr_eq(cmd, "CHGHOST") || cstr_eq(cmd, "SETNAME") ||
 		   cstr_eq(cmd, "AWAY")) {
 		if (!cstr_eq(cmd, "AWAY") && !need(msg, cstr_eq(cmd, "CHGHOST") ? 2 : 1)) {
 			return false;
 		}
-		struct upstream_user *u = cache_user(uc, msg->prefix);
+		bool away = cstr_eq(cmd, "AWAY");
+		struct upstream_user *u = cache_user(uc, msg->prefix, !away);
 		bool own = same(uc, source, uc->nick);
 		if (cstr_eq(cmd, "ACCOUNT")) {
 			const char *a =
 				cstr_eq(irc_msg_param(msg, 0), "*") ? "" : irc_msg_param(msg, 0);
+			// Our own account comes from RPL_LOGGEDIN/RPL_LOGGEDOUT
 			if (u != nullptr) {
 				replace(&u->account, a);
-			}
-			if (own) {
-				replace(&uc->account, a);
 			}
 		} else if (cstr_eq(cmd, "CHGHOST")) {
 			if (u != nullptr) {
@@ -427,8 +512,12 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 				replace(&uc->realname, irc_msg_param(msg, 0));
 			}
 		} else {
-			if (u != nullptr) {
-				replace(&u->flags, msg->params.len > 0 ? "G" : "H");
+			// Only if we already have the flags cached
+			for (char *f = u != nullptr ? u->flags : nullptr;
+			     f != nullptr && *f != '\0'; f++) {
+				if (*f == 'H' || *f == 'G') {
+					*f = msg->params.len > 0 ? 'G' : 'H';
+				}
 			}
 			if (own) {
 				uc->away = msg->params.len > 0;
@@ -441,7 +530,6 @@ bool upstream_handle_channel(struct upstream *uc, struct irc_msg *msg) {
 		if (!need(msg, cstr_eq(cmd, "TAGMSG") ? 1 : 2)) {
 			return false;
 		}
-		(void)cache_user(uc, msg->prefix);
 		const char *target = irc_msg_param(msg, 0);
 		while (*target != '\0' && strchr(uc->status_msg, *target) != nullptr) {
 			target++;

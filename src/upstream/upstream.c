@@ -193,6 +193,10 @@ static void timer_closed(uv_handle_t *h) {
 	xfree(uc->server_name);
 	xfree(uc->ended_command);
 	xfree(uc->ended_target);
+	strvec_free(&uc->event_channels);
+	xfree(uc->register_password);
+	xfree(uc->sasl_username);
+	xfree(uc->sasl_password);
 	log_free(&uc->log);
 	ref_untrack(&uc->ref);
 	xfree(uc);
@@ -203,6 +207,7 @@ void upstream_free(struct upstream *uc) {
 		return;
 	}
 	clear_ident(uc);
+	upstream_count(uc, false);
 	uc->closing = true;
 	uc->reconnect = false;
 	upstream_abort_commands(uc);
@@ -359,9 +364,26 @@ char *go_errno_message(int uv_error) {
 	return text;
 }
 
+void upstream_count(struct upstream *uc, bool running) {
+	if (uc->counted != running) {
+		uc->counted = running;
+		if (running) {
+			atomic_fetch_add(&uc->srv->metrics.upstreams, 1);
+		} else {
+			atomic_fetch_sub(&uc->srv->metrics.upstreams, 1);
+		}
+	}
+}
+
 void upstream_disconnect(struct upstream *uc, const char *reason, bool temporary) {
 	if (uc->closing) {
 		return;
+	}
+	upstream_count(uc, false);
+	// soju-rs resets the backoff when a registered connection ends without
+	// error: the server is retried right away
+	if (uc->registered && reason[0] == '\0') {
+		backoffer_reset(&uc->reconnect_backoff);
 	}
 	if (uc->conn != nullptr) {
 		conn_set_callbacks(uc->conn, &(struct conn_callbacks){0}, nullptr);
@@ -376,7 +398,13 @@ void upstream_disconnect(struct upstream *uc, const char *reason, bool temporary
 	}
 	upstream_clear_session(uc);
 	if (uc->reconnect && temporary) {
-		uc->retry_at = uc->now + backoffer_next_delay(&uc->reconnect_backoff);
+		// The delay counts from the start of the last attempt
+		uint64_t delay = backoffer_next_delay(&uc->reconnect_backoff);
+		uint64_t elapsed = uc->now - uc->last_try;
+		uc->retry_at = elapsed >= delay ? uc->now : uc->now + delay - elapsed;
+		if (uc->retry_at == 0) {
+			uc->retry_at = 1;
+		}
 	}
 	upstream_notify_state(uc);
 }
@@ -554,6 +582,14 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 		multiline_batch_push(parent->multiline, msg, &limits);
 		goto out;
 	}
+	if (cstr_eq(msg->command, "BATCH")) {
+		// A labeled response: it comes from us
+		server_set_prefix(uc->srv, msg);
+	}
+	if (parent != nullptr && parent->label[0] != '\0' && dc_id != 0) {
+		uc->batch_downstream = dc_id;
+		uc->batch_ref = xstrdup(parent_ref);
+	}
 	if (upstream_handle_registration(uc, msg)) {
 		goto out;
 	}
@@ -595,7 +631,10 @@ void upstream_receive_take(struct upstream *uc, struct irc_msg *msg) {
 	}
 	upstream_route_reply(uc, msg, &dc_id);
 	upstream_emit_take(uc, msg, dc_id);
-	return;
+	msg = nullptr;
 out:
+	uc->batch_downstream = 0;
+	xfree(uc->batch_ref);
+	uc->batch_ref = nullptr;
 	irc_msg_free(msg);
 }

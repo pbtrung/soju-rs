@@ -166,6 +166,78 @@ bool user_store_network(struct user *u, struct db_network *record, bool check_li
 	return true;
 }
 
+bool user_save_network(struct user *u, struct user_network *net, const struct db_network *record,
+		       struct err **err) {
+	struct network_job j = {.user_id = u->record.id};
+	db_network_copy(&j.record, record);
+	db_thread_call(u->srv->db, network_job, &j);
+	if (j.err != nullptr) {
+		db_network_free(&j.record);
+		*err = j.err;
+		return false;
+	}
+	db_network_free(&net->record);
+	net->record = j.record;
+	if (net->upstream != nullptr) {
+		db_network_free(&net->upstream->network);
+		db_network_copy(&net->upstream->network, &net->record);
+	}
+	return true;
+}
+
+struct user_job {
+	struct db_user record;
+	struct err *err;
+};
+static void user_job(struct db *db, void *data) {
+	struct user_job *j = data;
+	bool ok = db_store_user_keep_password(db, &j->record, &j->err);
+	(void)ok;
+}
+bool user_save_record(struct user *u, const struct db_user *record, struct err **err) {
+	struct user_job j = {0};
+	db_user_copy(&j.record, record);
+	db_thread_call(u->srv->db, user_job, &j);
+	if (j.err != nullptr) {
+		db_user_free(&j.record);
+		*err = j.err;
+		return false;
+	}
+	bool nick_changed = !cstr_eq(u->record.nick, j.record.nick);
+	bool realname_changed = !cstr_eq(u->record.realname, j.record.realname);
+	db_user_free(&u->record);
+	u->record = j.record;
+	// soju-rs update_user: the networks using the user's nick and realname
+	// get the new ones
+	for (size_t i = 0; i < u->networks.len; i++) {
+		struct user_network *net = u->networks.data[i];
+		struct upstream *uc = net->upstream;
+		if (uc != nullptr) {
+			db_user_free(&uc->user);
+			db_user_copy(&uc->user, &u->record);
+		}
+		if (uc != nullptr && nick_changed && net->record.nick[0] == '\0') {
+			upstream_send_take(uc,
+					   IRC_MSG("NICK", db_get_nick(&u->record, &net->record)));
+		}
+		if (!realname_changed || net->record.realname[0] != '\0') {
+			continue;
+		}
+		if (uc != nullptr && cap_registry_is_enabled(&uc->caps, "setname")) {
+			upstream_send_take(
+				uc, IRC_MSG("SETNAME", db_get_realname(&u->record, &net->record)));
+		} else if (uc != nullptr) {
+			// Reconnects with the new realname
+			upstream_free(uc);
+			net->upstream = nullptr;
+			net->joined_generation = 0;
+			user_notify_network(u, net);
+			user_network_start(u, net);
+		}
+	}
+	return true;
+}
+
 static void network_attrs(struct user *u, struct user_network *net, struct irc_tags *attrs) {
 	fill_network_addr_attrs(attrs, &net->record);
 	irc_tags_set(attrs, "name", net->record.name);
@@ -307,6 +379,33 @@ bool user_store_channel(struct user *u, struct user_network *net, struct db_chan
 	return true;
 }
 
+struct delete_channel_job {
+	int64_t id;
+	struct err *err;
+};
+static void delete_channel_job(struct db *db, void *data) {
+	struct delete_channel_job *j = data;
+	bool ok = db_delete_channel(db, j->id, &j->err);
+	(void)ok;
+}
+bool user_delete_channel(struct user *u, struct user_network *net, const char *channel,
+			 struct err **err) {
+	struct db_channel *saved = cmmap_get(&net->channels, channel);
+	if (saved == nullptr) {
+		return true;
+	}
+	struct delete_channel_job j = {.id = saved->id};
+	db_thread_call(u->srv->db, delete_channel_job, &j);
+	if (j.err != nullptr) {
+		*err = j.err;
+		return false;
+	}
+	cmmap_del(&net->channels, channel);
+	return true;
+}
+
+// soju-rs User::detach_channel: the backlog of the channel starts after
+// the last message, for its reattachment
 void user_detach_channel(struct user *u, struct user_network *net, const char *channel) {
 	AUTOFREE char *channel_copy = xstrdup(channel);
 	channel = channel_copy;
@@ -317,21 +416,36 @@ void user_detach_channel(struct user *u, struct user_network *net, const char *c
 	struct db_channel record;
 	copy_channel(&record, saved);
 	record.detached = true;
+	struct upstream *uc = net->upstream;
+	AUTOFREE char *target =
+		casemap_cstr(uc != nullptr ? uc->casemap : CASEMAPPING_RFC1459, record.name);
+	char *last = nullptr;
+	struct err *err = nullptr;
+	if (u->store.db != nullptr &&
+	    msgstore_last_id(&u->store, net->record.id, target, &last, &err)) {
+		xfree(record.detached_internal_msg_id);
+		record.detached_internal_msg_id = last;
+	} else if (err != nullptr) {
+		AUTOFREE char *q = utf8_debug_cstr(str_from(record.name));
+		log_info(&u->srv->log, "failed to get last message ID for channel %s: %s", q,
+			 err_msg(err));
+		err_free(err);
+	}
 	bool ok = user_store_channel(u, net, &record, nullptr);
 	db_channel_free(&record);
 	if (!ok) {
 		return;
 	}
-	struct upstream *uc = net->upstream;
+	if (uc != nullptr) {
+		upstream_set_auto_detach(uc, channel, 0);
+	}
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
 		if (dc->network_id != net->record.id) {
 			continue;
 		}
 		struct irc_msg *part = IRC_MSG("PART", channel, "Detach");
-		irc_msg_set_prefix(part, uc != nullptr ? uc->nick : dc->nick,
-				   uc != nullptr ? uc->username : dc->username,
-				   uc != nullptr ? uc->hostname : dc->hostname);
+		irc_msg_set_prefix(part, DOWNSTREAM_SELF_PREFIX, "", "");
 		user_send_take(u, dc, part);
 	}
 }
@@ -355,13 +469,15 @@ void user_attach_channel(struct user *u, struct user_network *net, const char *c
 	if (ch == nullptr) {
 		return;
 	}
+	saved = cmmap_get(&net->channels, channel);
+	upstream_set_auto_detach(net->upstream, channel, saved->detach_after_ns / 1000000);
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
 		if (dc->network_id != net->record.id) {
 			continue;
 		}
 		struct user_packet *p = user_packet_new(dc, nullptr);
-		user_channel_replay(u, net, dc, p, ch);
+		user_channel_replay(u, net, dc, p, ch, false);
 		user_packet_send_take(p);
 	}
 }

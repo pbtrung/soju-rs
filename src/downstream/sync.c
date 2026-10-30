@@ -129,10 +129,34 @@ static void update_isupport(struct downstream *dc, const struct downstream_sync 
 	dc->isupport = is;
 }
 
+static void sync_account(struct downstream *dc, const struct downstream_sync *s) {
+	if (!cstr_eq(dc->account, s->account) && cap_registry_is_enabled(&dc->caps, "sasl")) {
+		AUTO_STRBUF struct strbuf prefix = STRBUF_INIT;
+		struct irc_prefix p = {
+			.name = dc->nick, .user = dc->username, .host = dc->hostname};
+		irc_prefix_format(&p, &prefix);
+		if (s->account[0] != '\0') {
+			AUTOFREE char *text = xasprintf("You are logged in as %s", s->account);
+			send_server(dc, IRC_MSG(RPL_LOGGEDIN, dc->nick, strbuf_cstr(&prefix),
+						s->account, text));
+		} else {
+			send_server(dc, IRC_MSG(RPL_LOGGEDOUT, dc->nick, strbuf_cstr(&prefix),
+						"You are logged out"));
+		}
+		replace(&dc->account, s->account);
+	}
+}
+
 void downstream_sync(struct downstream *dc, const struct downstream_sync *s) {
 	if (!cstr_eq(dc->nick, s->nick)) {
 		send_self(dc, IRC_MSG("NICK", s->nick));
 		replace(&dc->nick, s->nick);
+	}
+	if (s->nick_only) {
+		return;
+	}
+	if (s->account_first) {
+		sync_account(dc, s);
 	}
 	if (s->hostname[0] != '\0' &&
 	    (!cstr_eq(dc->hostname, s->hostname) || !cstr_eq(dc->username, s->username))) {
@@ -149,24 +173,14 @@ void downstream_sync(struct downstream *dc, const struct downstream_sync *s) {
 		send_self(dc, IRC_MSG("SETNAME", s->realname));
 		replace(&dc->realname, s->realname);
 	}
-	if (!cstr_eq(dc->account, s->account) && cap_registry_is_enabled(&dc->caps, "sasl")) {
-		AUTO_STRBUF struct strbuf prefix = STRBUF_INIT;
-		struct irc_prefix p = {
-			.name = dc->nick, .user = dc->username, .host = dc->hostname};
-		irc_prefix_format(&p, &prefix);
-		if (s->account[0] != '\0') {
-			AUTOFREE char *text = xasprintf("You are logged in as %s", s->account);
-			send_server(dc, IRC_MSG(RPL_LOGGEDIN, dc->nick, strbuf_cstr(&prefix),
-						s->account, text));
-		} else {
-			send_server(dc, IRC_MSG(RPL_LOGGEDOUT, dc->nick, strbuf_cstr(&prefix),
-						"You are logged out"));
-		}
-		replace(&dc->account, s->account);
+	if (!s->account_first) {
+		sync_account(dc, s);
 	}
 	downstream_update_casemapping(dc, s->casemap);
 	downstream_update_caps(dc, s);
-	update_isupport(dc, s);
+	if (!s->keep_isupport) {
+		update_isupport(dc, s);
+	}
 }
 
 void downstream_welcome(struct downstream *dc, const struct downstream_sync *s) {

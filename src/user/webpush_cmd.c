@@ -7,6 +7,12 @@
 #include "net/url.h"
 #include "webpush/webpush.h"
 
+// Like soju-rs, the replies have no source
+static struct irc_msg *unprefixed(struct irc_msg *msg) {
+	irc_msg_set_prefix(msg, "*", "", "");
+	return msg;
+}
+
 // Maximum number of Web Push subscriptions per user and network
 static constexpr size_t MAX_SUBSCRIPTIONS = 25;
 // Maximum number of test notifications being sent at once per user
@@ -150,7 +156,7 @@ static void tested(struct user *u, struct user_client *dc, struct webpush_check 
 		}
 		user_reset_web_push_networks(u);
 	}
-	user_packet_add_take(p, IRC_MSG("WEBPUSH", "REGISTER", endpoint));
+	user_packet_add_take(p, unprefixed(IRC_MSG("WEBPUSH", "REGISTER", endpoint)));
 }
 
 static void test_sent(void *data, enum webpush_result result, const char *err) {
@@ -293,7 +299,7 @@ static bool reg(struct user *u, struct user_client *dc, const struct irc_msg *ms
 	if (update) {
 		later = start_check(u, dc, msg, &sub, p);
 	} else {
-		user_packet_add_take(p, IRC_MSG("WEBPUSH", "REGISTER", endpoint));
+		user_packet_add_take(p, unprefixed(IRC_MSG("WEBPUSH", "REGISTER", endpoint)));
 	}
 out:
 	db_webpush_sub_vec_free(&subs);
@@ -326,7 +332,7 @@ static void unreg(struct user *u, struct user_client *dc, const struct irc_msg *
 		}
 	}
 	db_webpush_sub_vec_free(&subs);
-	user_packet_add_take(p, IRC_MSG("WEBPUSH", "UNREGISTER", endpoint));
+	user_packet_add_take(p, unprefixed(IRC_MSG("WEBPUSH", "UNREGISTER", endpoint)));
 }
 
 bool user_webpush_command(struct user *u, struct user_client *dc, const struct irc_msg *msg,
@@ -336,8 +342,7 @@ bool user_webpush_command(struct user *u, struct user_client *dc, const struct i
 		return false;
 	}
 	if (msg->params.len < 1) {
-		user_packet_add_take(
-			p, IRC_MSG("461", "*", msg->command, "Not enough parameters"));
+		user_packet_add_take(p, IRC_MSG("461", "*", msg->command, "Not enough parameters"));
 		return false;
 	}
 	const char *sub = irc_msg_param(msg, 0);

@@ -261,7 +261,13 @@ bool upstream_handle_registration(struct upstream *uc, struct irc_msg *msg) {
 			return true;
 		}
 		AUTO_STRBUF struct strbuf response = STRBUF_INIT;
-		if (cstr_eq(uc->network.sasl.mechanism, "PLAIN")) {
+		if (uc->sasl_username != nullptr) {
+			// Post-registration, with a downstream's credentials
+			strbuf_append_char(&response, '\0');
+			strbuf_append_cstr(&response, uc->sasl_username);
+			strbuf_append_char(&response, '\0');
+			strbuf_append_cstr(&response, uc->sasl_password);
+		} else if (cstr_eq(uc->network.sasl.mechanism, "PLAIN")) {
 			strbuf_append_char(&response, '\0');
 			strbuf_append_cstr(&response, uc->network.sasl.plain_username);
 			strbuf_append_char(&response, '\0');
@@ -347,8 +353,12 @@ bool upstream_handle_registration(struct upstream *uc, struct irc_msg *msg) {
 		uc->got_motd = true;
 		uc->regain_at = uc->now + 30000;
 	} else if (cstr_eq(cmd, "002") || cstr_eq(cmd, "003") || cstr_eq(cmd, "004") ||
-		   (cstr_eq(cmd, "375") && !uc->got_motd) ||
-		   (cstr_eq(cmd, "372") && !uc->got_motd)) {
+		   (!uc->got_motd &&
+		    (cstr_eq(cmd, "375") || cstr_eq(cmd, "372") || cstr_eq(cmd, "251") ||
+		     cstr_eq(cmd, "252") || cstr_eq(cmd, "253") || cstr_eq(cmd, "254") ||
+		     cstr_eq(cmd, "255") || cstr_eq(cmd, "265") || cstr_eq(cmd, "266") ||
+		     cstr_eq(cmd, "250") || cstr_eq(cmd, "243") || cstr_eq(cmd, "246") ||
+		     cstr_eq(cmd, "247")))) {
 		// Our welcome replaces upstream's initial registration burst.
 	} else {
 		return false;

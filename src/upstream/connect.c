@@ -15,6 +15,7 @@ struct dial {
 	uv_stream_t *stream;
 	struct addrinfo *addresses, *next;
 	char *host, *port;
+	char address[64]; // the address being tried, for errors
 	bool tls;
 };
 
@@ -93,6 +94,7 @@ void upstream_adopt(struct upstream *uc, struct conn *c) {
 	uc->generation++;
 	upstream_clear_session(uc);
 	uc->conn = c;
+	upstream_count(uc, true);
 	conn_set_callbacks(c, &callbacks, (void *)(uintptr_t)uc->id);
 	upstream_register(uc);
 }
@@ -128,7 +130,8 @@ static void connected(uv_connect_t *req, int status) {
 			return;
 		}
 		AUTOFREE char *errno_text = go_errno_message(status);
-		AUTOFREE char *reason = xasprintf("failed to connect: %s", errno_text);
+		AUTOFREE char *reason = xasprintf("failed to connect: dial tcp %s: connect: %s",
+						  d->address, errno_text);
 		upstream_disconnect(uc, reason, true);
 		dial_free(d);
 		return;
@@ -189,6 +192,16 @@ static void try_address(struct dial *d) {
 	}
 	struct addrinfo *addr = d->next;
 	d->next = addr->ai_next;
+	char ip[INET6_ADDRSTRLEN] = "";
+	if (addr->ai_family == AF_INET6) {
+		const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)addr->ai_addr;
+		uv_ip6_name(in6, ip, sizeof(ip));
+		snprintf(d->address, sizeof(d->address), "[%s]:%u", ip, ntohs(in6->sin6_port));
+	} else {
+		const struct sockaddr_in *in = (const struct sockaddr_in *)addr->ai_addr;
+		uv_ip4_name(in, ip, sizeof(ip));
+		snprintf(d->address, sizeof(d->address), "%s:%u", ip, ntohs(in->sin_port));
+	}
 	uv_tcp_t *tcp = xcalloc(1, sizeof(*tcp));
 	uv_tcp_init(&uc->loop->uv, tcp);
 	d->stream = (uv_stream_t *)tcp;
@@ -225,6 +238,8 @@ void upstream_connect(struct upstream *uc) {
 	uc->generation++;
 	uc->now = uv_now(&uc->loop->uv);
 	uc->state = UPSTREAM_CONNECTING;
+	uc->last_try = uc->now;
+	upstream_count(uc, true);
 	uc->deadline = uc->now + UPSTREAM_CONNECT_TIMEOUT_MS;
 	struct url url = {0};
 	struct err *err = nullptr;

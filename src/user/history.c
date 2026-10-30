@@ -23,8 +23,8 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 	bool targets = cstr_eq(sub, "TARGETS"), between = cstr_eq(sub, "BETWEEN"),
 	     around = cstr_eq(sub, "AROUND");
 	if (msg->params.len == 0) {
-		user_packet_add_take(
-			p, IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
+		user_packet_add_take(p,
+				     IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
 		return;
 	}
 	if (!targets && !between && !around && !cstr_eq(sub, "BEFORE") && !cstr_eq(sub, "AFTER") &&
@@ -33,8 +33,8 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 		return;
 	}
 	if (msg->params.len < (between ? 5U : 4U)) {
-		user_packet_add_take(
-			p, IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
+		user_packet_add_take(p,
+				     IRC_MSG("461", "*", "CHATHISTORY", "Not enough parameters"));
 		return;
 	}
 	struct user_network *net = user_get_network(u, dc->network_id);
@@ -130,7 +130,9 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 		db_target_last_vec_free(&list);
 	} else {
 		p->batch_type = xstrdup("chathistory");
-		strvec_push(&p->batch_params, target);
+		// Like soju-rs, the casemapped name, except for the service's
+		strvec_push(&p->batch_params,
+			    cstr_eq(canonical, SERVICE_NICK_CM) ? target : canonical);
 		if (around) {
 			o.limit = count - count / 2;
 		}
@@ -184,8 +186,7 @@ void user_search(struct user *u, struct user_client *dc, const struct irc_msg *m
 		return;
 	}
 	if (msg->params.len < 1) {
-		user_packet_add_take(p,
-				     IRC_MSG("461", "*", "SEARCH", "Not enough parameters"));
+		user_packet_add_take(p, IRC_MSG("461", "*", "SEARCH", "Not enough parameters"));
 		return;
 	}
 	static constexpr size_t SEARCH_MAX_LIMIT = 100;
@@ -283,11 +284,28 @@ static void read_job(struct db *db, void *data) {
 void user_read_marker(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		      struct user_packet *p) {
 	const char *target = irc_msg_param(msg, 0), *criteria = irc_msg_param(msg, 1);
+	if (msg->params.len == 0) {
+		user_packet_add_take(
+			p, IRC_MSG("FAIL", msg->command, "NEED_MORE_PARAMS", "Missing parameters"));
+		return;
+	}
 	if (target[0] == '\0' || target[0] == ':' || strchr(target, ' ') != nullptr) {
 		fail(p, msg->command, "INVALID_TARGET", "*", nullptr, "Invalid target");
 		return;
 	}
 	struct user_network *net = user_get_network(u, dc->network_id);
+	AUTOFREE char *service =
+		casemap_cstr(net != nullptr && net->upstream != nullptr ? net->upstream->casemap
+			     : net != nullptr                           ? CASEMAPPING_RFC1459
+									: CASEMAPPING_ASCII,
+			     target);
+	if (cstr_eq(service, SERVICE_NICK_CM)) {
+		// No read receipts for our service
+		struct irc_msg *reply = IRC_MSG(msg->command, target, "*");
+		irc_msg_set_prefix(reply, DOWNSTREAM_SELF_PREFIX, "", "");
+		user_packet_add_take(p, reply);
+		return;
+	}
 	if (net == nullptr) {
 		fail(p, msg->command, "INTERNAL_ERROR", target, nullptr,
 		     "Cannot set read markers on bouncer connection");
@@ -306,6 +324,11 @@ void user_read_marker(struct user *u, struct user_client *dc, const struct irc_m
 	bool broadcast = false;
 	if (j.err == nullptr && criteria[0] != '\0') {
 		struct timestamp time;
+		if (strncmp(criteria, "timestamp=", 10) != 0) {
+			fail(p, msg->command, "INVALID_PARAMS", criteria, nullptr,
+			     "Unknown criteria");
+			goto out;
+		}
 		if (!parse_chathistory_bound(str_from(criteria), &time)) {
 			fail(p, msg->command, "INVALID_PARAMS", criteria, nullptr,
 			     "Invalid criteria");

@@ -17,6 +17,9 @@ struct service_context {
 	struct strbuf peer_cert;
 	bool has_remote_ip;
 	struct ipaddr remote_ip;
+	// The reply of the command, while it runs on its user's loop: the
+	// output printed before it returns goes there, like soju-rs prints
+	struct user_packet *packet;
 	service_print_fn print;
 	service_done_fn done;
 	void *data;

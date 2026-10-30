@@ -590,6 +590,12 @@ def bouncerserv(env):
     ]
     for cmd in cmds:
         c.send(f"PRIVMSG BouncerServ :{cmd}")
+        if cmd.startswith(("user create", "certfp generate")):
+            # Hashing passwords and generating keys happen in the
+            # background: wait for the result, so later commands don't race
+            c.wait(lambda m, l: m["command"] == "PRIVMSG" and m["prefix"].startswith("BouncerServ")
+                   and any(s in m["params"][-1] for s in ("created user", "certificate generated", "error:")),
+                   timeout=30)
         c.roundtrip()
     tok = None
     for l in c.lines:
@@ -598,6 +604,9 @@ def bouncerserv(env):
             tok = m["params"][-1].split('"')[1].split()[-1]
     if tok:
         c.send(f"PRIVMSG BouncerServ :user delete carl {tok}")
+        # Deleting happens in the background too
+        c.wait(lambda m, l: m["command"] == "PRIVMSG" and m["prefix"].startswith("BouncerServ")
+               and ("deleted user" in m["params"][-1] or "error:" in m["params"][-1]), timeout=30)
         c.roundtrip()
     c.send("PRIVMSG BouncerServ :user status")
     c.roundtrip()

@@ -35,7 +35,9 @@ static void store_user(struct db *db, void *data) {
 		}
 		if (found) {
 			db_user_free(&existing);
-			ok = err_set(&j->err, 0, "user already exists");
+			AUTOFREE char *q = utf8_debug_cstr(str_from(j->record.username));
+			ok = err_set(&j->err, 0, "could not create user: user %s already exists",
+				     q);
 			(void)ok;
 			return;
 		}

@@ -166,7 +166,11 @@ static void post_callback(struct service_context *c, const char *text, bool done
 	loop_post(c->origin, callback_run, callback_drop, o);
 }
 void service_print(struct service_context *c, const char *text) {
-	if (c->print != nullptr) {
+	if (loop_current() == c->origin && c->packet != nullptr) {
+		struct irc_msg *msg = IRC_MSG("PRIVMSG", c->nick, text);
+		irc_msg_set_prefix(msg, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
+		user_packet_add_take(c->packet, msg);
+	} else if (c->print != nullptr) {
 		post_callback(c, text, false);
 	} else {
 		struct output *o = xmalloc(sizeof(*o));
@@ -293,8 +297,10 @@ static void run_text(struct user *u, struct service_context *c, const char *text
 	}
 	strvec_free(&words);
 }
-void service_privmsg(struct user *u, const struct user_client *dc, const char *text) {
+void service_privmsg(struct user *u, const struct user_client *dc, const char *text,
+		     struct user_packet *p) {
 	struct service_context *c = context_new(u->srv, u->record.admin && !dc->impersonating);
+	c->packet = p;
 	c->user_id = u->record.id;
 	c->reply_user = u->record.id;
 	c->dc_id = dc->id;
@@ -303,7 +309,11 @@ void service_privmsg(struct user *u, const struct user_client *dc, const char *t
 	strbuf_append_str(&c->peer_cert, strbuf_str(&dc->peer_cert));
 	c->has_remote_ip = dc->has_remote_ip;
 	c->remote_ip = dc->remote_ip;
+	service_defer(c);
 	run_text(u, c, text);
+	// Later output is sent on its own
+	c->packet = nullptr;
+	context_unref(c);
 }
 void service_global(struct server *srv, bool admin, const char *text, service_print_fn print,
 		    service_done_fn done, void *data) {
@@ -358,7 +368,7 @@ struct user_network *service_network(struct user *u, struct service_context *c, 
 	if (net == nullptr) {
 		bool ok = name != nullptr && name[0] ? SFAIL(c, "unknown network \"%s\"", name)
 						     : SFAIL(c, "no network selected, a name "
-								"argument or -network is required");
+								"argument is required");
 		(void)ok;
 	}
 	return net;

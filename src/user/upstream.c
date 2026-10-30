@@ -26,8 +26,9 @@ static char *append(struct user *u, struct user_network *net, const char *target
 	    !irc_tags_contains(&msg->tags, "+draft/unreact")) {
 		return xstrdup("");
 	}
-	// Give every known client a baseline for a newly encountered target.
-	if (!cmmap_has(&net->delivered.targets, target)) {
+	// The first message of a target: the clients with delivery receipts get
+	// a baseline, to receive it in their backlog (soju-rs append_log)
+	if (cmmap_len(&net->delivered.targets) > 0 && !cmmap_has(&net->delivered.targets, target)) {
 		struct strmap clients;
 		strmap_init(&clients, nullptr);
 		void *v;
@@ -35,11 +36,6 @@ static char *append(struct user *u, struct user_network *net, const char *target
 		for (size_t it = 0; cmmap_next(&net->delivered.targets, &it, nullptr, &v);) {
 			for (size_t jt = 0; strmap_next(v, &jt, &name, nullptr);) {
 				strmap_set(&clients, name, nullptr);
-			}
-		}
-		for (size_t i = 0; i < u->clients.len; i++) {
-			if (u->clients.data[i]->network_id == net->record.id) {
-				strmap_set(&clients, u->clients.data[i]->client, nullptr);
 			}
 		}
 		char *last = nullptr;
@@ -82,13 +78,10 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 	AUTOFREE char *id = append(u, net, target, msg);
 	struct db_channel *ch = cmmap_get(&net->channels, target);
 	bool detached = ch != nullptr && ch->detached;
-	bool blocked = cmmap_has(&net->blocked_targets, irc_msg_prefix_name(msg));
-	if (detached && user_network_highlight(u, net, msg) &&
-	    (ch->reattach_on == FILTER_DEFAULT || ch->reattach_on == FILTER_HIGHLIGHT ||
-	     ch->reattach_on == FILTER_MESSAGE)) {
-		user_attach_channel(u, net, target);
-		detached = false;
-	}
+	// Channel events (JOIN, PART...) are never blocked
+	bool event = !cstr_eq(msg->command, "PRIVMSG") && !cstr_eq(msg->command, "NOTICE") &&
+		     !cstr_eq(msg->command, "TAGMSG") && !cstr_eq(msg->command, "REDACT");
+	bool blocked = !event && cmmap_has(&net->blocked_targets, irc_msg_prefix_name(msg));
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
 		if (dc->network_id != net->record.id ||
@@ -103,16 +96,6 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 				irc_tags_remove(&copy->tags, "label");
 			}
 			user_packet_add_take(p, copy);
-		} else if (detached && (ch->relay_detached == FILTER_MESSAGE ||
-					(ch->relay_detached != FILTER_NONE &&
-					 user_network_highlight(u, net, msg)))) {
-			AUTOFREE char *text = xasprintf(
-				"%s in %s: <%s> %s",
-				user_network_highlight(u, net, msg) ? "highlight" : "message",
-				target, irc_msg_prefix_name(msg), irc_msg_param(msg, 1));
-			struct irc_msg *notice = IRC_MSG("NOTICE", dc->nick, text);
-			irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK, SERVICE_NICK);
-			user_packet_add_take(p, notice);
 		}
 		if (id[0] != '\0' && !cap_registry_is_enabled(&dc->caps, "draft/chathistory") &&
 		    (cstr_eq(msg->command, "PRIVMSG") || cstr_eq(msg->command, "NOTICE"))) {
@@ -120,6 +103,42 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 			user_packet_add_take(p, IRC_MSG("PING", ping));
 		}
 		user_packet_send_take(p);
+	}
+}
+
+// soju-rs handle_detached_message: a message of a detached channel may be
+// relayed as a notice, and reattach it
+static void handle_detached_message(struct user *u, struct user_network *net,
+				    const struct irc_msg *msg, const char *buffer, bool from_us) {
+	struct db_channel *ch = buffer[0] != '\0' ? cmmap_get(&net->channels, buffer) : nullptr;
+	if (ch == nullptr || !ch->detached || from_us ||
+	    (!cstr_eq(msg->command, "PRIVMSG") && !cstr_eq(msg->command, "NOTICE"))) {
+		return;
+	}
+	bool highlight = user_network_highlight(u, net, msg);
+	bool relay =
+		ch->relay_detached == FILTER_MESSAGE ||
+		((ch->relay_detached == FILTER_HIGHLIGHT || ch->relay_detached == FILTER_DEFAULT) &&
+		 highlight);
+	bool reattach = ch->reattach_on == FILTER_MESSAGE ||
+			(ch->reattach_on == FILTER_HIGHLIGHT && highlight);
+	if (relay) {
+		AUTOFREE char *text = xasprintf(
+			"%s in %s: <%s> %s", highlight ? "highlight" : "message",
+			irc_msg_param(msg, 0), irc_msg_prefix_name(msg), irc_msg_param(msg, 1));
+		for (size_t i = 0; i < u->clients.len; i++) {
+			struct user_client *dc = u->clients.data[i];
+			if (dc->network_id == net->record.id) {
+				struct irc_msg *notice = IRC_MSG("NOTICE", dc->nick, text);
+				irc_msg_set_prefix(notice, SERVICE_NICK, SERVICE_NICK,
+						   SERVICE_NICK);
+				user_send_take(u, dc, notice);
+			}
+		}
+	}
+	if (reattach) {
+		AUTOFREE char *name = xstrdup(buffer);
+		user_attach_channel(u, net, name);
 	}
 }
 
@@ -189,10 +208,29 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 			buffer = channel->name;
 			direct = false;
 		}
+		handle_detached_message(u, net, msg, buffer, from_us);
 		user_produce(u, net, msg, buffer, from_us ? dc_id : 0, dc_id);
 		user_web_push_message(u, net, msg, buffer, direct, from_us);
 		record_mention(u, net, msg, buffer, direct, from_us);
 		goto out;
+	}
+	if (cstr_eq(cmd, "REGISTER") && uc->register_password != nullptr && msg->params.len >= 2) {
+		user_auto_save_sasl_plain(u, net, irc_msg_param(msg, 1), uc->register_password);
+		xfree(uc->register_password);
+		uc->register_password = nullptr;
+	}
+	if ((cstr_eq(cmd, "902") || cstr_eq(cmd, "903") || cstr_eq(cmd, "904") ||
+	     cstr_eq(cmd, "905") || cstr_eq(cmd, "906") || cstr_eq(cmd, "907")) &&
+	    uc->sasl_username != nullptr) {
+		if (cstr_eq(cmd, "903")) {
+			user_auto_save_sasl_plain(u, net, uc->sasl_username, uc->sasl_password);
+		}
+		xfree(uc->sasl_username);
+		if (uc->sasl_password != nullptr) {
+			explicit_bzero(uc->sasl_password, strlen(uc->sasl_password));
+		}
+		xfree(uc->sasl_password);
+		uc->sasl_username = uc->sasl_password = nullptr;
 	}
 	if (cstr_eq(cmd, "730") || cstr_eq(cmd, "731")) {
 		struct str rest = str_from(irc_msg_param(msg, 1)), part;
@@ -228,16 +266,35 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 			upstream_set_auto_detach(uc, channel, saved->detach_after_ns / 1000000);
 		}
 	}
-	if ((cstr_eq(cmd, "NICK") && same(uc->casemap, irc_msg_param(msg, 0), uc->nick)) ||
+	// soju-rs stores channel events with the channel's messages, and the
+	// QUIT or NICK of a member with each of its channels
+	if (cstr_eq(cmd, "JOIN") || cstr_eq(cmd, "PART") || cstr_eq(cmd, "KICK") ||
+	    cstr_eq(cmd, "TOPIC")) {
+		if (cmmap_has(&uc->channels, irc_msg_param(msg, 0)) || !cstr_eq(cmd, "TOPIC")) {
+			user_produce(u, net, msg, irc_msg_param(msg, 0), 0, dc_id);
+			goto out;
+		}
+	} else if (cstr_eq(cmd, "MODE") && upstream_is_channel(uc, irc_msg_param(msg, 0)) &&
+		   cmmap_has(&uc->channels, irc_msg_param(msg, 0))) {
+		AUTOFREE char *id = append(u, net, irc_msg_param(msg, 0), msg);
+	} else if (cstr_eq(cmd, "QUIT") || cstr_eq(cmd, "NICK")) {
+		for (size_t i = 0; i < uc->event_channels.len; i++) {
+			AUTOFREE char *id = append(u, net, uc->event_channels.data[i], msg);
+		}
+		strvec_free(&uc->event_channels);
+	}
+	if (((cstr_eq(cmd, "NICK") || cstr_eq(cmd, "QUIT")) &&
+	     same(uc->casemap, source, uc->nick)) ||
+	    (cstr_eq(cmd, "NICK") && same(uc->casemap, irc_msg_param(msg, 0), uc->nick)) ||
 	    ((cstr_eq(cmd, "CHGHOST") || cstr_eq(cmd, "SETNAME")) &&
 	     same(uc->casemap, source, uc->nick))) {
 		goto out;
 	}
 	const char *channel = nullptr;
-	if (cstr_eq(cmd, "JOIN") || cstr_eq(cmd, "PART") || cstr_eq(cmd, "TOPIC") ||
-	    cstr_eq(cmd, "MODE") || cstr_eq(cmd, "KICK")) {
+	if (cstr_eq(cmd, "TOPIC") || cstr_eq(cmd, "MODE")) {
 		channel = irc_msg_param(msg, 0);
-	} else if (cstr_eq(cmd, "332") || cstr_eq(cmd, "333") || cstr_eq(cmd, "366")) {
+	} else if (cstr_eq(cmd, "332") || cstr_eq(cmd, "333") || cstr_eq(cmd, "366") ||
+		   cstr_eq(cmd, "324") || cstr_eq(cmd, "329")) {
 		channel = irc_msg_param(msg, 1);
 	} else if (cstr_eq(cmd, "353")) {
 		channel = irc_msg_param(msg, 2);
@@ -248,12 +305,26 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 			goto out;
 		}
 	}
+	// Replies go to the client which sent the command, other messages to
+	// all, with the label only for that client (soju-rs forward_msg_by_id
+	// and forward_message)
+	bool reply = is_numeric(cmd) || cstr_eq(cmd, "FAIL") || cstr_eq(cmd, "WARN") ||
+		     cstr_eq(cmd, "NOTE") || cstr_eq(cmd, "BATCH") || cstr_eq(cmd, "ACK") ||
+		     cstr_eq(cmd, "REGISTER") || cstr_eq(cmd, "VERIFY");
 	for (size_t i = 0; i < u->clients.len; i++) {
 		struct user_client *dc = u->clients.data[i];
-		if (dc->network_id == net->record.id && (dc_id == 0 || dc_id == dc->id) &&
+		if (dc->network_id == net->record.id && (dc_id == 0 || dc_id == dc->id || !reply) &&
+		    (!cstr_eq(cmd, "INVITE") ||
+		     same(uc->casemap, irc_msg_param(msg, 0), uc->nick) ||
+		     cap_registry_is_enabled(&dc->caps, "invite-notify")) &&
 		    (!cstr_eq(cmd, "INVITE") || !cmmap_has(&net->blocked_targets, source) ||
 		     strmap_has(&dc->metadata_subs, "soju.im/blocked"))) {
-			user_send_take(u, dc, irc_msg_clone(msg));
+			struct irc_msg *copy = irc_msg_clone(msg);
+			if (dc_id != 0 && dc->id != dc_id) {
+				irc_tags_remove(&copy->tags, "label");
+				irc_tags_remove(&copy->tags, "batch");
+			}
+			user_send_take(u, dc, copy);
 		}
 	}
 out:
@@ -300,6 +371,9 @@ void user_upstream_state(struct upstream *uc, void *data) {
 		}
 		struct user_packet *p = user_packet_new(dc, nullptr);
 		user_packet_sync(u, net, p, false);
+		if (dc->id == uc->batch_downstream && uc->batch_ref != nullptr) {
+			p->batch_tag = xstrdup(uc->batch_ref);
+		}
 		user_packet_send_take(p);
 	}
 	user_update_away_monitor(u, net);

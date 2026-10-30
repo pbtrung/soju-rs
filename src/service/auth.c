@@ -32,13 +32,24 @@ static bool store_sasl(struct user *u, struct user_network *net, struct db_netwo
 	}
 	return true;
 }
+// soju-rs get_network_from_flag: the -network flag, or the current network
+static struct user_network *flag_network(struct user *u, struct service_context *c,
+					 const struct flags_parsed *p) {
+	const char *name = flags_get(p, "network");
+	if ((name == nullptr || name[0] == '\0') && user_get_network(u, c->network_id) == nullptr) {
+		bool ok = SFAIL(c, "no network selected, -network is required");
+		(void)ok;
+		return nullptr;
+	}
+	return service_network(u, c, name);
+}
 static struct user_network *parse_network(struct user *u, struct service_context *c,
 					  struct flags_parsed *p, const char *spec,
 					  const char *const *args, size_t n, bool no_args) {
 	if (!service_parse(c, p, spec, args, n) || (no_args && !service_no_args(c, p))) {
 		return nullptr;
 	}
-	return service_network(u, c, flags_get(p, "network"));
+	return flag_network(u, c, p);
 }
 static void fingerprints(struct service_context *c, struct str cert) {
 	const char *const hashes[] = {"SHA1", "SHA256", "SHA512"};
@@ -193,10 +204,14 @@ HANDLER(sasl_status) {
 static bool sasl_set(struct user *u, struct service_context *c, const char *const *args, size_t n,
 		     bool reset) {
 	struct flags_parsed p = {0};
-	struct user_network *net = parse_network(u, c, &p, "network:s", args, n, false);
-	bool ok = net != nullptr;
+	struct user_network *net = nullptr;
+	bool ok = service_parse(c, &p, "network:s", args, n);
 	if (ok && p.args.len != (reset ? 0U : 2U)) {
 		ok = SFAIL(c, reset ? "expected no argument" : "expected exactly 2 arguments");
+	}
+	if (ok) {
+		net = flag_network(u, c, &p);
+		ok = net != nullptr;
 	}
 	if (ok) {
 		struct db_network r;

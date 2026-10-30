@@ -130,6 +130,9 @@ struct downstream {
 	struct cmmap monitored;
 	struct strmap metadata_subs;
 	struct label_ctx *label;
+	// Set while sending a packet in an upstream labeled batch: the batch
+	// of the messages without one (soju-rs label context)
+	const char *forced_batch;
 
 	uv_timer_t register_timer;
 	enum casemapping casemap;
@@ -180,6 +183,12 @@ struct downstream_sync {
 	int64_t network_id;
 	const struct cap_registry *up_caps;
 	const struct isupport *up_isupport;
+	// Like soju-rs, the ISUPPORT of a disconnected upstream stays until
+	// the next connection replaces it
+	bool keep_isupport;
+	// account_first: the account before the host, like soju-rs on
+	// RPL_LOGGEDIN. nick_only: only the nick (soju-rs update_nick).
+	bool account_first, nick_only;
 };
 void downstream_update_caps(struct downstream *dc, const struct downstream_sync *s);
 void downstream_sync(struct downstream *dc, const struct downstream_sync *s);

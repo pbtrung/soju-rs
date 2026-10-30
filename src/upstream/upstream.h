@@ -35,7 +35,8 @@ struct upstream_channel {
 	enum channel_status status;
 	struct channel_modes modes;
 	struct cmmap members; // membership_set *
-	bool complete;
+	// has_modes: RPL_CHANNELMODEIS was received
+	bool complete, has_modes;
 	uint64_t detach_after_ms, detach_deadline;
 };
 
@@ -89,7 +90,10 @@ struct upstream {
 	char *channel_types, *status_msg, *server_name;
 	bool registered, attached, got_motd, sasl_active, sasl_started;
 	bool rate_enabled, closing, reconnect, away;
+	// Counted in the upstreams metric: a connection attempt is running
+	bool counted;
 	uint64_t now, deadline, retry_at, regain_at, next_label, next_batch;
+	uint64_t last_try; // the start of the last connection attempt
 	uint64_t generation;
 	struct backoffer reconnect_backoff, regain_backoff;
 	size_t connect_command;
@@ -97,6 +101,17 @@ struct upstream {
 	irc_msg_vec delayed;
 	char *ended_command, *ended_target;
 	uint64_t ended_downstream;
+	// The channels the source of the last QUIT or NICK was in, before it
+	// left them: where the message is stored
+	strvec event_channels;
+	// While handling a message of a labeled batch: its downstream and
+	// batch, which the messages sent to that downstream belong to
+	uint64_t batch_downstream;
+	char *batch_ref;
+	// The password of the pending REGISTER, saved on success
+	char *register_password;
+	// Post-registration SASL PLAIN credentials from a downstream
+	char *sasl_username, *sasl_password;
 };
 
 [[nodiscard]] struct upstream *upstream_new(struct server *srv, const struct db_user *u,

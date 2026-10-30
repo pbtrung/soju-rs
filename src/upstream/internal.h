@@ -11,3 +11,5 @@ void upstream_abort_commands(struct upstream *uc);
 void upstream_clear_session(struct upstream *uc);
 void upstream_channels_init(struct upstream *uc);
 void upstream_abort_take(struct upstream *uc, struct pending_command *p);
+// The upstreams metric counts connection attempts (soju-rs run_conn)
+void upstream_count(struct upstream *uc, bool running);

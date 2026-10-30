@@ -18,7 +18,10 @@ void service_help(bool admin, bool global, strvec *out);
 [[nodiscard]] bool service_parse_duration(const char *s, uint64_t *ns);
 [[nodiscard]] char *service_format_duration(uint64_t ns);
 [[nodiscard]] char *service_redact_command(const char *raw);
-void service_privmsg(struct user *u, const struct user_client *dc, const char *text);
+// The replies sent before returning go in p, the command's reply
+struct user_packet;
+void service_privmsg(struct user *u, const struct user_client *dc, const char *text,
+		     struct user_packet *p);
 // Global/admin socket entry point. Output and done run on the calling loop;
 // data must remain valid through done. Commands can finish asynchronously.
 typedef void (*service_print_fn)(void *data, const char *line);

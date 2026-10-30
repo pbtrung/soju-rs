@@ -12,7 +12,20 @@ static bool update(struct service_context *c, const struct flags_parsed *p, stru
 	if (ignore && !c->admin) {
 		return SFAIL(c, "you must be an admin to use the flag -ignore-limit");
 	}
-	service_replace(&r->addr, flags_get(p, "addr"));
+	const char *addr = flags_get(p, "addr");
+	const char *sep = addr != nullptr ? strstr(addr, "://") : nullptr;
+	if (sep != nullptr) {
+		AUTOFREE char *scheme = xstrndup(addr, (size_t)(sep - addr));
+		if (!cstr_eq(scheme, "ircs") && !cstr_eq(scheme, "irc+insecure") &&
+		    !cstr_eq(scheme, "irc+unix")) {
+			AUTOFREE char *q = utf8_debug_cstr(str_from(scheme));
+			return SFAIL(c,
+				     "unknown scheme %s (supported schemes: ircs, irc+insecure, "
+				     "irc+unix)",
+				     q);
+		}
+	}
+	service_replace(&r->addr, addr);
 	service_replace(&r->name, flags_get(p, "name"));
 	service_replace(&r->nick, flags_get(p, "nick"));
 	service_replace(&r->username, flags_get(p, "username"));
@@ -71,7 +84,8 @@ HANDLER(network_create) {
 	bool ignore = false;
 	(void)flags_get_bool(&p, "ignore-limit", &ignore);
 	if (ok) {
-		ok = update(c, &p, &r) && user_store_network(u, &r, !ignore, &c->err);
+		ok = update(c, &p, &r) && (user_store_network(u, &r, !ignore, &c->err) ||
+					   err_wrap(&c->err, "could not create network"));
 	}
 	if (ok) {
 		service_printf(c, "created network \"%s\"", db_network_get_name(&r));
@@ -99,7 +113,8 @@ HANDLER(network_update) {
 	(void)flags_get_bool(&p, "ignore-limit", &ignore);
 	if (ok) {
 		ok = update(c, &p, &r) &&
-		     user_store_network(u, &r, !ignore && !net->record.enabled, &c->err);
+		     (user_store_network(u, &r, !ignore && !net->record.enabled, &c->err) ||
+		      err_wrap(&c->err, "could not update network"));
 	}
 	if (ok) {
 		service_printf(c, "updated network \"%s\"", db_network_get_name(&r));

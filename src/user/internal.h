@@ -15,6 +15,10 @@ struct user_packet {
 	bool send_networks;
 	char *batch_type;
 	strvec batch_params;
+	// The command's label, once taken by an upstream command
+	char *label;
+	// The upstream labeled batch the messages belong to, if any
+	char *batch_tag;
 	bool welcome, sync, close, attach, detach, ack;
 	int64_t network_id;
 	struct downstream_sync state;
@@ -32,8 +36,12 @@ void user_packet_sync(struct user *u, struct user_network *net, struct user_pack
 		      bool welcome);
 void user_forward_channel(struct user *u, struct user_network *net, const struct user_client *dc,
 			  struct user_packet *p, const struct upstream_channel *ch);
+void user_names_reply(const struct user_client *dc, struct user_packet *p,
+		      const struct upstream_channel *ch);
+// extended: with the extended-join parameters (soju-rs sends them on
+// welcome, not on reattach)
 void user_channel_replay(struct user *u, struct user_network *net, const struct user_client *dc,
-			 struct user_packet *p, const struct upstream_channel *ch);
+			 struct user_packet *p, const struct upstream_channel *ch, bool extended);
 void user_history(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		  struct user_packet *reply);
 void user_search(struct user *u, struct user_client *dc, const struct irc_msg *msg,
@@ -85,6 +93,10 @@ void user_record_mention(struct user *u, int64_t net_id, const char *target_cm,
 void user_mentions_stop(struct user *u);
 // Cancels a pending retry of the user's loading
 void user_load_retry_stop(struct user *u);
+
+// soju-rs auto_save_sasl_plain
+void user_auto_save_sasl_plain(struct user *u, struct user_network *net, const char *username,
+			       const char *password);
 
 void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		   struct user_packet *p);

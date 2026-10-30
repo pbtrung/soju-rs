@@ -53,6 +53,8 @@ void user_packet_free(void *data) {
 	vec_free(&p->target_metadata);
 	xfree(p->batch_type);
 	strvec_free(&p->batch_params);
+	xfree(p->label);
+	xfree(p->batch_tag);
 	for (size_t i = 0; i < sizeof(p->state_strings) / sizeof(*p->state_strings); i++) {
 		xfree(p->state_strings[i]);
 	}
@@ -88,6 +90,7 @@ static void deliver(void *data) {
 		if (p->command != nullptr) {
 			downstream_begin_command(dc, p->command);
 		}
+		dc->forced_batch = p->batch_tag;
 		if (p->welcome) {
 			downstream_welcome(dc, &p->state);
 		} else if (p->sync) {
@@ -127,6 +130,7 @@ static void deliver(void *data) {
 			}
 			vec_clear(&p->messages);
 		}
+		dc->forced_batch = nullptr;
 		p->queued = conn_queued(dc->conn);
 		if (p->command != nullptr) {
 			downstream_end_command(dc);
@@ -212,6 +216,11 @@ void user_packet_sync(struct user *u, struct user_network *net, struct user_pack
 		p->state.up_caps = &p->caps;
 		p->state.up_isupport = &p->isupport;
 	}
+	// soju-rs updates ISUPPORT on each RPL_ISUPPORT of a registered
+	// connection, not when it disconnects
+	p->state.keep_isupport =
+		!welcome && net != nullptr && (uc == nullptr || strmap_len(&uc->isupport.m) == 0);
+	p->state.account_first = !welcome;
 	p->welcome = welcome;
 	p->sync = !welcome;
 }
@@ -275,28 +284,33 @@ void user_forward_channel(struct user *u, struct user_network *net, const struct
 	if (!cap_registry_is_enabled(&dc->caps, "no-implicit-names") &&
 	    !cap_registry_is_enabled(&dc->caps, "draft/no-implicit-names") &&
 	    !cap_registry_is_enabled(&dc->caps, "soju.im/no-implicit-names")) {
-		strvec members = {0};
-		const char *name;
-		void *v;
-		for (size_t it = 0; cmmap_next(&ch->members, &it, &name, &v);) {
-			AUTO_STRBUF struct strbuf member = STRBUF_INIT;
-			format_member_prefix(&member, v,
-					     cap_registry_is_enabled(&dc->caps, "multi-prefix"));
-			strbuf_append_cstr(&member, name);
-			strvec_push(&members, strbuf_cstr(&member));
-		}
-		generate_names_reply(&p->messages, ch->name, ch->status,
-				     (const char *const *)members.data, members.len);
-		strvec_free(&members);
+		user_names_reply(dc, p, ch);
 	}
 }
 
+void user_names_reply(const struct user_client *dc, struct user_packet *p,
+		      const struct upstream_channel *ch) {
+	strvec members = {0};
+	const char *name;
+	void *v;
+	for (size_t it = 0; cmmap_next(&ch->members, &it, &name, &v);) {
+		AUTO_STRBUF struct strbuf member = STRBUF_INIT;
+		format_member_prefix(&member, v,
+				     cap_registry_is_enabled(&dc->caps, "multi-prefix"));
+		strbuf_append_cstr(&member, name);
+		strvec_push(&members, strbuf_cstr(&member));
+	}
+	generate_names_reply(&p->messages, ch->name, ch->status, (const char *const *)members.data,
+			     members.len);
+	strvec_free(&members);
+}
+
 void user_channel_replay(struct user *u, struct user_network *net, const struct user_client *dc,
-			 struct user_packet *p, const struct upstream_channel *ch) {
+			 struct user_packet *p, const struct upstream_channel *ch, bool extended) {
 	struct upstream *uc = net->upstream;
 	struct irc_msg *join = IRC_MSG("JOIN", ch->name);
 	irc_msg_set_prefix(join, DOWNSTREAM_SELF_PREFIX, "", "");
-	if (cap_registry_is_enabled(&dc->caps, "extended-join")) {
+	if (extended && cap_registry_is_enabled(&dc->caps, "extended-join")) {
 		irc_msg_add_param(join, uc->account[0] != '\0' ? uc->account : "*");
 		irc_msg_add_param(join, uc->realname);
 	}

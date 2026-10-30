@@ -173,6 +173,11 @@ void upstream_route_reply(struct upstream *uc, struct irc_msg *msg, uint64_t *dc
 		uc->ended_target = casemap_cstr(uc->casemap, target);
 		uc->ended_downstream = p->downstream_id;
 	}
+	if (cstr_eq(cmd, "REGISTER") && cstr_eq(code, "REGISTER") && p->msg->params.len >= 3) {
+		// Saved with the account on success (soju-rs auto_save_sasl_plain)
+		xfree(uc->register_password);
+		uc->register_password = xstrdup(irc_msg_param(p->msg, 2));
+	}
 	if (early || end) {
 		pop(uc, q);
 	}

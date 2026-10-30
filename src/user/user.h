@@ -18,6 +18,8 @@ struct user_client {
 	struct strmap multiline;
 	struct strmap metadata_subs;
 	bool impersonating, has_remote_ip;
+	// A post-registration SASL PLAIN authentication waits for credentials
+	bool sasl_plain;
 	struct ipaddr remote_ip;
 	struct strbuf peer_cert;
 };
@@ -90,6 +92,13 @@ void user_service_reply(struct user *u, uint64_t dc_id, const char *text);
 [[nodiscard]] bool user_delete_network(struct user *u, int64_t id, struct err **err);
 [[nodiscard]] bool user_store_channel(struct user *u, struct user_network *net,
 				      struct db_channel *record, struct err **err);
+// Saves a network's record, without reconnecting
+[[nodiscard]] bool user_save_network(struct user *u, struct user_network *net,
+				     const struct db_network *record, struct err **err);
+// Saves the user's record, keeping the password
+[[nodiscard]] bool user_save_record(struct user *u, const struct db_user *record, struct err **err);
+[[nodiscard]] bool user_delete_channel(struct user *u, struct user_network *net,
+				       const char *channel, struct err **err);
 void user_detach_channel(struct user *u, struct user_network *net, const char *channel);
 void user_attach_channel(struct user *u, struct user_network *net, const char *channel);
 void user_close_clients(struct user *u, const char *reason);
