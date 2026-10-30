@@ -46,8 +46,8 @@ const QUEUED_LINE_OVERHEAD: usize = 64;
 pub const MAX_INPUT_IN_FLIGHT: usize = 64;
 
 /// Held while a message returned by ConnReader::read_message_limited is
-/// being processed.
-pub type InputPermit = tokio::sync::OwnedSemaphorePermit;
+/// being processed. None for keepalives (PING, PONG), which don't count.
+pub type InputPermit = Option<tokio::sync::OwnedSemaphorePermit>;
 
 pub trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
@@ -372,6 +372,7 @@ impl Conn {
         let reader = ConnReader {
             reader,
             input: Arc::new(Semaphore::new(MAX_INPUT_IN_FLIGHT)),
+            pending: None,
             cancel: conn.shared.cancel.clone(),
             logger,
         };
@@ -494,6 +495,8 @@ impl Conn {
 pub struct ConnReader {
     reader: Reader,
     input: Arc<Semaphore>,
+    /// A message read while waiting for an input permit
+    pending: Option<Message>,
     cancel: CancellationToken,
     logger: Logger,
 }
@@ -512,16 +515,32 @@ impl ConnReader {
         res
     }
 
-    /// Like read_message, but first waits until less than
+    /// Like read_message, but the message is returned once less than
     /// MAX_INPUT_IN_FLIGHT messages previously returned by this function
     /// still have their permit alive. The permit is meant to be dropped once
-    /// the message is processed.
+    /// the message is processed. PING and PONG are returned right away,
+    /// without a permit: the connection stays alive while its other input
+    /// waits, at the cost of one message read ahead. Cancel-safe.
     pub async fn read_message_limited(&mut self) -> Result<Option<(Message, InputPermit)>> {
-        let permit = tokio::select! {
-            p = self.input.clone().acquire_owned() => p.expect("semaphore is never closed"),
-            _ = self.cancel.cancelled() => return Ok(None),
+        if self.pending.is_none() {
+            match self.read_message().await? {
+                Some(msg) => self.pending = Some(msg),
+                None => return Ok(None),
+            }
+        }
+        let keepalive = self
+            .pending
+            .as_ref()
+            .is_some_and(|m| m.command == "PING" || m.command == "PONG");
+        let permit = if keepalive {
+            None
+        } else {
+            tokio::select! {
+                p = self.input.clone().acquire_owned() => Some(p.expect("semaphore is never closed")),
+                _ = self.cancel.cancelled() => return Ok(None),
+            }
         };
-        Ok(self.read_message().await?.map(|msg| (msg, permit)))
+        Ok(self.pending.take().map(|msg| (msg, permit)))
     }
 }
 
@@ -656,17 +675,24 @@ mod tests {
         let (ca, _ra) = Conn::new_stream(Box::new(a), Logger::new(false), None);
         let (_cb, mut rb) = Conn::new_stream(Box::new(b), Logger::new(false), None);
         for i in 0..MAX_INPUT_IN_FLIGHT + 1 {
-            ca.send_message(crate::msg!("PING", i.to_string()));
+            ca.send_message(crate::msg!("PRIVMSG", "#a", i.to_string()));
         }
+        ca.send_message(crate::msg!("PING", "alive"));
         let mut permits = Vec::new();
         for _ in 0..MAX_INPUT_IN_FLIGHT {
             permits.push(rb.read_message_limited().await.unwrap().unwrap());
         }
+        // Waiting for a permit is cancel-safe: the message isn't lost
         let next = tokio::time::timeout(Duration::from_millis(50), rb.read_message_limited());
         assert!(next.await.is_err());
         permits.pop();
-        let (msg, _) = rb.read_message_limited().await.unwrap().unwrap();
-        assert_eq!(msg.params, [MAX_INPUT_IN_FLIGHT.to_string()]);
+        let (msg, permit) = rb.read_message_limited().await.unwrap().unwrap();
+        assert_eq!(msg.params[1], MAX_INPUT_IN_FLIGHT.to_string());
+        assert!(permit.is_some());
+        // Keepalives are read even when every permit is held
+        let (msg, permit) = rb.read_message_limited().await.unwrap().unwrap();
+        assert_eq!(msg.command, "PING");
+        assert!(permit.is_none());
     }
 
     #[tokio::test]
