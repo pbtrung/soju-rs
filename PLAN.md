@@ -543,8 +543,8 @@ src/
              tenant_schema.sql tenant_user_migration.sql
   net/       listener.c conn.c tls.c proxyproto.c identd.c rate.c
   http/      request.c websocket.c client.c response.c
-  downstream/ caps.c registration.c sasl.c send.c sync.c welcome.c multiplex.c
-             cmds/*.c
+  downstream/ downstream.c receive.c send.c caps.c registration.c auth.c
+             sasl.c sync.c util.c internal.h
   upstream/  upstream.c connect.c registration.c channels.c users.c messages.c
              commands.c
   user/      user.c network.c channels.c delivered.c events.c upstream_conn.c

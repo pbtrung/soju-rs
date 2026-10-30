@@ -4,7 +4,9 @@
 
 #include "base/alloc.h"
 #include "base/utf8.h"
-#include "downstream/downstream.h"
+#include "downstream/internal.h"
+
+#include "base/base64.h"
 
 void downstream_sasl_free(struct downstream_sasl *s) {
 	if (s == nullptr) {
@@ -153,4 +155,86 @@ bool downstream_sasl_next(struct downstream_sasl *s, const struct str *response,
 		return next_oauth(s, r, challenge);
 	}
 	return true;
+}
+
+// AUTHENTICATE: returns true with *complete set once the client has sent
+// its credentials
+struct result downstream_handle_authenticate(struct downstream *dc, const struct irc_msg *msg,
+					     bool *complete) {
+	*complete = false;
+	if (!cap_registry_is_enabled(&dc->caps, "sasl")) {
+		return irc_err(
+			IRC_MSG(ERR_SASLFAIL, dc->nick,
+				"AUTHENTICATE requires the \"sasl\" capability to be enabled"));
+	}
+	if (msg->params.len == 0) {
+		return irc_err(IRC_MSG(ERR_SASLFAIL, dc->nick, "Missing AUTHENTICATE argument"));
+	}
+	const char *param = msg->params.data[0];
+	if (cstr_eq(param, "*")) {
+		return irc_err(IRC_MSG(ERR_SASLABORTED, dc->nick, "SASL authentication aborted"));
+	}
+	struct strbuf decoded = STRBUF_INIT;
+	bool has_resp = false;
+	if (dc->sasl == nullptr) {
+		AUTO_STRBUF struct strbuf mech = STRBUF_INIT;
+		utf8_to_upper(&mech, str_from(param));
+		enum sasl_kind kind;
+		const char *m = strbuf_cstr(&mech);
+		if (cstr_eq(m, "PLAIN")) {
+			kind = SASL_PLAIN;
+		} else if (cstr_eq(m, "OAUTHBEARER")) {
+			kind = SASL_OAUTHBEARER;
+		} else if (cstr_eq(m, "ANONYMOUS")) {
+			kind = SASL_ANONYMOUS;
+		} else if (cstr_eq(m, "EXTERNAL")) {
+			kind = SASL_EXTERNAL;
+		} else {
+			return irc_err(
+				IRC_MSG(ERR_SASLFAIL, dc->nick, "Unsupported SASL mechanism"));
+		}
+		dc->sasl = xcalloc(1, sizeof(*dc->sasl));
+		dc->sasl->kind = kind;
+		dc->sasl->mechanism = xstrdup(m);
+	} else {
+		struct downstream_sasl *s = dc->sasl;
+		const char *chunk = cstr_eq(param, "+") ? "" : param;
+		if (s->pending_resp.len + strlen(chunk) > (size_t)10 * 1024) {
+			return irc_err(IRC_MSG(ERR_SASLFAIL, dc->nick, "Response too long"));
+		}
+		strbuf_append_cstr(&s->pending_resp, chunk);
+		if (strlen(chunk) == MAX_SASL_LENGTH) {
+			return ok(); // Multi-line response, wait for the next command
+		}
+		if (!base64_decode(&decoded, BASE64_STANDARD, strbuf_str(&s->pending_resp),
+				   nullptr)) {
+			strbuf_free(&decoded);
+			return irc_err(
+				IRC_MSG(ERR_SASLFAIL, dc->nick, "Invalid base64-encoded response"));
+		}
+		strbuf_reset(&s->pending_resp);
+		has_resp = true;
+	}
+	struct str resp = strbuf_str(&decoded);
+	struct strbuf *challenge;
+	struct err *e = nullptr;
+	bool ok_next = downstream_sasl_next(dc->sasl, has_resp ? &resp : nullptr, &challenge, &e);
+	strbuf_free(&decoded);
+	if (!ok_next) {
+		struct result r = {.fatal = xstrdup(err_msg(e))};
+		err_free(e);
+		return r;
+	}
+	if (challenge == nullptr) {
+		*complete = true;
+		return ok();
+	}
+	AUTOFREE char *s = challenge->len == 0 ? xstrdup("+")
+					       : base64_encode_cstr(BASE64_STANDARD, challenge->buf,
+								    challenge->len);
+	strbuf_free(challenge);
+	xfree(challenge);
+	// TODO (upstream): multi-line messages
+	downstream_send(dc, IRC_MSG("AUTHENTICATE", s));
+	return ok();
 }

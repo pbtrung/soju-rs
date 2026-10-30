@@ -1,4 +1,6 @@
-#include "downstream/downstream.h"
+#include "downstream/internal.h"
+
+#include "base/utf8.h"
 
 #include "base/alloc.h"
 #include "irc/genmsg.h"
@@ -217,4 +219,40 @@ void downstream_welcome(struct downstream *dc, const struct downstream_sync *s) 
 						       : "No MOTD"));
 	}
 	server_config_unref(cfg);
+}
+
+// METADATA SUB/UNSUB/SUBS (soju-rs sync.rs handle_metadata_sub), before
+// registration: no message targets to send. Returns false for other
+// subcommands.
+bool downstream_handle_metadata_sub(struct downstream *dc, const struct irc_msg *msg) {
+	const char *sub = msg->params.data[1];
+	bool subscribe = cstr_eq(sub, "SUB");
+	if (subscribe || cstr_eq(sub, "UNSUB")) {
+		for (size_t i = 2; i < msg->params.len; i++) {
+			struct strbuf lower = STRBUF_INIT;
+			utf8_to_lower(&lower, str_from(msg->params.data[i]));
+			const char *k = strbuf_cstr(&lower);
+			if (!cstr_eq(k, "soju.im/pinned") && !cstr_eq(k, "soju.im/muted") &&
+			    !cstr_eq(k, "soju.im/blocked")) {
+				downstream_send(dc, IRC_MSG("FAIL", msg->command, "KEY_INVALID", k,
+							    "Invalid key"));
+			} else if (subscribe) {
+				strmap_set(&dc->metadata_subs, k, nullptr);
+				downstream_send(dc, IRC_MSG(RPL_METADATASUBOK, "*", k));
+			} else {
+				strmap_remove(&dc->metadata_subs, k);
+				downstream_send(dc, IRC_MSG(RPL_METADATAUNSUBOK, "*", k));
+			}
+			strbuf_free(&lower);
+		}
+		return true;
+	}
+	if (cstr_eq(sub, "SUBS")) {
+		const char *k;
+		for (size_t it = 0; strmap_next(&dc->metadata_subs, &it, &k, nullptr);) {
+			downstream_send(dc, IRC_MSG(RPL_METADATASUBS, "*", k));
+		}
+		return true;
+	}
+	return false;
 }
