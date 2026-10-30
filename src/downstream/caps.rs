@@ -25,6 +25,7 @@ pub(super) const PERMANENT_DOWNSTREAM_CAPS: &[(&str, &str)] = &[
     ("soju.im/multiplex", ""),
     ("soju.im/no-implicit-names", ""),
     ("soju.im/read", ""),
+    ("soju.im/unread", ""),
     ("soju.im/webpush", ""),
 ];
 

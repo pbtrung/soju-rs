@@ -226,16 +226,27 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                     ]));
                 }
             };
+            // soju.im/unread: whether each target has text messages or
+            // mentions after its read marker, so that clients can show it
+            // without loading the history
+            let unread_tags = dc!(u, i).caps.is_enabled("soju.im/unread");
             let msgs = targets
                 .into_iter()
                 .filter(|t| !net.channels.get(&t.name).is_some_and(|c| c.detached))
                 .map(|t| {
-                    msg!(
+                    let mut m = msg!(
                         "CHATHISTORY",
                         "TARGETS",
                         t.name,
                         xirc::format_server_time(t.latest_message)
-                    )
+                    );
+                    if unread_tags && t.unread {
+                        m.tags.set("soju.im/unread", "");
+                    }
+                    if unread_tags && t.mention {
+                        m.tags.set("soju.im/mention", "");
+                    }
+                    m
                 });
             u.downstreams[i].send_batch("draft/chathistory-targets", &[], msgs);
             return Ok(());

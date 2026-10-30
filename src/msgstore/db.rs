@@ -160,31 +160,32 @@ impl DbStore {
                 events: opts.events,
                 ..Default::default()
             };
-            let mut targets = HashMap::new();
+            // Pending targets have no highlight or read marker: those come
+            // from the database
+            let mut targets: HashMap<String, crate::database::MessageTargetLast> = HashMap::new();
             for t in batch
                 .targets(network.id, &all)?
                 .into_iter()
                 .chain(self.db.list_message_last_per_target(network.id, &all)?)
             {
-                targets
-                    .entry(t.name)
-                    .and_modify(|last: &mut Option<DateTime<Utc>>| {
-                        *last = (*last).max(t.latest_message);
-                    })
-                    .or_insert(t.latest_message);
+                match targets.get_mut(&t.name) {
+                    Some(last) => {
+                        last.latest_message = last.latest_message.max(t.latest_message);
+                        last.latest_text = last.latest_text.max(t.latest_text);
+                        last.highlight = last.highlight.max(t.highlight);
+                        last.read = last.read.max(t.read);
+                    }
+                    None => {
+                        targets.insert(t.name.clone(), t);
+                    }
+                }
             }
             let mut targets: Vec<_> = targets
-                .into_iter()
-                .filter_map(|(name, time)| {
-                    let time = time?;
-                    if opts.after_time.is_some_and(|after| time <= after)
-                        || opts.before_time.is_some_and(|before| time >= before)
-                    {
-                        return None;
-                    }
-                    Some(crate::database::MessageTargetLast {
-                        name,
-                        latest_message: Some(time),
+                .into_values()
+                .filter(|t| {
+                    t.latest_message.is_some_and(|time| {
+                        !opts.after_time.is_some_and(|after| time <= after)
+                            && !opts.before_time.is_some_and(|before| time >= before)
                     })
                 })
                 .collect();
@@ -200,8 +201,10 @@ impl DbStore {
         Ok(l.into_iter()
             .filter_map(|t| {
                 Some(ChatHistoryTarget {
-                    name: t.name,
+                    unread: t.unread(),
+                    mention: t.mention(),
                     latest_message: t.latest_message?,
+                    name: t.name,
                 })
             })
             .collect())

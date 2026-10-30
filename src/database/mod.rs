@@ -48,6 +48,31 @@ impl std::error::Error for DuplicateDeviceCertificate {}
 pub struct MessageTargetLast {
     pub name: String,
     pub latest_message: Option<DateTime<Utc>>,
+    /// The latest text message, if latest_message may be an event
+    pub latest_text: Option<DateTime<Utc>>,
+    /// The latest message mentioning the user, see
+    /// store_message_target_highlight
+    pub highlight: Option<DateTime<Utc>>,
+    /// The read marker
+    pub read: Option<DateTime<Utc>>,
+}
+
+impl MessageTargetLast {
+    /// Whether a text message is after the read marker.
+    pub fn unread(&self) -> bool {
+        let latest = if self.latest_text.is_some() {
+            self.latest_text
+        } else {
+            self.latest_message
+        };
+        latest.is_some_and(|t| self.read.is_none_or(|r| t > r))
+    }
+
+    /// Whether a message mentioning the user is after the read marker.
+    pub fn mention(&self) -> bool {
+        self.highlight
+            .is_some_and(|t| self.read.is_none_or(|r| t > r))
+    }
 }
 
 #[derive(Clone, Debug, Default)]

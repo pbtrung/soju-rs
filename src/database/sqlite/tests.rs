@@ -582,7 +582,7 @@ fn migrations() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 34);
+    assert_eq!(SCHEMA_VERSION, 35);
 }
 
 #[test]
@@ -766,6 +766,73 @@ fn message_text_index_query_plans() {
             }
         }
     }
+}
+
+#[test]
+fn target_unread_and_mentions() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+    let t = |s: &str| xirc::parse_server_time(s).unwrap();
+    let at = |s: &str| msg!("PRIVMSG", "#a", "hi").with_tag("time", s);
+    db.store_messages(n.id, "#a", &[at("2024-01-01T00:00:01.000Z")])
+        .unwrap();
+    db.store_messages(n.id, "#b", &[at("2024-01-01T00:00:02.000Z")])
+        .unwrap();
+    // A mention of a target without messages creates it
+    db.store_message_target_highlight(n.id, "bob", t("2024-01-01T00:00:03.000Z"))
+        .unwrap();
+    db.store_message_target_highlight(n.id, "#a", t("2024-01-01T00:00:01.000Z"))
+        .unwrap();
+    // Only a later mention moves it
+    db.store_message_target_highlight(n.id, "#a", t("2023-01-01T00:00:00.000Z"))
+        .unwrap();
+
+    let state = |db: &Database| {
+        let opts = MessageOptions {
+            limit: 10,
+            ..Default::default()
+        };
+        db.list_message_last_per_target(n.id, &opts)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.name.clone(), t.unread(), t.mention()))
+            .collect::<Vec<_>>()
+    };
+    // bob has no text message: the TARGETS reply leaves it out
+    assert_eq!(
+        state(&db),
+        [
+            ("bob".to_owned(), false, true),
+            ("#a".to_owned(), true, true),
+            ("#b".to_owned(), true, false),
+        ]
+    );
+
+    for (target, time) in [
+        ("#a", "2024-01-01T00:00:01.000Z"),
+        ("#b", "2024-01-01T00:00:01.500Z"),
+    ] {
+        db.store_read_receipt(
+            n.id,
+            &mut ReadReceipt {
+                target: target.into(),
+                timestamp: Some(t(time)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        state(&db),
+        [
+            ("bob".to_owned(), false, true),
+            ("#a".to_owned(), false, false),
+            ("#b".to_owned(), true, false),
+        ]
+    );
 }
 
 #[test]

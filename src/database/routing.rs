@@ -64,6 +64,7 @@ tenant_methods! {
     network_db(network_id): fn list_message_targets(network_id: i64) -> Vec<MessageTarget>;
     network_db(network_id): fn store_message_target(network_id: i64, mt: &mut MessageTarget) -> ();
     network_db(network_id): fn store_messages(network_id: i64, name: &str, msgs: &[Message]) -> Vec<i64>;
+    network_db(network_id): fn store_message_target_highlight(network_id: i64, target: &str, time: DateTime<Utc>) -> ();
     network_db(network_id): fn list_message_last_per_target(network_id: i64, options: &MessageOptions) -> Vec<MessageTargetLast>;
     network_db(network_id): fn list_messages(network_id: i64, name: &str, options: &MessageOptions) -> Vec<Message>;
     user_db(user_id): fn list_web_push_networks(user_id: i64) -> Vec<i64>;

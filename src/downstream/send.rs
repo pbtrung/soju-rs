@@ -106,6 +106,8 @@ impl DownstreamConn {
                 "time" => caps.is_enabled("server-time"),
                 "account" => caps.is_enabled("account-tag"),
                 "batch" => caps.is_enabled("batch"),
+                // Enabled by their own capability, like server-time
+                "soju.im/unread" | "soju.im/mention" => caps.is_enabled("soju.im/unread"),
                 _ => false,
             });
         }

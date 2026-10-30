@@ -27,6 +27,10 @@ pub struct LoadMessageOptions<'a> {
 pub struct ChatHistoryTarget {
     pub name: String,
     pub latest_message: DateTime<Utc>,
+    /// A text message is after the read marker
+    pub unread: bool,
+    /// A message mentioning the user is after the read marker
+    pub mention: bool,
 }
 
 #[derive(Clone, Debug, Default)]

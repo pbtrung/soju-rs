@@ -52,6 +52,10 @@ Additions:
 - `soju.im/multiplex`: a client can attach its bouncer networks to its
   bouncer connection instead of opening one connection per network, see
   [doc/multiplex.md](doc/multiplex.md). gamja uses it when available
+- `soju.im/unread`: CHATHISTORY TARGETS replies tell which conversations
+  have unread messages or mentions after their read marker, so a client can
+  show them without loading any history, see [doc/unread.md](doc/unread.md).
+  gamja uses it when available
 
 Behaviour changes:
 
@@ -94,7 +98,7 @@ Behaviour changes:
   recent history reads a few consecutive pages per channel instead of rows
   scattered over the whole file (see [doc/message-text-index.md](doc/message-text-index.md#7-schema-34-clustered-local-messages)).
   Sparse FTS and guarded updates reduce unnecessary work. The current
-  database schema is version 34; earlier soju-rs and upstream versions
+  database schema is version 35; earlier soju-rs and upstream versions
   cannot open the upgraded database
 - [Turso Cloud storage](doc/turso.md) uses a controller account directory
   and a separate database per user, with asynchronous multi-row message

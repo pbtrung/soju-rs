@@ -120,12 +120,37 @@ pub(super) fn handle_message(
                 ),
             }
 
+            let timestamp = msg
+                .tags
+                .get("time")
+                .and_then(xirc::parse_server_time)
+                .unwrap_or_else(Utc::now);
+            // highlight is only computed for saved channels
+            let mention = is_text
+                && !self_msg
+                && !blocked
+                && (direct_message
+                    || highlight
+                    || (ch.is_none() && u.networks[ni].is_highlight(&u.record, msg)));
+            if mention && u.has_chathistory_store() {
+                // Clients learn which conversations mention them from
+                // CHATHISTORY TARGETS, without loading their history
+                let srv = u.srv.clone();
+                let target_cm = cm(&buffer_name);
+                let logger = u.networks[ni].logger.clone();
+                tokio::spawn(async move {
+                    let target = target_cm.clone();
+                    let r = db::run(&srv.db, move |db| {
+                        db.store_message_target_highlight(net_id, &target, timestamp)
+                    })
+                    .await;
+                    if let Err(e) = r {
+                        logf!(logger, "failed to record a mention in {target_cm:?}: {e}");
+                    }
+                });
+            }
+
             if send_web_push {
-                let timestamp = msg
-                    .tags
-                    .get("time")
-                    .and_then(xirc::parse_server_time)
-                    .unwrap_or_else(Utc::now);
                 let target_cm = cm(&buffer_name);
                 let srv = u.srv.clone();
                 let user_id = u.record.id;

@@ -104,6 +104,30 @@ impl Database {
         Ok(())
     }
 
+    /// Records a message mentioning the user, or a private message from
+    /// someone else: the latest one's time, compared to the read marker,
+    /// tells clients which conversations have mentions without loading
+    /// their history. One guarded write per mention, none on read.
+    pub fn store_message_target_highlight(
+        &self,
+        network_id: i64,
+        target: &str,
+        time: DateTime<Utc>,
+    ) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO MessageTarget(network, target, highlight)
+            VALUES (:network, :target, :time)
+            ON CONFLICT(network, target) DO UPDATE SET highlight = excluded.highlight
+            WHERE highlight IS NULL OR highlight < excluded.highlight",
+            named_params! {
+                ":network": network_id,
+                ":target": target,
+                ":time": xirc::format_server_time(time),
+            },
+        )?;
+        Ok(())
+    }
+
     pub fn store_messages(
         &self,
         network_id: i64,
@@ -165,10 +189,7 @@ impl Database {
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
         let remote = self.conn().is_remote();
-        let inner = if options.events {
-            // Messages are clustered by target and time: one seek
-            "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1"
-        } else if remote {
+        let text = if remote {
             // Turso tenants have no text time index: step over events
             "SELECT time FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
         } else {
@@ -176,9 +197,22 @@ impl Database {
             // every event between text messages
             "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
         };
+        let (inner, latest_text) = if options.events {
+            // Messages are clustered by target and time: one seek. Unread
+            // state only counts text messages.
+            (
+                "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1",
+                text,
+            )
+        } else {
+            (text, "NULL")
+        };
 
+        // Seeks only: the read marker by its unique (network, target) key
         let mut query = format!(
-            "SELECT target, ({inner}) latest
+            "SELECT target, ({inner}) latest, ({latest_text}) latest_text, highlight,
+                (SELECT timestamp FROM ReadReceipt
+                    WHERE network = :network AND target = MessageTarget.target) read
             FROM MessageTarget
             WHERE network = :network "
         );
@@ -211,14 +245,23 @@ impl Database {
         }
         binds.push((":limit", &limit));
         let rows = stmt.query_map(binds.as_slice(), |r| {
-            Ok((lossy_string(r, 0)?, r.get::<_, Option<String>>(1)?))
+            Ok((
+                lossy_string(r, 0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
         })?;
         let mut l = Vec::new();
         for row in rows {
-            let (name, ts) = row?;
+            let (name, latest, latest_text, highlight, read) = row?;
             l.push(MessageTargetLast {
                 name,
-                latest_message: time_from_sql(ts)?,
+                latest_message: time_from_sql(latest)?,
+                latest_text: time_from_sql(latest_text)?,
+                highlight: time_from_sql(highlight)?,
+                read: time_from_sql(read)?,
             });
         }
         if options.take_last {

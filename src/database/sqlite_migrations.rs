@@ -266,7 +266,13 @@ pub const MIGRATIONS: &[&str] = &[
                 SELECT new.id, new.text WHERE new.text IS NOT NULL;
         END;
     "#,
+    TARGET_HIGHLIGHT,
 ];
+
+/// The time of the latest message mentioning the user, or of the latest
+/// private message from someone else: with the read marker, it tells
+/// clients which conversations have mentions without loading them.
+pub const TARGET_HIGHLIGHT: &str = "ALTER TABLE MessageTarget ADD COLUMN highlight TEXT";
 
 /// The migration clustering the local Message table. Turso tenants skip it:
 /// sqlite::turso::rebuild_turso_messages clusters them in resumable chunks.
