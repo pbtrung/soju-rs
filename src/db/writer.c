@@ -443,10 +443,23 @@ bool db_message_buffer_remove(struct db *buf, const struct db_message_insert *ms
 	if (!db_begin(c, err)) {
 		return false;
 	}
-	bool ok = true;
+	// A primary key seek in the clustered table
+	struct db_stmt *st = db_prepare(c,
+					"DELETE FROM Message WHERE target=(SELECT id FROM "
+					"MessageTarget\n"
+					"    WHERE network=:network AND target=:target) AND "
+					"time=:time AND id=:id",
+					err);
+	bool ok = st != nullptr;
 	for (size_t i = 0; ok && i < n; i++) {
-		ok = db_exec_i64(c, "DELETE FROM Message WHERE id=?", msgs[i].id, err);
+		bind_i64(st, ":network", msgs[i].network);
+		bind_text(st, ":target", msgs[i].target);
+		bind_text(st, ":time", msgs[i].time);
+		bind_i64(st, ":id", msgs[i].id);
+		ok = db_step_done(st, err);
+		db_clear_bindings(st);
 	}
+	db_finalize(st);
 	// Metadata stays bounded: only targets and networks with pending
 	// messages are kept
 	ok = ok &&

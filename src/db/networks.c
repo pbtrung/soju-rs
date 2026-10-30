@@ -228,13 +228,14 @@ bool db_delete_network(struct db *db, int64_t id, struct err **err) {
 		"DELETE FROM WebPushSubscription WHERE network = ?",
 		"DELETE FROM DeliveryReceipt WHERE network = ?",
 		"DELETE FROM ReadReceipt WHERE network = ?",
+		"DELETE FROM TargetHighlight WHERE network = ?",
 		"DELETE FROM Channel WHERE network = ?",
 		"DELETE FROM Network WHERE id = ?",
 	};
 	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	bool ok = record_message_id_high_water(dbc, err);
+	bool ok = true;
 	for (size_t i = 0; ok && i < sizeof(deletes) / sizeof(deletes[0]); i++) {
 		ok = db_exec_i64(dbc, deletes[i], id, err);
 	}

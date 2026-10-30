@@ -32,7 +32,11 @@ static const char *const MIGRATIONS[] = {
 };
 
 static constexpr int64_t SCHEMA_VERSION = sizeof(MIGRATIONS) / sizeof(MIGRATIONS[0]);
-static_assert(SCHEMA_VERSION == 33);
+static_assert(SCHEMA_VERSION == 35);
+
+// The migration clustering the local Message table. Turso tenants skip it:
+// turso.c clusters them in resumable chunks.
+static constexpr int64_t LOCAL_MESSAGE_CLUSTER = 33;
 
 int64_t db_schema_version(void) {
 	return SCHEMA_VERSION;
@@ -128,6 +132,9 @@ static bool run_migrations(struct db_conn *c, int64_t version, struct err **err)
 		}
 	} else {
 		for (int64_t i = version; i < SCHEMA_VERSION; i++) {
+			if (c->remote && i == LOCAL_MESSAGE_CLUSTER) {
+				continue;
+			}
 			AUTOFREE char *migration = c->remote ? remote_migration(MIGRATIONS[i])
 							     : xstrdup(MIGRATIONS[i]);
 			if (!db_exec(c, migration, &e)) {
@@ -213,14 +220,11 @@ static bool setup(struct db *db, struct err **err) {
 	    !db_exec(c, "PRAGMA cache_size = -512", err) || !db_upgrade(db, err)) {
 		return false;
 	}
-	// Local high-water marks keep asynchronous actor and message IDs from
-	// being reused after deletion. They do not change upstream user_version.
+	// Local high-water marks keep asynchronous actor IDs from being reused
+	// after deletion. They do not change upstream user_version. Message IDs
+	// are reserved from MessageIdHighWater, part of the schema.
 	return db_exec(
 		c,
-		"CREATE TABLE IF NOT EXISTS MessageIdHighWater (\n"
-		"                id INTEGER PRIMARY KEY CHECK (id = 0),\n"
-		"                last_id INTEGER NOT NULL\n"
-		"            );"
 		"CREATE TABLE IF NOT EXISTS ActorIdHighWater (kind TEXT PRIMARY KEY, last_id "
 		"INTEGER NOT NULL);"
 		"CREATE TRIGGER IF NOT EXISTS actor_user_deleted BEFORE DELETE ON User BEGIN "

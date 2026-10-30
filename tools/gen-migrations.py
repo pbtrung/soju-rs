@@ -6,18 +6,22 @@ import re
 import subprocess
 import sys
 
-rev = sys.argv[1] if len(sys.argv) > 1 else "c350574"
+rev = sys.argv[1] if len(sys.argv) > 1 else "6b9bf15"
 src = subprocess.run(["git", "show", f"{rev}:src/database/sqlite_migrations.rs"],
                      capture_output=True, text=True, check=True).stdout
 body = src[src.index("&[") + 2:src.rindex("];")]
 items = []
 pos = 0
-pattern = re.compile(r'r#"(.*?)"#|include_str!\("([^"]+)"\)|//[^\n]*', re.S)
+pattern = re.compile(r'r#"(.*?)"#|include_str!\("([^"]+)"\)|//[^\n]*|\b([A-Z][A-Z0-9_]*)\b', re.S)
 for m in pattern.finditer(body):
     if m.group(0).startswith("//"):
         continue
     if m.group(1) is not None:
         items.append(m.group(1))
+    elif m.group(3) is not None:
+        # A string constant of the same file, e.g. TARGET_HIGHLIGHT
+        const = re.search(r'pub const ' + m.group(3) + r': &str = "(.*?)";', src, re.S)
+        items.append(const.group(1))
     else:
         path = "src/database/" + m.group(2)
         items.append(subprocess.run(["git", "show", f"{rev}:{path}"],

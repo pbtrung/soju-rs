@@ -311,6 +311,8 @@ bool db_delete_user(struct db *db, int64_t id, struct err **err) {
 		 "                JOIN Network ON DeliveryReceipt.network = Network.id\n"
 		 "                WHERE Network.user = ?\n"
 		 "            )"),
+		("DELETE FROM TargetHighlight\n"
+		 "            WHERE network IN (SELECT id FROM Network WHERE user = ?)"),
 		("DELETE FROM ReadReceipt\n"
 		 "            WHERE id IN (\n"
 		 "                SELECT ReadReceipt.id\n"
@@ -318,13 +320,11 @@ bool db_delete_user(struct db *db, int64_t id, struct err **err) {
 		 "                JOIN Network ON ReadReceipt.network = Network.id\n"
 		 "                WHERE Network.user = ?\n"
 		 "            )"),
-		nullptr, // record_message_id_high_water
 		("DELETE FROM Message\n"
-		 "            WHERE id IN (\n"
-		 "                SELECT Message.id\n"
-		 "                FROM Message, MessageTarget, Network\n"
-		 "                WHERE Message.target = MessageTarget.id\n"
-		 "                AND MessageTarget.network = Network.id\n"
+		 "            WHERE target IN (\n"
+		 "                SELECT MessageTarget.id\n"
+		 "                FROM MessageTarget, Network\n"
+		 "                WHERE MessageTarget.network = Network.id\n"
 		 "                AND Network.user = ?\n"
 		 "            )"),
 		("DELETE FROM MessageTarget\n"
@@ -350,9 +350,7 @@ bool db_delete_user(struct db *db, int64_t id, struct err **err) {
 		return false;
 	}
 	for (size_t i = 0; i < sizeof(deletes) / sizeof(deletes[0]); i++) {
-		bool ok = deletes[i] != nullptr ? db_exec_i64(dbc, deletes[i], id, err)
-						: record_message_id_high_water(dbc, err);
-		if (!ok) {
+		if (!db_exec_i64(dbc, deletes[i], id, err)) {
 			db_rollback(dbc);
 			return false;
 		}

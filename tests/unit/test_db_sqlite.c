@@ -536,9 +536,9 @@ static void test_messages_invalid_utf8(void **state) {
 	// Go soju stores raw upstream bytes, which may be e.g. Latin-1
 	static const char raw[] = "@time=2024-01-01T00:00:00.000Z :bob PRIVMSG #a :caf\xe9";
 	exec_blob(db,
-		  "INSERT INTO Message(target, raw, time, sender, text)\n"
-		  "            SELECT id, CAST(?1 AS TEXT), '2024-01-01T00:00:00.000Z', 'bob', "
-		  "'caf'\n"
+		  "INSERT INTO Message(id, target, raw, time, sender, text)\n"
+		  "            SELECT 100, id, CAST(?1 AS TEXT), '2024-01-01T00:00:00.000Z', "
+		  "'bob', 'caf'\n"
 		  "            FROM MessageTarget WHERE target = '#a'",
 		  0, raw, (int)sizeof(raw) - 1);
 	struct db_message_options o = {.limit = 10};
@@ -800,7 +800,7 @@ static void test_migrations(void **state) {
 	T(db_list_channels, db, nets.data[0].id, &chs);
 	assert_string_equal(chs.data[0].name, "#soju");
 	assert_int_equal(raw_i64(db_handle(db), "PRAGMA user_version"), db_schema_version());
-	assert_int_equal(db_schema_version(), 33);
+	assert_int_equal(db_schema_version(), 35);
 	db_channel_vec_free(&chs);
 	db_network_vec_free(&nets);
 	db_user_vec_free(&users);
@@ -844,16 +844,30 @@ static void test_message_text_index_migration(void **state) {
 		assert_int_equal(count_msgs(db, 1, "#a", &o), 2);
 		assert_int_equal(raw_i64(db_handle(db), "PRAGMA user_version"),
 				 db_schema_version());
+		// Schema 34 clustered the table, keeping IDs and the search index
 		sqlite3_stmt *st;
 		assert_int_equal(sqlite3_prepare_v2(db_handle(db),
-						    "SELECT stat FROM sqlite_stat1 WHERE idx = "
-						    "'MessageTextIndex'",
+						    "SELECT sql FROM sqlite_master WHERE type = "
+						    "'table' AND name = 'Message'",
 						    -1, &st, nullptr),
 				 SQLITE_OK);
 		assert_int_equal(sqlite3_step(st), SQLITE_ROW);
-		// Only the text message is indexed, and the migration analyzed it
-		assert_string_equal((const char *)sqlite3_column_text(st, 0), "1 1 1");
+		assert_non_null(strstr((const char *)sqlite3_column_text(st, 0), "WITHOUT ROWID"));
 		sqlite3_finalize(st);
+		assert_int_equal(raw_i64(db_handle(db), "SELECT min(id) FROM Message"), 1);
+		assert_int_equal(raw_i64(db_handle(db), "SELECT max(id) FROM Message"), 2);
+		raw_exec(db_handle(db),
+			 "INSERT INTO MessageFTS(MessageFTS) VALUES ('integrity-check');");
+		struct db_message_options search = {.limit = 10, .text = "hello"};
+		assert_int_equal(count_msgs(db, 1, "#a", &search), 1);
+		// New IDs continue after the highest stored one
+		struct irc_msg *again = msg_at("PRIVMSG #a again", nullptr);
+		i64vec ids = {0};
+		store_msgs(db, 1, "#a", &again, 1, &ids);
+		assert_int_equal(ids.len, 1);
+		assert_int_equal(ids.data[0], 3);
+		vec_free(&ids);
+		irc_msg_free(again);
 		// Opening an already upgraded database is harmless
 		T(db_upgrade, db);
 		db_close(db);
@@ -876,9 +890,9 @@ static void test_message_text_index_query_plans(void **state) {
 		 "        WITH RECURSIVE messages(id) AS (\n"
 		 "            VALUES (1) UNION ALL SELECT id + 1 FROM messages WHERE id < 100\n"
 		 "        )\n"
-		 "        INSERT INTO Message(target, raw, time, sender, text)\n"
-		 "            SELECT t.id, 'raw', printf('2024-01-01T00:%02d:%02d.000Z', m.id / "
-		 "60, m.id % 60),\n"
+		 "        INSERT INTO Message(id, target, raw, time, sender, text)\n"
+		 "            SELECT t.id * 1000 + m.id, t.id, 'raw',\n"
+		 "                printf('2024-01-01T00:%02d:%02d.000Z', m.id / 60, m.id % 60),\n"
 		 "                '', CASE WHEN m.id % 10 = 0 THEN 'hello' END\n"
 		 "            FROM MessageTarget t, messages m;");
 	// Check both a fresh database without statistics and one with them
@@ -886,37 +900,59 @@ static void test_message_text_index_query_plans(void **state) {
 		if (analyze) {
 			raw_exec(c, "ANALYZE;");
 		}
-		for (int events = 0; events < 2; events++) {
-			const char *filter = events ? "text IS NULL" : "text IS NOT NULL";
-			const char *index = events ? "MessageEventIndex" : "MessageTextIndex";
-			char queries[2][512];
-			snprintf(
-				queries[0], sizeof(queries[0]),
-				"SELECT target, (SELECT time FROM Message WHERE "
-				"target=MessageTarget.id AND %s ORDER BY time DESC LIMIT 1) latest "
-				"FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
-				filter);
-			snprintf(queries[1], sizeof(queries[1]),
-				 "SELECT m.raw FROM Message m,MessageTarget t WHERE m.target=t.id "
-				 "AND "
-				 "t.network=1 AND t.target='#channel1' AND m.%s ORDER BY m.time "
-				 "DESC,m.id DESC LIMIT 5",
-				 filter);
-			for (int q = 0; q < 2; q++) {
-				AUTOFREE char *sql = xasprintf("EXPLAIN QUERY PLAN %s", queries[q]);
-				sqlite3_stmt *st;
-				assert_int_equal(sqlite3_prepare_v2(c, sql, -1, &st, nullptr),
-						 SQLITE_OK);
-				bool used = false;
-				while (sqlite3_step(st) == SQLITE_ROW) {
-					const char *detail =
-						(const char *)sqlite3_column_text(st, 3);
-					used = used || strstr(detail, index) != nullptr;
-				}
-				sqlite3_finalize(st);
-				if (!used) {
-					fail_msg("expected %s (analyze=%d)", index, analyze);
-				}
+		// The SQL of db_list_message_last_per_target and
+		// db_list_message_rows
+		static const struct {
+			const char *sql, *plan;
+		} queries[] = {
+			{"SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex WHERE "
+			 "target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) "
+			 "latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+			 "MessageTextIndex"},
+			{"SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id "
+			 "ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER "
+			 "BY latest DESC LIMIT 10",
+			 "PRIMARY KEY"},
+			{"SELECT m.raw FROM Message AS m INDEXED BY MessageTextIndex WHERE "
+			 "m.target=(SELECT id FROM MessageTarget WHERE network=1 AND "
+			 "target='#channel1') AND m.text IS NOT NULL ORDER BY time DESC, id DESC "
+			 "LIMIT 5",
+			 "MessageTextIndex"},
+			{"SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM MessageTarget "
+			 "WHERE network=1 AND target='#channel1') ORDER BY time DESC, id DESC LIMIT 5",
+			 "PRIMARY KEY"},
+			{"SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC "
+			 "LIMIT 1",
+			 "MessageTextIdIndex"},
+			{"SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN (SELECT "
+			 "time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) AND "
+			 "m.text IS NOT NULL ORDER BY time ASC, id ASC LIMIT 5",
+			 "MessageTextIdIndex"},
+			{"SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m ON "
+			 "m.target = t.id WHERE m.time < '2024' LIMIT 10",
+			 "PRIMARY KEY (target=? AND time<?)"},
+		};
+		for (size_t q = 0; q < sizeof(queries) / sizeof(queries[0]); q++) {
+			AUTOFREE char *sql = xasprintf("EXPLAIN QUERY PLAN %s", queries[q].sql);
+			sqlite3_stmt *st;
+			assert_int_equal(sqlite3_prepare_v2(c, sql, -1, &st, nullptr), SQLITE_OK);
+			bool used = false, sorted = false;
+			while (sqlite3_step(st) == SQLITE_ROW) {
+				const char *detail = (const char *)sqlite3_column_text(st, 3);
+				used = used || strstr(detail, queries[q].plan) != nullptr;
+				sorted = sorted || strstr(detail, "TEMP B-TREE") != nullptr;
+			}
+			sqlite3_finalize(st);
+			if (!used) {
+				fail_msg("expected %s (analyze=%d): %s", queries[q].plan, analyze,
+					 queries[q].sql);
+			}
+			// History doesn't sort: the indexes are in time and ID order.
+			// Backlog sorts the messages after its cursor, and target
+			// lists their latest times.
+			if (sorted && !strstr(queries[q].sql, "latest") &&
+			    !strstr(queries[q].sql, " IN (")) {
+				fail_msg("unexpected sort (analyze=%d): %s", analyze, queries[q].sql);
 			}
 		}
 	}

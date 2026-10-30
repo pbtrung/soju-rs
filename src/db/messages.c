@@ -183,27 +183,15 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 		}
 	}
 	if (dbc->insert_message == nullptr) {
-		// Message IDs are delivery receipt cursors: never reuse the IDs of
-		// deleted messages, see record_message_id_high_water
-		// Turso tenants can't seek max(id) of their clustered table: IDs
-		// are reserved like the background writer does
+		// Message IDs are delivery receipt cursors, never reused after
+		// deletion. The clustered Message table can't seek max(id): they
+		// are reserved, like the background writer does.
 		dbc->insert_message = db_prepare(
 			dbc,
-			dbc->remote
-				? "INSERT INTO Message(id, target, raw, time, sender, text)\n"
-				  "                SELECT :id, id, :raw, :time, :sender, :text\n"
-				  "                FROM MessageTarget WHERE network = :network AND "
-				  "target = :target"
-				: "INSERT INTO Message(id, target, raw, time, sender, text)\n"
-				  "                SELECT max(\n"
-				  "                        coalesce((SELECT max(id) FROM Message), "
-				  "0),\n"
-				  "                        coalesce((SELECT last_id FROM "
-				  "MessageIdHighWater), 0)\n"
-				  "                    ) + 1,\n"
-				  "                    id, :raw, :time, :sender, :text\n"
-				  "                FROM MessageTarget as t\n"
-				  "                WHERE network = :network AND target = :target",
+			"INSERT INTO Message(id, target, raw, time, sender, text)\n"
+			"                SELECT :id, id, :raw, :time, :sender, :text\n"
+			"                FROM MessageTarget WHERE network = :network AND "
+			"target = :target",
 			err);
 		if (dbc->insert_message == nullptr) {
 			return false;
@@ -219,7 +207,7 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 	db_clear_bindings(st);
 	size_t start = ids->len;
 	int64_t first_id = 0;
-	if (ok && dbc->remote) {
+	if (ok) {
 		struct db_stmt *reserve = db_prepare(
 			dbc,
 			"INSERT INTO MessageIdHighWater(id, last_id)\n"
@@ -245,9 +233,7 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 			break;
 		}
 		AUTOFREE char *raw = irc_msg_to_string(msgs[i]);
-		if (dbc->remote) {
-			bind_i64(st, ":id", first_id + (int64_t)i);
-		}
+		bind_i64(st, ":id", first_id + (int64_t)i);
 		bind_i64(st, ":network", network_id);
 		bind_text(st, ":target", name);
 		bind_text(st, ":raw", raw);
@@ -263,8 +249,7 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 		xfree(time);
 		xfree(text);
 		if (ok) {
-			vec_push(ids,
-				 dbc->remote ? first_id + (int64_t)i : db_last_insert_rowid(dbc));
+			vec_push(ids, first_id + (int64_t)i);
 		}
 	}
 	if (!ok || !db_commit(dbc, err)) {
@@ -371,6 +356,7 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 	}
 	static const char target[] =
 		"(SELECT id FROM MessageTarget WHERE network = :network AND target = :target)";
+	bool text_only = !o->events || search[0] != '\0';
 	AUTO_STRBUF struct strbuf q = STRBUF_INIT;
 	strbuf_append_cstr(&q, "SELECT m.id AS id, m.time AS time, m.raw AS raw FROM ");
 	if (search[0] != '\0') {
@@ -381,9 +367,14 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 				       "                CROSS JOIN Message AS m ON m.id = f.r ");
 	} else {
 		strbuf_append_cstr(&q, "Message AS m ");
+		if (!dbc->remote && text_only && o->after_id == 0) {
+			// Without statistics, SQLite prefers the primary key,
+			// reading every event between text messages. Turso tenants
+			// have no text time index.
+			strbuf_append_cstr(&q, "INDEXED BY MessageTextIndex ");
+		}
 	}
 	strbuf_printf(&q, "WHERE m.target = %s ", target);
-	bool text_only = !o->events || search[0] != '\0';
 	if (o->after_id > 0) {
 		if (text_only) {
 			// Delivery cursors: seek the text message ID index
@@ -408,15 +399,10 @@ bool db_list_message_rows(struct db *db, int64_t network_id, const char *name,
 	}
 	if (text_only) {
 		strbuf_append_cstr(&q, "AND m.text IS NOT NULL ");
-	} else if (!dbc->remote) {
-		// Merge two disjoint ordered indexes, avoiding a second timestamp
-		// index entry on every text message. LIMIT applies to their union.
-		AUTOFREE char *text_query = xasprintf("%sAND m.text IS NOT NULL ", strbuf_cstr(&q));
-		strbuf_append_cstr(&q, "AND m.text IS NULL UNION ALL ");
-		strbuf_append_cstr(&q, text_query);
 	}
 	// Messages often share a time, e.g. the lines of a multiline message:
-	// order them as they were stored
+	// order them as they were stored. The primary key and the text time
+	// index end with the ID, so this doesn't need a sort.
 	strbuf_append_cstr(&q, o->take_last ? "ORDER BY time DESC, id DESC "
 					    : "ORDER BY time ASC, id ASC ");
 	strbuf_append_cstr(&q, "LIMIT :limit");
@@ -494,20 +480,6 @@ bool db_list_messages(struct db *db, int64_t network_id, const char *name,
 	return true;
 }
 
-bool record_message_id_high_water(struct db_conn *dbc, struct err **err) {
-	// Turso tenants reserve every ID through this row before inserting:
-	// their clustered table can't seek max(id)
-	if (dbc->remote) {
-		return true;
-	}
-	return db_exec_one(dbc,
-			   "INSERT INTO MessageIdHighWater(id, last_id)\n"
-			   "        SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1\n"
-			   "        ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id\n"
-			   "        WHERE last_id<excluded.last_id",
-			   err);
-}
-
 // One database's part of db_delete_messages_before
 static bool delete_before(struct db_conn *dbc, struct timestamp before, size_t limit,
 			  size_t *deleted, struct err **err) {
@@ -518,36 +490,16 @@ static bool delete_before(struct db_conn *dbc, struct timestamp before, size_t l
 	if (!db_begin(dbc, err)) {
 		return false;
 	}
-	bool ok = record_message_id_high_water(dbc, err);
-	struct db_stmt *st = nullptr;
-	if (ok) {
-		st = db_prepare(
-			dbc,
-			// Seek each target's oldest messages in the clustered table
-			dbc->remote
-				? "DELETE FROM Message WHERE (target, time, id) IN (\n"
-				  "                    SELECT m.target, m.time, m.id FROM "
-				  "MessageTarget t\n"
-				  "                    CROSS JOIN Message m ON m.target = t.id\n"
-				  "                    WHERE m.time < :before LIMIT :limit\n"
-				  "                )"
-				: "DELETE FROM Message WHERE id IN (\n"
-				  "                SELECT id FROM (\n"
-				  "                    SELECT m.id FROM MessageTarget t CROSS JOIN "
-				  "Message m "
-				  "ON m.target=t.id\n"
-				  "                    WHERE m.text IS NULL AND m.time<:before\n"
-				  "                    UNION ALL\n"
-				  "                    SELECT m.id FROM MessageTarget t CROSS JOIN "
-				  "Message m "
-				  "ON m.target=t.id\n"
-				  "                    WHERE m.text IS NOT NULL AND "
-				  "m.time<:before\n"
-				  "                ) LIMIT :limit\n"
-				  "            )",
-			err);
-		ok = st != nullptr;
-	}
+	// Seek each target's oldest messages in the clustered table
+	struct db_stmt *st =
+		db_prepare(dbc,
+			   "DELETE FROM Message WHERE (target, time, id) IN (\n"
+			   "                    SELECT m.target, m.time, m.id FROM MessageTarget t\n"
+			   "                    CROSS JOIN Message m ON m.target = t.id\n"
+			   "                    WHERE m.time < :before LIMIT :limit\n"
+			   "                )",
+			   err);
+	bool ok = st != nullptr;
 	if (ok) {
 		AUTOFREE char *b = format_server_time_cstr(before);
 		bind_text(st, ":before", b);
