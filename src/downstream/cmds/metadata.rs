@@ -10,9 +10,9 @@ pub(super) fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<(
     let net_idx = dc_network(u, i);
     let net_id = net_idx.map(|ni| u.networks[ni].id());
 
-    let srv = u.srv.clone();
+    let flagged = net_idx.map(|ni| u.networks[ni].flagged_targets());
     let list =
-        move || -> Result<Vec<db::MessageTarget>> { srv.db.list_message_targets(net_id.unwrap()) };
+        move || -> Result<Vec<db::MessageTarget>> { Ok(flagged.clone().unwrap_or_default()) };
     let targets_fn: Option<&dyn Fn() -> Result<Vec<db::MessageTarget>>> =
         if net_id.is_some() { Some(&list) } else { None };
     if let Some(res) = handle_metadata_sub(&mut u.downstreams[i], msg, targets_fn) {
@@ -24,16 +24,7 @@ pub(super) fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<(
         && target != "*"
     {
         let target_cm = u.networks[ni].casemap(&target);
-        match u.srv.db.get_message_target(u.networks[ni].id(), &target_cm) {
-            Ok(m) => mt = Some(m),
-            Err(e) => {
-                logf!(
-                    dc!(u, i).logger,
-                    "failed to get the message target for {target:?}: {e}"
-                );
-                return Err(internal_error("METADATA", &target));
-            }
-        }
+        mt = Some(u.networks[ni].message_target(&target_cm));
     }
 
     match subcommand.as_str() {
@@ -82,14 +73,15 @@ pub(super) fn handle_metadata(u: &mut User, i: usize, msg: &Message) -> Result<(
             if let Some(b) = batch {
                 dc!(u, i).end_batch(&b);
             }
-            if let (Some(mut mt), Some(net_id)) = (mt, net_id)
-                && let Err(e) = u.srv.db.store_message_target(net_id, &mut mt)
-            {
-                logf!(
-                    dc!(u, i).logger,
-                    "failed to store the message target for {target:?}: {e}"
-                );
-                return Err(internal_error("METADATA", &target));
+            if let (Some(mut mt), Some(ni)) = (mt, net_idx) {
+                if let Err(e) = u.srv.db.store_message_target(u.networks[ni].id(), &mut mt) {
+                    logf!(
+                        dc!(u, i).logger,
+                        "failed to store the message target for {target:?}: {e}"
+                    );
+                    return Err(internal_error("METADATA", &target));
+                }
+                u.networks[ni].set_message_target(mt);
             }
         }
         _ => {

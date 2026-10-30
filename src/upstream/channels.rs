@@ -297,14 +297,7 @@ pub(super) fn handle_message(
                     }
                     return Ok(true);
                 }
-                let source_cm = cm(&prefix_name);
-                match u.srv.db.get_message_target(net_id, &source_cm) {
-                    Ok(mt) => blocked = mt.blocked,
-                    Err(e) => logf!(
-                        u.networks[ni].logger,
-                        "failed to get the message target for {source_cm:?}: {e}"
-                    ),
-                }
+                blocked = u.networks[ni].message_target(&cm(&prefix_name)).blocked;
             }
             for dc in dcs_for(&mut u.downstreams, net_id) {
                 if !we_are_invited && !dc.caps.is_enabled("invite-notify") {

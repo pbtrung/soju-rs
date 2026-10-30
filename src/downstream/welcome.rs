@@ -101,12 +101,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
     if let Some(ni) = net_idx
         && u.downstreams[i].caps.is_enabled("draft/metadata-2")
     {
-        let targets = u
-            .srv
-            .db
-            .list_message_targets(u.networks[ni].id())
-            .map_err(|e| anyhow!("failed to list message targets: {e}"))?;
-        for mt in targets {
+        for mt in u.networks[ni].flagged_targets() {
             send_target_metadata(&mut u.downstreams[i], &mt);
         }
     }

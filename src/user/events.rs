@@ -56,7 +56,23 @@ impl User {
                     continue;
                 }
             };
+            let targets =
+                match db::run(&self.srv.db, move |db| db.list_message_targets(net_id)).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        logf!(
+                            self.logger,
+                            "failed to list message targets for user {:?}, network {:?}: {e}",
+                            self.record.username,
+                            record.get_name()
+                        );
+                        continue;
+                    }
+                };
             let mut network = Network::new(&self.logger, record, channels);
+            for mt in targets {
+                network.set_message_target(mt);
+            }
             if self.has_persistent_msg_store() {
                 let receipts =
                     db::run(&self.srv.db, move |db| db.list_delivery_receipts(net_id)).await;

@@ -861,6 +861,27 @@ fn target_unread_and_mentions() {
 }
 
 #[test]
+fn flagging_an_existing_target() {
+    let db = db();
+    let mut u = User::new("alice");
+    db.store_user(&mut u).unwrap();
+    let mut n = Network::new("irc.example.org");
+    db.store_network(u.id, &mut n).unwrap();
+    // Storing messages creates the target, unknown to the caller
+    db.store_messages(n.id, "bob", &[msg!("PRIVMSG", "alice", "spam")])
+        .unwrap();
+    let mut mt = MessageTarget {
+        target: "bob".into(),
+        blocked: true,
+        ..Default::default()
+    };
+    db.store_message_target(n.id, &mut mt).unwrap();
+    let stored = db.get_message_target(n.id, "bob").unwrap();
+    assert_eq!(stored.id, mt.id);
+    assert!(stored.blocked);
+}
+
+#[test]
 fn newer_schema_rejected() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA user_version = 999").unwrap();

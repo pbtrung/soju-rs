@@ -87,10 +87,14 @@ impl Database {
                 },
             )?;
         } else {
-            conn.execute(
+            // Storing messages may have created the target meanwhile
+            mt.id = conn.query_row(
                 "INSERT INTO
                 MessageTarget(network, target, pinned, muted, blocked)
-                VALUES (:network, :target, :pinned, :muted, :blocked)",
+                VALUES (:network, :target, :pinned, :muted, :blocked)
+                ON CONFLICT(network, target) DO UPDATE SET pinned = excluded.pinned,
+                    muted = excluded.muted, blocked = excluded.blocked
+                RETURNING id",
                 named_params! {
                     ":network": network_id,
                     ":target": mt.target,
@@ -98,8 +102,8 @@ impl Database {
                     ":muted": mt.muted,
                     ":blocked": mt.blocked,
                 },
+                |r| r.get(0),
             )?;
-            mt.id = conn.last_insert_rowid();
         }
         Ok(())
     }

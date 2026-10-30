@@ -50,6 +50,7 @@ test_on_both_runtimes!(
     service_other_user,
     chat_history_limit,
     unread_targets,
+    blocked_users,
     service_blocking_work,
     monitor_invalid_targets,
     multiplex,
@@ -1127,6 +1128,37 @@ async fn unread_targets() {
             .iter()
             .all(|t| !t.1 && !t.2)
     );
+    env.srv.shutdown().await;
+}
+
+/// Messages from a user blocked with METADATA are hidden, from the flags
+/// the user's event loop keeps without querying the database per message.
+async fn blocked_users() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    let nick = register_upstream_with(&mut uc, &[]).await;
+    // A first message stores the target before it's blocked
+    uc.send(msg!("PRIVMSG", nick.clone(), "first").with_prefix(Prefix::new("spammer")));
+    uc.roundtrip().await;
+
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, Some(&env.network), "draft/metadata-2").await;
+    dc.send(msg!("METADATA", "spammer", "SET", "soju.im/blocked", "1"));
+    let m = read_until(&mut dc, "761").await; // RPL_KEYVALUE
+    assert_eq!(m.params[1..], ["spammer", "soju.im/blocked", "*", "1"]);
+    read_until(&mut dc, "METADATA").await;
+
+    uc.send(msg!("PRIVMSG", nick.clone(), "spam").with_prefix(Prefix::new("SPAMMER")));
+    uc.send(msg!("PRIVMSG", nick.clone(), "hello").with_prefix(Prefix::new("friend")));
+    let m = read_until(&mut dc, "PRIVMSG").await;
+    assert_eq!(m.params[1], "hello");
+
+    // Unblocking shows them again
+    dc.send(msg!("METADATA", "spammer", "SET", "soju.im/blocked", "0"));
+    read_until(&mut dc, "METADATA").await;
+    uc.send(msg!("PRIVMSG", nick, "back").with_prefix(Prefix::new("spammer")));
+    let m = read_until(&mut dc, "PRIVMSG").await;
+    assert_eq!(m.params[1], "back");
     env.srv.shutdown().await;
 }
 

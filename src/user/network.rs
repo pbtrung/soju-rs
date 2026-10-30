@@ -1,5 +1,6 @@
 //! A user's networks: their state and lifecycle.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
@@ -34,6 +35,12 @@ pub struct Network {
     /// Shared with the runner, so it can pick up record changes (e.g. a new
     /// CertFP certificate) on reconnect.
     pub record_snapshot: Arc<Mutex<db::Network>>,
+    /// The pinned, muted or blocked targets, by stored (case-mapped) name.
+    /// The user's event loop is their only writer: incoming messages check
+    /// them without a database query (a round trip with Turso).
+    pub message_targets: HashMap<String, db::MessageTarget>,
+    /// Mentions to store, by conversation, see upstream::record_mention
+    pub pending_mentions: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
 }
 
 impl Network {
@@ -62,6 +69,8 @@ impl Network {
             last_error: None,
             casemap: xirc::CASEMAPPING_RFC1459,
             push_targets: Arc::new(Mutex::new(CaseMappingMap::new(cm))),
+            message_targets: HashMap::new(),
+            pending_mentions: Arc::default(),
         }
     }
 
@@ -108,6 +117,33 @@ impl Network {
         match self.upstream() {
             Some(uc) => &uc.nick,
             None => get_nick(user, Some(&self.record)),
+        }
+    }
+
+    /// A target's flags, all unset if it has none.
+    pub fn message_target(&self, target_cm: &str) -> db::MessageTarget {
+        self.message_targets
+            .get(target_cm)
+            .cloned()
+            .unwrap_or_else(|| db::MessageTarget {
+                target: target_cm.to_owned(),
+                ..Default::default()
+            })
+    }
+
+    /// The pinned, muted or blocked targets, in name order.
+    pub fn flagged_targets(&self) -> Vec<db::MessageTarget> {
+        let mut l: Vec<_> = self.message_targets.values().cloned().collect();
+        l.sort_by(|a, b| a.target.cmp(&b.target));
+        l
+    }
+
+    /// Records a target's flags once stored.
+    pub fn set_message_target(&mut self, mt: db::MessageTarget) {
+        if mt.pinned || mt.muted || mt.blocked {
+            self.message_targets.insert(mt.target.clone(), mt);
+        } else {
+            self.message_targets.remove(&mt.target);
         }
     }
 
@@ -364,6 +400,8 @@ impl User {
         let cm = old.casemap;
         updated.delivered = old.delivered;
         updated.push_targets = old.push_targets;
+        updated.message_targets = old.message_targets;
+        updated.pending_mentions = old.pending_mentions;
         if updated.record.enabled {
             updated.last_error = old.last_error;
         }

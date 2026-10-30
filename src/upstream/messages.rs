@@ -106,19 +106,11 @@ pub(super) fn handle_message(
                 && u.has_web_push_subscriptions(net_id);
 
             let source_cm = cm(&prefix_name);
-            let mut blocked = false;
-            match u.srv.db.get_message_target(net_id, &source_cm) {
-                Ok(mt) => {
-                    if mt.muted || mt.blocked {
-                        send_web_push = false;
-                    }
-                    blocked = mt.blocked;
-                }
-                Err(e) => logf!(
-                    u.networks[ni].logger,
-                    "failed to get the message target for {source_cm:?}: {e}"
-                ),
+            let mt = u.networks[ni].message_target(&source_cm);
+            if mt.muted || mt.blocked {
+                send_web_push = false;
             }
+            let blocked = mt.blocked;
 
             let timestamp = msg
                 .tags
@@ -142,19 +134,7 @@ pub(super) fn handle_message(
             if mention && u.has_chathistory_store() {
                 // Clients learn which conversations mention them from
                 // CHATHISTORY TARGETS, without loading their history
-                let srv = u.srv.clone();
-                let target_cm = cm(&buffer_name);
-                let logger = u.networks[ni].logger.clone();
-                tokio::spawn(async move {
-                    let target = target_cm.clone();
-                    let r = db::run(&srv.db, move |db| {
-                        db.store_message_target_highlight(net_id, &target, timestamp)
-                    })
-                    .await;
-                    if let Err(e) = r {
-                        logf!(logger, "failed to record a mention in {target_cm:?}: {e}");
-                    }
-                });
+                record_mention(u, ni, cm(&buffer_name), timestamp);
             }
 
             if send_web_push {
@@ -386,6 +366,42 @@ fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message, h
         u.attach_channel(ni, name);
         u.store_channel(ni, name);
     }
+}
+
+/// How long mentions are coalesced before they're stored: a flood of
+/// private messages costs one write per conversation and period.
+const MENTION_FLUSH_DELAY: Duration = Duration::from_secs(1);
+
+/// Records the latest mention of a conversation, stored by one background
+/// task per network along with the others of the period.
+fn record_mention(u: &mut User, ni: usize, target_cm: String, time: chrono::DateTime<Utc>) {
+    let net = &u.networks[ni];
+    let mut pending = net.pending_mentions.lock().unwrap();
+    let first = pending.is_empty();
+    let t = pending.entry(target_cm).or_insert(time);
+    *t = (*t).max(time);
+    if !first {
+        return;
+    }
+    drop(pending);
+    let pending = net.pending_mentions.clone();
+    let srv = u.srv.clone();
+    let logger = net.logger.clone();
+    let net_id = net.id();
+    tokio::spawn(async move {
+        tokio::time::sleep(MENTION_FLUSH_DELAY).await;
+        let mentions = std::mem::take(&mut *pending.lock().unwrap());
+        let r = db::run(&srv.db, move |db| {
+            for (target, time) in &mentions {
+                db.store_message_target_highlight(net_id, target, *time)?;
+            }
+            Ok(())
+        })
+        .await;
+        if let Err(e) = r {
+            logf!(logger, "failed to record mentions: {e}");
+        }
+    });
 }
 
 /// Appends a message to the message store. Returns the internal message
