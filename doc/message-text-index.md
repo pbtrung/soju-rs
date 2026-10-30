@@ -12,7 +12,9 @@ earlier change; see [the current optimization audit](turso-query-optimization.md
 Commands using ANALYZE below are for local SQLite, not Turso Cloud.
 From v0.99.23 (schema 33), Turso user databases no longer have these indexes:
 their `Message` table is clustered by `(target, time, id)`, see
-[Turso Cloud storage](turso.md#message-table-layout). Local SQLite keeps them.
+[Turso Cloud storage](turso.md#message-table-layout). Local SQLite kept them
+until v0.99.24 (schema 34), which clusters it the same way and keeps only
+`MessageTextIndex`, see [section 7](#7-schema-34-clustered-local-messages).
 
 Checked against soju-rs commit `dbb2c7c` (2026-10-24).
 
@@ -228,9 +230,68 @@ DROP INDEX MessageTextIndex;
 
 ## 6. Caveats
 
-- **C1: Clients using `draft/event-playback`** query without the `text` filter, so they keep using `MessageIndex`. There's no gain for them, and also no regression.
-- **C2: Row reads for the requested messages remain.** `LATEST 100` still reads 100 scattered table rows, since `raw` isn't in the index. A lower client fetch limit and message retention reduce that part.
+- **C1: Clients using `draft/event-playback`** query without the `text` filter, so they keep using `MessageIndex`. There's no gain for them, and also no regression. (Since schema 34, they read the clustered table directly.)
+- **C2: Row reads for the requested messages remain.** `LATEST 100` still reads 100 scattered table rows, since `raw` isn't in the index. A lower client fetch limit and message retention reduce that part. (Schema 34 keeps a target's rows together, see section 7.)
 - **C3: `TARGETS` still runs one lookup per `MessageTarget`.** Each lookup is now cheap (index-only), but many stale DM targets still add up. Retention, or deleting old targets, helps.
 - **C4: Costs.** The index adds a little disk space (about 30–50 bytes per text message) and makes inserts slightly slower. Both are negligible for IRC volumes.
 - **C5: Schema safety.** Since v0.99.18, the index is managed by soju-rs's schema and migrations. The schema version rises from 30 to 31, so older binaries supporting only schema 30 reject the upgraded database. `IF NOT EXISTS` handles an index already created manually. A future migration rebuilding `Message` must recreate this index too. Dropping it manually does not lower the schema version or cause it to be recreated on every startup.
 - **C6: Page cache itself is harmless.** It's reclaimable memory. The fix reduces it because it reduces the I/O that creates it.
+
+## 7. Schema 34: clustered local messages
+
+The partial index removed the event rows from text-only lookups, but not
+the cost of caveat C2: rows were stored in arrival order, every channel
+interleaved, so the 100 rows of a `LATEST 100` sat on up to 100 different
+pages, and a connect read that for every target.
+
+v0.99.24 gives local databases the layout Turso user databases got in
+v0.99.23: `Message` is a `WITHOUT ROWID` table with primary key
+`(target, time, id)`, so a target's history is stored in order, on
+consecutive pages. Its indexes:
+
+- `MessageTextIdIndex ON Message(target, id) WHERE text IS NOT NULL`:
+  delivery cursors, backlog for clients without CHATHISTORY, and search
+  results by ID;
+- `MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL`:
+  text-only history and target lists. Turso tenants don't have it (an
+  index entry is a billed row write); locally it keeps text-only history,
+  e.g. gamja's, from reading every interleaved event row.
+
+`MessageEventIndex` and `Message_target_index` are gone: event playback,
+the latest time of a target, expiry and network deletion seek the primary
+key. An event writes one row instead of three; a text message as many as
+before. Message IDs are reserved from `MessageIdHighWater`, since the
+clustered table can't seek `max(id)`.
+
+Without planner statistics, SQLite prefers the primary key for text-only
+queries, even though it then reads every event between text messages
+(three times the pages below with 99% events). These queries name
+`INDEXED BY MessageTextIndex`.
+
+### Pages read on connect
+
+`python3 scripts/bench-connect-pages.py` replays a gamja connect (TARGETS,
+then the latest 100 text messages of each target) against the same
+synthetic history in both layouts, and counts the distinct pages SQLite
+reads from the file, which is what fills the kernel page cache:
+
+400,000 messages, 60 targets, LATEST 100 each
+
+| Events | schema 33 pages | file KiB | schema 34 pages | file KiB |
+| ---: | ---: | ---: | ---: | ---: |
+| 50% | 1,832 | 77,784 | 730 | 73,856 |
+| 90% | 3,761 | 65,140 | 2,068 | 54,092 |
+| 99% | 2,327 | 61,932 | 2,295 | 49,340 |
+
+With more events, text messages are further apart in their target's range,
+so each one needs its own page in both layouts: at 99% events, clustering
+saves file size but not reads. Separating text from events in the key
+would help there, at the cost of merging two ranges for event playback.
+
+### Upgrading
+
+The migration copies the whole table once, in key order and in one
+transaction, keeping message IDs (the search index and delivery receipts
+stay valid). It needs free disk space about the size of the message table
+and some startup time on large histories. Older versions can't open the
+upgraded database; back it up first.

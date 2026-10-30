@@ -27,7 +27,6 @@ def sqlite_evidence(root):
     db.executescript((root / "src/database/sqlite_schema.sql").read_text())
     db.executescript((root / "src/database/message_fts.sql").read_text())
     db.executescript("""
-        CREATE TABLE MessageIdHighWater(id INTEGER PRIMARY KEY,last_id INTEGER NOT NULL);
         INSERT INTO User(id,username,created_at)VALUES(1,'fixture','');
         INSERT INTO Network(id,user,addr)VALUES(1,1,'irc.fixture');
         WITH RECURSIVE t(id)AS(VALUES(1) UNION ALL SELECT id+1 FROM t WHERE id<100)
@@ -38,12 +37,13 @@ def sqlite_evidence(root):
                CASE WHEN id%100=0 THEN 'token' END FROM m;
     """)
     report = ["", "## Native SQLite plans and VM steps", "",
-              f"SQLite {sqlite3.sqlite_version}; 100,000 messages, 100 targets, 99% events.",
+              f"SQLite {sqlite3.sqlite_version}; 100,000 messages, 100 targets, 99% events,",
+              "local schema 34 (the clustered Message table of Turso tenants plus a",
+              "text-only time index).",
               "VM steps are execution work, not billable row counters.", "",
-              "| High-water statement | VM steps |", "| --- | ---: |"]
+              "| ID allocation statement | VM steps |", "| --- | ---: |"]
     for name, sql in [
-        ("Before: aggregate with HAVING", "INSERT INTO MessageIdHighWater SELECT 0,max(id) FROM Message HAVING max(id) IS NOT NULL ON CONFLICT(id)DO UPDATE SET last_id=max(last_id,excluded.last_id)"),
-        ("After: descending seek, LIMIT 1", "INSERT INTO MessageIdHighWater SELECT 0,id FROM Message WHERE true ORDER BY id DESC LIMIT 1 ON CONFLICT(id)DO UPDATE SET last_id=excluded.last_id WHERE last_id<excluded.last_id"),
+        ("Reservation of the next IDs", "INSERT INTO MessageIdHighWater(id,last_id) VALUES(0,coalesce((SELECT last_id FROM MessageIdHighWater WHERE id=0),0)+200) ON CONFLICT(id) DO UPDATE SET last_id=excluded.last_id RETURNING last_id"),
     ]:
         steps = [0]
         def tick():
@@ -67,11 +67,13 @@ def sqlite_evidence(root):
         "Web Push by owner/network": "SELECT id FROM WebPushSubscription WHERE user=1 AND network IS 1",
         "Web Push by endpoint": "SELECT id FROM WebPushSubscription WHERE network=1 AND endpoint='https://fixture'",
         "Target flags": "SELECT id FROM MessageTarget WHERE network=1 AND (pinned OR muted OR blocked)",
-        "Message ID cursor": "SELECT id FROM Message WHERE target=1 ORDER BY id DESC LIMIT 1",
-        "Text history": "SELECT id,time,raw FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY time DESC,id DESC LIMIT 10",
-        "Event playback merge": "SELECT id,time,raw FROM Message WHERE target=1 AND text IS NULL UNION ALL SELECT id,time,raw FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY time DESC,id DESC LIMIT 10",
+        "Message ID cursor": "SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "Text history": "SELECT id,time,raw FROM Message INDEXED BY MessageTextIndex WHERE target=1 AND text IS NOT NULL ORDER BY time DESC,id DESC LIMIT 10",
+        "Event playback": "SELECT id,time,raw FROM Message WHERE target=1 ORDER BY time DESC,id DESC LIMIT 10",
+        "Latest text time per target": "SELECT target,(SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1",
         "FTS candidate IDs": "SELECT rowid FROM MessageFTS WHERE MessageFTS MATCH 'token'",
-        "Expiry candidates": "SELECT id FROM(SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id WHERE m.text IS NULL AND m.time<'000000000000' UNION ALL SELECT m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id WHERE m.text IS NOT NULL AND m.time<'000000000000') LIMIT 1000",
+        "Search result rows": "SELECT m.id FROM (SELECT rowid AS r FROM MessageFTS WHERE MessageFTS MATCH 'token') AS f CROSS JOIN Message AS m ON m.id=f.r WHERE m.target=1 AND m.text IS NOT NULL",
+        "Expiry candidates": "SELECT m.target,m.time,m.id FROM MessageTarget t CROSS JOIN Message m ON m.target=t.id WHERE m.time<'000000000000' LIMIT 1000",
         "Foreign-key network lookup": "SELECT id FROM MessageTarget WHERE network=1 AND target='#1'",
         "Statistics (intentional count)": "SELECT count(*) FROM MessageTarget",
     }
@@ -81,8 +83,7 @@ def sqlite_evidence(root):
         report.append(f"| {name} | `{plan}` |")
     db.close()
     report += ["", "The expiry plan scans target metadata and seeks bounded message-time ranges;",
-               "it does not scan all fresh messages. The high-water plan may say SCAN while",
-               "its descending LIMIT stops after one row, hence the separate VM measurement.", ""]
+               "it does not scan all fresh messages.", ""]
     return report
 
 

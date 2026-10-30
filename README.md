@@ -90,10 +90,12 @@ Behaviour changes:
   optimized after expired messages are deleted, and the SQLite database is
   vacuumed on startup and when a quarter of it or more is unused (upstream
   leaves it to the admin)
-- Disjoint text/event indexes speed up history without duplicate timestamp
-  entries. Sparse FTS and guarded updates reduce unnecessary work. The
-  current database schema is version 33; earlier soju-rs and upstream
-  versions supporting older schemas cannot open the upgraded database
+- The message table is clustered by target and time, so a client loading
+  recent history reads a few consecutive pages per channel instead of rows
+  scattered over the whole file (see [doc/message-text-index.md](doc/message-text-index.md#7-schema-34-clustered-local-messages)).
+  Sparse FTS and guarded updates reduce unnecessary work. The current
+  database schema is version 34; earlier soju-rs and upstream versions
+  cannot open the upgraded database
 - [Turso Cloud storage](doc/turso.md) uses a controller account directory
   and a separate database per user, with asynchronous multi-row message
   batches. Its message table is clustered by target and time, so an event

@@ -54,13 +54,14 @@ Setup, cleanup and validation queries are outside the measured intervals.
 
 ## Native SQLite plans and VM steps
 
-SQLite 3.54.0; 100,000 messages, 100 targets, 99% events.
+SQLite 3.54.0; 100,000 messages, 100 targets, 99% events,
+local schema 34 (the clustered Message table of Turso tenants plus a
+text-only time index).
 VM steps are execution work, not billable row counters.
 
-| High-water statement | VM steps |
+| ID allocation statement | VM steps |
 | --- | ---: |
-| Before: aggregate with HAVING | 400,026 |
-| After: descending seek, LIMIT 1 | 26 |
+| Reservation of the next IDs | 39 |
 
 | Query family | EXPLAIN QUERY PLAN |
 | --- | --- |
@@ -74,14 +75,15 @@ VM steps are execution work, not billable row counters.
 | Web Push by owner/network | `SEARCH WebPushSubscription USING COVERING INDEX WebPushSubscription_user_network_index (user=? AND network=?)` |
 | Web Push by endpoint | `SEARCH WebPushSubscription USING COVERING INDEX sqlite_autoindex_WebPushSubscription_1 (network=? AND endpoint=?)` |
 | Target flags | `SEARCH MessageTarget USING INDEX MessageTarget_flags_index (network=?)` |
-| Message ID cursor | `SEARCH Message USING COVERING INDEX Message_target_index (target=?)` |
+| Message ID cursor | `SEARCH Message USING INDEX MessageTextIdIndex (target=?)` |
 | Text history | `SEARCH Message USING INDEX MessageTextIndex (target=?)` |
-| Event playback merge | `MERGE (UNION ALL); LEFT; SEARCH Message USING INDEX MessageEventIndex (target=?); RIGHT; SEARCH Message USING INDEX MessageTextIndex (target=?)` |
+| Event playback | `SEARCH Message USING PRIMARY KEY (target=?)` |
+| Latest text time per target | `SEARCH MessageTarget USING COVERING INDEX sqlite_autoindex_MessageTarget_1 (network=?); CORRELATED SCALAR SUBQUERY 1; SEARCH Message USING INDEX MessageTextIndex (target=?)` |
 | FTS candidate IDs | `SCAN MessageFTS VIRTUAL TABLE INDEX 0:M1` |
-| Expiry candidates | `COMPOUND QUERY; LEFT-MOST SUBQUERY; SCAN t USING COVERING INDEX sqlite_autoindex_MessageTarget_1; SEARCH m USING INDEX MessageEventIndex (target=? AND time<?); UNION ALL; SCAN t USING COVERING INDEX sqlite_autoindex_MessageTarget_1; SEARCH m USING INDEX MessageTextIndex (target=? AND time<?)` |
+| Search result rows | `SCAN MessageFTS VIRTUAL TABLE INDEX 0:M1; SEARCH m USING INDEX MessageTextIdIndex (target=? AND id=?)` |
+| Expiry candidates | `SCAN t USING COVERING INDEX sqlite_autoindex_MessageTarget_1; SEARCH m USING PRIMARY KEY (target=? AND time<?)` |
 | Foreign-key network lookup | `SEARCH MessageTarget USING COVERING INDEX sqlite_autoindex_MessageTarget_1 (network=? AND target=?)` |
 | Statistics (intentional count) | `SCAN MessageTarget USING COVERING INDEX sqlite_autoindex_MessageTarget_1` |
 
 The expiry plan scans target metadata and seeks bounded message-time ranges;
-it does not scan all fresh messages. The high-water plan may say SCAN while
-its descending LIMIT stops after one row, hence the separate VM measurement.
+it does not scan all fresh messages.

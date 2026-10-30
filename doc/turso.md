@@ -14,7 +14,8 @@ index live in the user's database. Tenant databases contain `TursoOwner`
 with the controller name and owner ID; they have no `User` table or login
 password hash. `Network.user` and `WebPushSubscription.user` reference
 `TursoOwner.user`. Account authentication and certificates use the
-controller. Local SQLite retains its combined account/data schema.
+controller. Local SQLite retains its combined account/data schema, with the
+same clustered `Message` table since v0.99.24.
 No local database file is needed for cloud storage.
 
 ## Configuration
@@ -121,6 +122,12 @@ without recreating the database. Turso delete protection must be disabled for
 user databases that should be removable through soju.
 Deletion validates the link and group again before calling the Platform API;
 it refuses to delete the controller or a database moved to another group.
+
+## Upgrading to v0.99.24
+
+User databases record schema 34 without changes to their tables: its
+migration gives local SQLite databases the clustered `Message` layout that
+user databases already have. Earlier binaries cannot reopen them.
 
 ## Upgrading to v0.99.23
 
@@ -268,8 +275,9 @@ rows instead of 600, and 200 text messages 600 instead of 800.
 
 Sparse FTS indexes text rows only, with `columnsize=0` because search does
 not use token-count ranking. Turso creates these structures without ANALYZE
-or VACUUM. Local SQLite keeps its upstream-compatible rowid table with
-`MessageTextIndex` and `MessageEventIndex`.
+or VACUUM. Since v0.99.24 (schema 34), local SQLite uses the same clustered
+table, plus a text-only `MessageTextIndex` on `(target, time)` for text-only
+history, see [doc/message-text-index.md](message-text-index.md#7-schema-34-clustered-local-messages).
 
 ## Schema versions and maintenance
 
