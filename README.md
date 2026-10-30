@@ -92,8 +92,8 @@ Behaviour changes:
 - `soju -version` prints the version, which is also logged on startup
 - With `message-expiry` and the `db` message store, the search index is
   optimized after expired messages are deleted, and the SQLite database is
-  vacuumed on startup and when a quarter of it or more is unused (upstream
-  leaves it to the admin)
+  vacuumed on startup, before users start, and when `message-expiry` is
+  changed by a reload (upstream leaves it to the admin)
 - The message table is clustered by target and time, so a client loading
   recent history reads a few consecutive pages per channel instead of rows
   scattered over the whole file (see [doc/message-text-index.md](doc/message-text-index.md#7-schema-34-clustered-local-messages)).

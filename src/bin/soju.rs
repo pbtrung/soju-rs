@@ -178,6 +178,13 @@ async fn run(args: Args) -> ExitCode {
     let srv = Server::new(db, logger.clone());
     srv.set_config(server_cfg);
 
+    // Users start before clients can connect to them, after maintenance
+    // which would hold the database while they run
+    srv.startup_maintenance().await;
+    if let Err(e) = srv.start() {
+        return fatal(&logger, e);
+    }
+
     let tls_state = raw.tls.as_ref().map(|_| TlsState {
         certs: certs.clone(),
     });
@@ -193,10 +200,6 @@ async fn run(args: Args) -> ExitCode {
             return fatal(&logger, e);
         }
         logf!(logger, "server listening on {l:?}");
-    }
-
-    if let Err(e) = srv.start() {
-        return fatal(&logger, e);
     }
 
     signals.wait(&srv, &args, &certs).await;

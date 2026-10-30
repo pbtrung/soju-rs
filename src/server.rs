@@ -25,14 +25,6 @@ use crate::{logf, msg, xirc};
 
 pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Message expiry vacuums the database when this fraction of it was free
-/// before deleting messages. With steady traffic, the space freed each day
-/// is reused the next day: vacuuming would only shrink the file for it to
-/// grow back, and rewriting the whole database blocks all users meanwhile.
-/// Free space only builds up when less is stored, e.g. after shortening
-/// message-expiry.
-const VACUUM_FREE_RATIO: f64 = 0.25;
-
 /// Message expiry deletes this many messages at a time, pausing for
 /// EXPIRY_CHUNK_PAUSE in between, so that users waiting on the database
 /// aren't blocked for the whole deletion.
@@ -128,8 +120,10 @@ impl Server {
 
     /// Applies a reloaded configuration. The message store can't be
     /// changed at run time: users keep the store they were started with, so
-    /// the setting in effect is kept until restart.
-    pub fn reload_config(&self, mut cfg: ServerConfig) {
+    /// the setting in effect is kept until restart. A changed message-expiry
+    /// applies right away, vacuuming local SQLite: users wait on the
+    /// database meanwhile.
+    pub fn reload_config(self: &Arc<Self>, mut cfg: ServerConfig) {
         let cur = self.config();
         if cfg.basic.msg_store != cur.basic.msg_store {
             logf!(
@@ -138,7 +132,12 @@ impl Server {
             );
             cfg.basic.msg_store = cur.basic.msg_store.clone();
         }
+        let expiry_changed = cfg.basic.message_expiry != cur.basic.message_expiry;
         self.set_config(cfg);
+        if expiry_changed {
+            let srv = self.clone();
+            tokio::spawn(async move { srv.run_message_expiry(true).await });
+        }
     }
 
     pub fn prefix(&self) -> Prefix {
@@ -192,31 +191,39 @@ impl Server {
             }
         });
 
-        // The first tick completes immediately: expired messages are deleted
-        // on startup, then daily. Only local SQLite is vacuumed on startup.
+        // Expired messages are deleted daily, the first time on startup,
+        // see startup_maintenance
         let srv = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(24 * 3600));
-            let mut startup = true;
+            ticker.tick().await;
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {}
                     _ = srv.stop.cancelled() => return,
                 }
-                // Deleting and vacuuming can take a while: keep it off the
-                // async runtime's workers
-                let s = srv.clone();
-                let force_vacuum = std::mem::replace(&mut startup, false);
-                match tokio::task::spawn_blocking(move || s.delete_expired_messages(force_vacuum))
-                    .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => logf!(srv.logger, "failed to delete expired messages: {e}"),
-                    Err(e) => logf!(srv.logger, "failed to delete expired messages: {e}"),
-                }
+                srv.run_message_expiry(false).await;
             }
         });
         Ok(())
+    }
+
+    /// Deletes expired messages and vacuums local SQLite, before start:
+    /// rewriting the whole database holds it for a while, and no user must
+    /// wait on it, nor the only runtime thread on a single CPU.
+    pub async fn startup_maintenance(self: &Arc<Self>) {
+        self.run_message_expiry(true).await;
+    }
+
+    async fn run_message_expiry(self: &Arc<Self>, vacuum: bool) {
+        // Deleting and vacuuming can take a while: keep it off the async
+        // runtime's workers
+        let s = self.clone();
+        match tokio::task::spawn_blocking(move || s.delete_expired_messages(vacuum)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => logf!(self.logger, "failed to delete expired messages: {e}"),
+            Err(e) => logf!(self.logger, "failed to delete expired messages: {e}"),
+        }
     }
 
     fn load_web_push_config(&self) -> Result<()> {
@@ -272,6 +279,10 @@ impl Server {
         map: &mut HashMap<String, UserHandle>,
         record: db::User,
     ) -> UserHandle {
+        if let Some(running) = map.get(&record.username) {
+            // e.g. created on authentication while start() listed users
+            return running.clone();
+        }
         logf!(
             self.logger,
             "starting bouncer for user {:?}",
@@ -470,9 +481,12 @@ impl Server {
         Ok(())
     }
 
-    /// Deletes expired messages. Local SQLite is vacuumed if force_vacuum is
-    /// set, or enough pages are free. Turso never receives file maintenance SQL.
-    pub(crate) fn delete_expired_messages(&self, force_vacuum: bool) -> Result<()> {
+    /// Deletes expired messages, and vacuums local SQLite if asked: on
+    /// startup, before users start, and when message-expiry changes, which
+    /// may leave much of the database free. Otherwise, the space freed each
+    /// day is reused by the next day's messages, and rewriting the database
+    /// would hold it meanwhile. Turso never receives file maintenance SQL.
+    pub(crate) fn delete_expired_messages(&self, vacuum: bool) -> Result<()> {
         let cfg = self.config();
         let expiry = cfg.basic.message_expiry;
         if expiry.is_zero() {
@@ -488,16 +502,6 @@ impl Server {
         match cfg.basic.msg_store.driver {
             MsgStoreDriver::Db | MsgStoreDriver::Turso => {
                 let local_sqlite = cfg.basic.msg_store.driver == MsgStoreDriver::Db;
-                // Measured before deleting: the space freed by the previous
-                // run has normally been reused since, what's still free is
-                // wasted
-                let free = if local_sqlite {
-                    self.db
-                        .free_page_ratio()
-                        .map_err(|e| anyhow!("failed to get db free space: {e}"))?
-                } else {
-                    0.0
-                };
                 let n = self
                     .db
                     .expire_messages(before, EXPIRY_CHUNK_SIZE, EXPIRY_CHUNK_PAUSE, &|| {
@@ -520,7 +524,11 @@ impl Server {
                         start.elapsed().as_secs_f64()
                     );
                 }
-                if local_sqlite && (force_vacuum || free >= VACUUM_FREE_RATIO) {
+                if local_sqlite && vacuum {
+                    let free = self
+                        .db
+                        .free_page_ratio()
+                        .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
                     let start = Instant::now();
                     self.db
                         .vacuum()
@@ -704,5 +712,58 @@ mod tests {
         let cfg = srv.config();
         assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
         assert_eq!(cfg.basic.title, "reloaded");
+    }
+
+    /// A reload changing message-expiry applies it right away, and a user
+    /// listed by start() and created meanwhile runs once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn expiry_reload_and_duplicate_users() {
+        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+        srv.set_config(ServerConfig::default());
+        let mut user = db::User::new("alice");
+        srv.db.store_user(&mut user).unwrap();
+        let mut net = db::Network::new("irc.example.org");
+        srv.db.store_network(user.id, &mut net).unwrap();
+        let mut old = msg!("PRIVMSG", "#a", "old");
+        old.tags.set(
+            "time",
+            xirc::format_server_time(Utc::now() - chrono::Duration::days(3)),
+        );
+        srv.db.store_messages(net.id, "#a", &[old]).unwrap();
+
+        srv.start().unwrap();
+        {
+            let mut map = srv.users.lock().unwrap();
+            let first = map.get("alice").unwrap().tx.clone();
+            let again = srv.add_user_locked(&mut map, user.clone());
+            assert!(again.tx.same_channel(&first));
+            assert_eq!(map.len(), 1);
+        }
+
+        let mut cfg = ServerConfig::default();
+        cfg.basic.message_expiry = Duration::from_secs(86400);
+        srv.reload_config(cfg);
+        let opts = db::MessageOptions {
+            limit: 10,
+            ..Default::default()
+        };
+        for _ in 0..100 {
+            if srv
+                .db
+                .list_messages(net.id, "#a", &opts)
+                .unwrap()
+                .is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            srv.db
+                .list_messages(net.id, "#a", &opts)
+                .unwrap()
+                .is_empty()
+        );
+        srv.shutdown().await;
     }
 }

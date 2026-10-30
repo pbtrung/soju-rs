@@ -280,11 +280,11 @@ The following directives are supported:
 	When using _db sqlite3_ and _message-store db_, the search index is
 	optimized after messages are deleted. The space freed by deleted
 	messages is reused for new ones. The database is vacuumed to reclaim
-	disk space on startup, and when a quarter of the database file or more
-	is still unused at the next run, e.g. after shortening the duration.
-	Vacuuming rewrites the database file, temporarily needing about its size
-	again in free disk space. All database access waits while it runs, so
-	clients and upstream connections may stall for the duration.
+	disk space on startup, before clients can connect, and when a
+	configuration reload changes the duration. Vacuuming rewrites the
+	database file, temporarily needing about its size again in free disk
+	space. During a reload's vacuum, all database access waits, so clients
+	and upstream connections may stall for the duration.
 
 	With _message-store turso_, startup and daily expiry delete messages from
 	each user database in turn and optimize the FTS index of those that
