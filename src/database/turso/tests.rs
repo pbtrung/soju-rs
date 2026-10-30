@@ -2219,3 +2219,56 @@ fn tenant_user_removal_and_sparse_search_resume_preserve_existing_data() {
     drop(db);
     assert!(cloud.database().is_ok());
 }
+
+/// Deleting a channel or subscription by ID, e.g. on PART, reaches its
+/// owner's database only: its route is remembered when it's listed or
+/// stored, also by a newly started server.
+#[test]
+fn delete_by_id_doesnt_search_every_tenant() {
+    let cloud = Cloud::new();
+    let db = cloud.database().unwrap();
+    let users: Vec<_> = (0..5).map(|i| user(&db, &format!("u{i}"))).collect();
+    let mut net = Network::new("ircs://irc.example.org");
+    db.store_network(users[0].id, &mut net).unwrap();
+    let mut channels = Vec::new();
+    for name in ["#a", "#b"] {
+        let mut ch = crate::database::Channel {
+            name: name.into(),
+            ..Default::default()
+        };
+        db.store_channel(net.id, &mut ch).unwrap();
+        channels.push(ch);
+    }
+    let mut sub = crate::database::WebPushSubscription {
+        endpoint: "https://push.example.org/1".into(),
+        ..Default::default()
+    };
+    db.store_web_push_subscription(users[0].id, net.id, &mut sub)
+        .unwrap();
+    let probes = |cloud: &Cloud| {
+        cloud
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|b| b.to_string().contains("SELECT id FROM"))
+            .count()
+    };
+
+    cloud.state.lock().unwrap().requests.clear();
+    db.delete_channel(channels[0].id).unwrap();
+    db.delete_web_push_subscription(sub.id).unwrap();
+    assert_eq!(probes(&cloud), 0);
+
+    // A restarted server learns routes as users start
+    let db = cloud.database().unwrap();
+    for u in &users {
+        for n in db.list_networks(u.id).unwrap() {
+            db.list_channels(n.id).unwrap();
+        }
+    }
+    cloud.state.lock().unwrap().requests.clear();
+    db.delete_channel(channels[1].id).unwrap();
+    assert_eq!(probes(&cloud), 0);
+}

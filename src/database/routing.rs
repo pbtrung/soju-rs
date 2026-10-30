@@ -52,8 +52,6 @@ account_methods! {
 
 tenant_methods! {
     network_db(id): fn delete_network(id: i64) -> ();
-    network_db(network_id): fn list_channels(network_id: i64) -> Vec<Channel>;
-    network_db(network_id): fn store_channel(network_id: i64, ch: &mut Channel) -> ();
     channel_db(id): fn delete_channel(id: i64) -> ();
     network_db(network_id): fn list_delivery_receipts(network_id: i64) -> Vec<DeliveryReceipt>;
     network_db(network_id): fn store_client_delivery_receipts(network_id: i64, client: &str, receipts: &mut [DeliveryReceipt]) -> ();
@@ -68,8 +66,6 @@ tenant_methods! {
     network_db(network_id): fn list_message_last_per_target(network_id: i64, options: &MessageOptions) -> Vec<MessageTargetLast>;
     network_db(network_id): fn list_messages(network_id: i64, name: &str, options: &MessageOptions) -> Vec<Message>;
     user_db(user_id): fn list_web_push_networks(user_id: i64) -> Vec<i64>;
-    user_db(user_id): fn list_web_push_subscriptions(user_id: i64, network_id: i64) -> Vec<WebPushSubscription>;
-    user_db(user_id): fn store_web_push_subscription(user_id: i64, network_id: i64, sub: &mut WebPushSubscription) -> ();
     subscription_db(id): fn delete_web_push_subscription(id: i64) -> ();
 }
 
@@ -164,10 +160,64 @@ impl Database {
         let networks = self.user_db(user_id)?.list_networks(user_id)?;
         if let Some(c) = &self.cloud {
             for network in &networks {
-                c.remember_network(user_id, network.id)?;
+                c.remember("Network", user_id, network.id)?;
             }
         }
         Ok(networks)
+    }
+
+    /// Remembers the owner of channels: deleting one by ID, e.g. on PART,
+    /// would otherwise search every Turso user database.
+    fn remember_channels(&self, network_id: i64, channels: &[Channel]) -> Result<()> {
+        if let Some(c) = &self.cloud
+            && let Some(user) = c.owner("Network", network_id)
+        {
+            for ch in channels {
+                c.remember("Channel", user, ch.id)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn list_channels(&self, network_id: i64) -> Result<Vec<Channel>> {
+        let channels = self.network_db(network_id)?.list_channels(network_id)?;
+        self.remember_channels(network_id, &channels)?;
+        Ok(channels)
+    }
+
+    pub fn store_channel(&self, network_id: i64, ch: &mut Channel) -> Result<()> {
+        self.network_db(network_id)?.store_channel(network_id, ch)?;
+        self.remember_channels(network_id, std::slice::from_ref(ch))
+    }
+
+    pub fn list_web_push_subscriptions(
+        &self,
+        user_id: i64,
+        network_id: i64,
+    ) -> Result<Vec<WebPushSubscription>> {
+        let subs = self
+            .user_db(user_id)?
+            .list_web_push_subscriptions(user_id, network_id)?;
+        if let Some(c) = &self.cloud {
+            for sub in &subs {
+                c.remember("WebPushSubscription", user_id, sub.id)?;
+            }
+        }
+        Ok(subs)
+    }
+
+    pub fn store_web_push_subscription(
+        &self,
+        user_id: i64,
+        network_id: i64,
+        sub: &mut WebPushSubscription,
+    ) -> Result<()> {
+        self.user_db(user_id)?
+            .store_web_push_subscription(user_id, network_id, sub)?;
+        if let Some(c) = &self.cloud {
+            c.remember("WebPushSubscription", user_id, sub.id)?;
+        }
+        Ok(())
     }
 
     pub fn store_network(&self, user_id: i64, network: &mut Network) -> Result<()> {
@@ -180,7 +230,7 @@ impl Database {
         }
         db.store_network(user_id, network)?;
         if let Some(c) = &self.cloud {
-            c.remember_network(user_id, network.id)?;
+            c.remember("Network", user_id, network.id)?;
         }
         Ok(())
     }

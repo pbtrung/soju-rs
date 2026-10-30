@@ -268,15 +268,22 @@ impl Turso {
         self.users.lock().unwrap().values().cloned().collect()
     }
 
-    pub fn remember_network(&self, user: i64, network: i64) -> Result<()> {
+    /// Caches the owner of a network, channel or subscription, so that
+    /// operations by its ID don't search every user database for it.
+    pub fn remember(&self, table: &'static str, user: i64, id: i64) -> Result<()> {
         let mut routes = self.routes.lock().unwrap();
-        if let Some(owner) = routes.get(&("Network", network))
+        if let Some(owner) = routes.get(&(table, id))
             && *owner != user
         {
-            bail!("duplicate Network ID across Turso user databases");
+            bail!("duplicate {table} ID across Turso user databases");
         }
-        routes.insert(("Network", network), user);
+        routes.insert((table, id), user);
         Ok(())
+    }
+
+    /// The owner of a cached network, channel or subscription.
+    pub fn owner(&self, table: &'static str, id: i64) -> Option<i64> {
+        self.routes.lock().unwrap().get(&(table, id)).copied()
     }
 
     /// IDs for networks, channels and subscriptions are random 63-bit row IDs
