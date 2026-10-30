@@ -149,25 +149,29 @@ impl PlainAuthenticator {
     ) -> Result<()> {
         match self {
             PlainAuthenticator::Internal => {
-                let db = db.clone();
-                let username = username.to_owned();
+                // Only hashing holds a CPU permit, not the database queries
+                let name = username.to_owned();
+                let Some(mut u) = crate::database::run(db, move |db| db.get_user(&name)).await?
+                else {
+                    return Err(invalid_credentials(anyhow!(
+                        "user not found: sql: no rows in result set"
+                    )));
+                };
+                let old = u.password.clone();
                 let password = password.to_owned();
-                crate::util::cpu_work(move || -> Result<()> {
-                    let Some(mut u) = db.get_user(&username)? else {
-                        return Err(invalid_credentials(anyhow!(
-                            "user not found: sql: no rows in result set"
-                        )));
-                    };
-                    let old = u.password.clone();
-                    let upgraded = u.check_password(&password).map_err(invalid_credentials)?;
-                    if upgraded {
-                        // Only the hash: the rest of the record may be
-                        // updated meanwhile by the user's event loop
-                        db.upgrade_user_password(u.id, &old, &u.password)?;
-                    }
-                    Ok(())
+                let (u, upgraded) = crate::util::cpu_work(move || {
+                    let upgraded = u.check_password(&password);
+                    (u, upgraded)
                 })
-                .await?
+                .await?;
+                if upgraded.map_err(invalid_credentials)? {
+                    // Only the hash: the rest of the record may be updated
+                    // meanwhile by the user's event loop
+                    let (id, new) = (u.id, u.password);
+                    crate::database::run(db, move |db| db.upgrade_user_password(id, &old, &new))
+                        .await?;
+                }
+                Ok(())
             }
             PlainAuthenticator::Http { url, client } => {
                 let req = client.post(url).header(

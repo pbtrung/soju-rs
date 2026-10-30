@@ -240,6 +240,8 @@ pub struct Registration {
     /// Whether the server of the requested new network was found reachable,
     /// see check_new_network.
     pub server_checked: bool,
+    /// Failed SASL attempts, see MAX_AUTH_FAILURES
+    pub auth_failures: u32,
 }
 
 pub struct DownstreamConn {

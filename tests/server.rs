@@ -600,6 +600,30 @@ async fn sasl_errors() {
         base64::engine::general_purpose::STANDARD.encode(creds)
     ));
     read_until(&mut dc, "903").await;
+
+    // Repeated wrong passwords close the connection
+    let mut dc = connect_downstream(&env.srv);
+    dc.send(msg!("CAP", "LS", "302"));
+    read_cap_ls(&mut dc).await;
+    dc.send(msg!("CAP", "REQ", "sasl"));
+    dc.expect("CAP").await;
+    let wrong = format!("\0{TEST_USERNAME}\0wrong");
+    for attempt in 1..=3 {
+        dc.send(msg!("AUTHENTICATE", "PLAIN"));
+        dc.expect("AUTHENTICATE").await;
+        dc.send(msg!(
+            "AUTHENTICATE",
+            base64::engine::general_purpose::STANDARD.encode(&wrong)
+        ));
+        dc.expect("904").await;
+        if attempt < 3 {
+            // Still open
+            dc.send(msg!("CAP", "LIST"));
+            dc.expect("CAP").await;
+        }
+    }
+    let m = dc.expect("ERROR").await;
+    assert_eq!(m.params[0], "Too many authentication failures");
     env.srv.shutdown().await;
 }
 

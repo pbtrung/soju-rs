@@ -5,6 +5,11 @@ use super::*;
 
 /// Reads and handles messages until the connection is registered. Returns
 /// an error (or Ok(false) when the client quit) if registration failed.
+/// Failed SASL attempts after which an unregistered connection is closed:
+/// each one costs a password hash, and the hashing queue is shared by
+/// everyone's logins.
+const MAX_AUTH_FAILURES: u32 = 3;
+
 pub async fn run_until_registered(
     dc: &mut DownstreamConn,
     reader: &mut ConnReader,
@@ -26,6 +31,11 @@ pub async fn run_until_registered(
         }
 
         let r = dc.registration.as_ref().unwrap();
+        if r.auth_failures >= MAX_AUTH_FAILURES {
+            let p = dc.srv.prefix();
+            dc.send_message(msg!("ERROR", "Too many authentication failures").with_prefix(p));
+            return Ok(false);
+        }
         if r.nick.is_empty() || r.username.is_empty() || r.negotiating_caps {
             continue;
         }
@@ -94,6 +104,7 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
             };
             match authenticate(dc, &credentials).await {
                 Err(e) => {
+                    dc.registration.as_mut().unwrap().auth_failures += 1;
                     logf!(
                         dc.logger,
                         "SASL {} authentication error for nick {:?}: {e}",
