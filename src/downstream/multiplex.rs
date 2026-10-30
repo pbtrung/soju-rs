@@ -49,18 +49,22 @@ pub fn route_message(u: &mut User, dc_id: u64, mut msg: Message) -> Option<(u64,
     if let Some(child) = child {
         return Some((child, msg));
     }
-    // Late messages for a network the client just detached are expected
-    if msg.command != "PING" && msg.command != "PONG" {
-        let dc = &mut u.downstreams[i];
-        let m = msg!(
-            "FAIL",
-            msg.command.clone(),
+    // Late messages for a network the client just detached are expected.
+    // The reply (an ACK for PING/PONG) carries the message's label.
+    let dc = &mut u.downstreams[i];
+    begin_message(dc, &msg);
+    let res = if msg.command == "PING" || msg.command == "PONG" {
+        Ok(())
+    } else {
+        Err(cmds::fail(&[
+            &msg.command,
             "NETWORK_NOT_ATTACHED",
-            tag,
-            "Network not attached"
-        );
-        dc.send_message(m.with_prefix(dc.srv.prefix()));
-    }
+            &tag,
+            "Network not attached",
+        ]))
+    };
+    // Only IRC errors: nothing to propagate
+    let _ = finish_message(dc, res);
     None
 }
 

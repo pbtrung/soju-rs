@@ -52,6 +52,7 @@ test_on_both_runtimes!(
     unread_targets,
     blocked_users,
     unread_replies_before_registration,
+    multiplex_not_attached_label,
     service_blocking_work,
     monitor_invalid_targets,
     multiplex,
@@ -1225,6 +1226,36 @@ async fn unread_replies_before_registration() {
         .expect("the connection wasn't closed");
     // Far less than the replies to all requests
     assert!(received < 5000 * 500, "received {received} bytes");
+    env.srv.shutdown().await;
+}
+
+/// Replies to messages for a network not attached keep their label.
+async fn multiplex_not_attached_label() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    register_upstream(&mut uc).await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(
+        &mut dc,
+        None,
+        "batch message-tags labeled-response soju.im/bouncer-networks soju.im/multiplex",
+    )
+    .await;
+    dc.send(
+        msg!("PRIVMSG", "#chan", "x")
+            .with_tag("soju.im/network", "12345")
+            .with_tag("label", "L1"),
+    );
+    let m = read_until(&mut dc, "FAIL").await;
+    assert_eq!(m.tags.get("label"), Some("L1"), "{m}");
+    assert_eq!(m.params[..2], ["PRIVMSG", "NETWORK_NOT_ATTACHED"]);
+    dc.send(
+        msg!("PING", "x")
+            .with_tag("soju.im/network", "12345")
+            .with_tag("label", "L2"),
+    );
+    let m = read_until(&mut dc, "ACK").await;
+    assert_eq!(m.tags.get("label"), Some("L2"), "{m}");
     env.srv.shutdown().await;
 }
 
