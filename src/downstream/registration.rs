@@ -10,6 +10,12 @@ use super::*;
 /// everyone's logins.
 const MAX_AUTH_FAILURES: u32 = 3;
 
+/// Output waiting to be sent above which an unregistered connection is
+/// closed: a peer sending commands without reading their replies (e.g.
+/// CAP LS, a few bytes for hundreds) would otherwise make the server hold
+/// up to MAX_QUEUED_BYTES per connection before even authenticating.
+const MAX_UNREGISTERED_QUEUED_BYTES: usize = 256 << 10;
+
 pub async fn run_until_registered(
     dc: &mut DownstreamConn,
     reader: &mut ConnReader,
@@ -27,6 +33,14 @@ pub async fn run_until_registered(
             bail!("failed to handle IRC command {msg_str:?}: {e}");
         }
         if dc.conn.is_closed() {
+            return Ok(false);
+        }
+        if dc.conn.queued_bytes() > MAX_UNREGISTERED_QUEUED_BYTES {
+            logf!(
+                dc.logger,
+                "closing connection: replies not read before registration"
+            );
+            dc.conn.close();
             return Ok(false);
         }
 

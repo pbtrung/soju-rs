@@ -470,6 +470,11 @@ impl Conn {
         self.shared.queued.load(Ordering::Relaxed)
     }
 
+    /// The accounted size of the messages waiting to be sent.
+    pub fn queued_bytes(&self) -> usize {
+        self.shared.queued_bytes.load(Ordering::Relaxed)
+    }
+
     /// Gracefully closes the connection, flushing pending messages first.
     pub fn shutdown(&self) {
         if self.view.is_some() {

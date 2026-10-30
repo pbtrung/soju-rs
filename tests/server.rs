@@ -51,6 +51,7 @@ test_on_both_runtimes!(
     chat_history_limit,
     unread_targets,
     blocked_users,
+    unread_replies_before_registration,
     service_blocking_work,
     monitor_invalid_targets,
     multiplex,
@@ -1183,6 +1184,47 @@ async fn blocked_users() {
     uc.send(msg!("PRIVMSG", nick, "back").with_prefix(Prefix::new("spammer")));
     let m = read_until(&mut dc, "PRIVMSG").await;
     assert_eq!(m.params[1], "back");
+    env.srv.shutdown().await;
+}
+
+/// A peer sending commands before registration without reading their
+/// replies is disconnected, rather than having them buffered.
+async fn unread_replies_before_registration() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let env = setup(db_store()).await;
+    let (a, mut b) = tokio::io::duplex(1 << 16);
+    let logger = Logger::new(false);
+    let (conn, reader) = Conn::new_stream(Box::new(a), logger.clone(), None);
+    let info = ConnInfo {
+        remote_addr: "127.0.0.1:1234".to_owned(),
+        ..Default::default()
+    };
+    tokio::spawn(soju::downstream::serve(
+        env.srv.clone(),
+        conn,
+        reader,
+        info,
+        logger,
+    ));
+    // Each request of a few bytes queues a much longer reply
+    let flood = "CAP LS 302\r\n".repeat(5000);
+    let (mut rd, mut wr) = tokio::io::split(&mut b);
+    let write = async {
+        // The server stops reading once it closes the connection
+        let _ = wr.write_all(flood.as_bytes()).await;
+    };
+    let wait_closed = async {
+        // Not reading until the server gave up, then draining to EOF
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut sink = Vec::new();
+        rd.read_to_end(&mut sink).await.unwrap();
+        sink.len()
+    };
+    let (_, received) = tokio::time::timeout(TIMEOUT, async { tokio::join!(write, wait_closed) })
+        .await
+        .expect("the connection wasn't closed");
+    // Far less than the replies to all requests
+    assert!(received < 5000 * 500, "received {received} bytes");
     env.srv.shutdown().await;
 }
 
