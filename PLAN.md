@@ -547,7 +547,7 @@ src/
              sasl.c sync.c util.c internal.h
   upstream/  upstream.c connect.c receive.c registration.c channels.c users.c
              commands.c
-  user/      user.c network.c channels.c delivered.c events.c upstream_conn.c
+  user/      user.c clients.c network.c channels.c delivered.c events.c upstream_conn.c
              webpush.c
   msgstore/  msgstore.c memory.c db.c bare.c turso.c
   service/   service.c auth.c channel.c duration.c network.c server.c user.c

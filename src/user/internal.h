@@ -106,3 +106,6 @@ void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg 
 		   struct user_packet *p);
 
 void user_initial_metadata(struct user *u, const struct user_client *dc, struct user_packet *p);
+
+// Shared by user/user.c and user/clients.c
+void user_free_multiline(void *data);
