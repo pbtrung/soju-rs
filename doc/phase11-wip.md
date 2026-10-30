@@ -1,38 +1,48 @@
-# Phase 11 work in progress
+# Phase 11 qualification
 
-Qualification was stopped at the user's request on 2026-10-29. This is a
-checkpoint, not a qualified release. The version is v0.99.0.
+Status on 2026-10-30, at the commit adding this file. The version is
+v0.99.0; the archives are built locally, no release has been published.
+The behavioral oracle is soju-rs v0.99.24 (tools/oracle.sh).
 
-Completed before the checkpoint:
+Passed:
 
-- Phase 10 process glue and llhttp integration are committed separately.
-- All 165 mapped Rust unit tests and 17 integration scenarios are ported.
-- GCC/Clang debug, ASan and TSan, plus Clang MSan passed before the latest
-  protocol changes. The ASan suite subsequently passed 401 tests, before
-  the final metadata batching and curl cleanup changes.
-- Alpine GCC/Clang debug and release suites passed before those final changes.
-- Ten-minute real-server soaks used two Ergo instances, 200 users and 2,000
-  clients. C ran 604 seconds with 299 reconnects, peak RSS 160,556 KiB and
-  zero measured RSS slope; Rust ran 601 seconds with 378 reconnects and
-  peak RSS 591,312 KiB. Both shut down successfully. These separate runs
-  do not establish a controlled throughput comparison.
-- Focused three-way registration, registration-error and capability
-  negotiation scenarios matched Rust after protocol corrections.
+- Three-way differential harness (tests/compat/run-diff.sh): all 25
+  scenarios match the Rust oracle. The bouncerserv scenario waits for
+  BouncerServ's background work (password hashing, key generation, user
+  deletion), whose timing made the oracle's own output vary.
+- IRCv3 spec checks (tests/compat/ircv3spec.py): 28/32 for C, the same
+  as Rust. The same four CAP checks fail on both: they encode
+  expectations soju itself doesn't follow.
+- Transport plumbing (tests/compat/plumbing.py c): 20/20, including TLS
+  client certificates and CLIENTCERT.
+- Compiler/sanitizer matrix (tools/ci.sh): GCC and Clang debug, ASan,
+  TSan, release and UBSan-trap; Clang MSan and the fuzz build.
+- Native Docker toolchains (tools/docker-test.sh): GNU gcc-valgrind,
+  clang-valgrind, gcc-debug and gcc-release; musl gcc-debug, clang-debug
+  and gcc-release. Valgrind isn't installed on the host, its presets only
+  run in the GNU image. The two suppressions in tests/valgrind.supp link
+  curl/curl#22363.
+- clang-tidy on the files changed in phase 11.
+- Ten-minute soak (tools/soak.sh, gcc-release) with two Ergo servers,
+  200 users and 2,000 clients: 601 s, 556 reconnects, peak RSS 189,300
+  KiB with a zero RSS slope, clean shutdown.
+- Release archives (scripts/build-release.sh), each built and tested in
+  its native image:
+  - soju-v0.99.0-x86_64-linux-gnu.tar.gz
+    `fac26c66e46365660a29e45f3061fd2b95dd9057de912df3c373e11c97d82c13`
+  - soju-v0.99.0-x86_64-linux-musl.tar.gz
+    `6b2695a13661eeb6d5afe90b5a0d06f3556aeb4816d5c95cb5280c34d7a53d51`
 
-Unfinished checks:
+Not passed or not run:
 
-- Full three-way differential, IRCv3, transport and gamja qualification.
-  The last differential run still reported metadata differences; subsequent
-  batching and blocked-source fixes have not been requalified.
-- GNU Valgrind reported reachable OpenSSL/ngtcp2 allocations. Explicit
-  curl cleanup before OpenSSL cleanup is included but not yet verified.
-  Earlier Alpine Valgrind failures involved test deadlines; timeout scaling
-  is included. No suppressions were added.
-- Re-run the complete compiler/sanitizer/musl matrix and clang-tidy after
-  all checkpoint changes. Final edits were interrupted without full checks.
-- Complete release archives, controlled performance comparison and static
-  analysis. The release script is WIP; no release has been published.
+- gamja end-to-end (tests/compat/run-gamja.sh): the first test fails the
+  same way against C and Rust: the stock gamja checkout the suite uses
+  (build/compat/gamja) doesn't expose the "Add network" dialog by the role
+  the test looks for. It doesn't tell C and Rust apart; the test needs
+  updating, or the suite pointing at the project's gamja.
+- A controlled performance comparison with Rust: the soak figures above
+  and the earlier Rust soak (601 s, peak RSS 591,312 KiB) are separate
+  runs, not a controlled throughput comparison.
 
-The requested soak budget is **10 minutes**, replacing the old 24-hour
-release soak requirement. Longer fuzz budgets, heap attribution and other
-unrun gates must not be reported as complete.
+The soak budget is 10 minutes, replacing the old 24-hour release soak.
+Longer fuzz budgets and heap attribution were not run.
