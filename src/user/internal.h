@@ -98,6 +98,10 @@ void user_load_retry_stop(struct user *u);
 void user_auto_save_sasl_plain(struct user *u, struct user_network *net, const char *username,
 			       const char *password);
 
+// CLIENTCERT (user/clientcert.c)
+void user_clientcert(struct user *u, struct user_client *dc, const struct irc_msg *msg,
+		     struct user_packet *p);
+
 void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		   struct user_packet *p);
 

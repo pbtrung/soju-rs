@@ -1128,6 +1128,8 @@ void user_handle_command(struct user *u, struct user_client *dc, struct irc_msg 
 		user_packet_add_take(p, IRC_MSG("461", "*", cmd, "Not enough parameters"));
 	} else if (cstr_eq(cmd, "PRIVMSG") || cstr_eq(cmd, "NOTICE") || cstr_eq(cmd, "TAGMSG")) {
 		privmsg(u, dc, msg, p);
+	} else if (cstr_eq(cmd, "CLIENTCERT")) {
+		user_clientcert(u, dc, msg, p);
 	} else if (cstr_eq(cmd, "AUTHENTICATE") && net != nullptr) {
 		authenticate(dc, net, msg, p);
 	} else if (uc != nullptr) {
