@@ -121,7 +121,7 @@ Files over the limit today (2026-10-30):
 | File | Lines | Split into (~lines) |
 |------|------:|---------------------|
 | ~~`src/downstream/downstream.c`~~ | 2026 | **Done.** Its header says it combines four Rust modules (`mod.rs`, `send.rs`, `caps.rs`, `registration.rs`); `handle_cap` 103 lines. New layout (PLAN.md section 4): `downstream.c` lifecycle, loop table, cap tables; `receive.c` receive dispatch and pending input while busy; `send.c` sending, batches, labeled-response; `caps.c` CAP LS/LIST/REQ with `handle_cap` split per subcommand, ISUPPORT; `util.c` username unmarshalling, NickServ credentials, network attrs; `registration.c` PASS/USER/NICK, `try_register`; SASL and AUTHENTICATE move into `sasl.c`; pre-registration METADATA SUB into `sync.c`. Private declarations go in a new `downstream/internal.h` |
-| `src/user/commands.c` | 1183 | Mirrors soju-rs `downstream/cmds/`: `commands.c` dispatch and BOUNCER (`user_handle_command` 204 lines becomes a command table); `channel_cmds.c` JOIN/PART/MODE/TOPIC/NAMES (basic.rs); `query_cmds.c` WHO/WHOIS/MONITOR and the WHO cache (query.rs); `privmsg.c` PRIVMSG/NOTICE/TAGMSG and broadcasts (privmsg.rs); `account_cmds.c` NICK/SETNAME/AUTHENTICATE (account.rs) |
+| ~~`src/user/commands.c`~~ | 1183 | **Done** (`commands.c`, `cmd_util.c`, `cmd_channel.c`, `cmd_query.c`, `cmd_account.c`, `cmd_privmsg.c`, private `cmds.h`). Mirrors soju-rs `downstream/cmds/`: `commands.c` dispatch and BOUNCER (`user_handle_command` 204 lines becomes a command table); `channel_cmds.c` JOIN/PART/MODE/TOPIC/NAMES (basic.rs); `query_cmds.c` WHO/WHOIS/MONITOR and the WHO cache (query.rs); `privmsg.c` PRIVMSG/NOTICE/TAGMSG and broadcasts (privmsg.rs); `account_cmds.c` NICK/SETNAME/AUTHENTICATE (account.rs) |
 | `src/net/conn.c` | 938 | `conn.c` refcount, close/fail, setup timeout, views; `conn_write.c` write queue, rate timer, `flush_writes`, shutdown, `conn_format_line`; `conn_read.c` `conn_parse_line`, `process_lines`, TLS input, `on_read` |
 | `src/user/user.c` | 828 | `attach.c`: `attach_run` (101 lines, split into network selection, view creation and replay steps), `client_snapshot`, `register_done`; `user.c`: lifecycle, `start_run`, stop and event queue |
 | `src/db/hrana.c` | 808 | `hrana.c` protocol and value encoding; `hrana_pipeline.c` request pipelining (`pipeline` 124 lines) |
@@ -318,7 +318,7 @@ benchmark shows a cliff.
 |---|------|------------|------|--------|
 | 1 | Phase A tooling + baseline | — | S | done; fuzzing deferred |
 | 2 | Split `downstream.c` | 1 | M | done: 9 files, largest 424 lines |
-| 3 | Split `user/commands.c`; audit of client commands | 1 | M | |
+| 3 | Split `user/commands.c`; audit of client commands | 1 | M | split done: 6 files, largest 320 lines; audit open |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |
 | 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | |
 | 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | |
