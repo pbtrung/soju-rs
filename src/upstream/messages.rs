@@ -126,12 +126,19 @@ pub(super) fn handle_message(
                 .and_then(xirc::parse_server_time)
                 .unwrap_or_else(Utc::now);
             // highlight is only computed for saved channels
+            // A private PRIVMSG, which clients show in its own conversation,
+            // unlike NOTICEs (e.g. from services) and CTCP requests or replies
+            let private_mention = direct_message
+                && msg.command == "PRIVMSG"
+                && (!msg.param(1).starts_with('\u{1}') || msg.param(1).starts_with("\u{1}ACTION"));
             let mention = is_text
                 && !self_msg
                 && !blocked
-                && (direct_message
+                && (private_mention
                     || highlight
-                    || (ch.is_none() && u.networks[ni].is_highlight(&u.record, msg)));
+                    || (ch.is_none()
+                        && !direct_message
+                        && u.networks[ni].is_highlight(&u.record, msg)));
             if mention && u.has_chathistory_store() {
                 // Clients learn which conversations mention them from
                 // CHATHISTORY TARGETS, without loading their history

@@ -23,11 +23,14 @@ two tags without values:
     @soju.im/unread;soju.im/mention CHATHISTORY TARGETS <target> <timestamp>
 
 - `soju.im/unread`: the target has a `PRIVMSG` or `NOTICE` after its read
-  marker, or has no read marker. Events (joins, parts…) don't count, with or
+  marker, or has no read marker. A client may still not show a target
+  holding only private notices, as with any notice. Events (joins, parts…) don't count, with or
   without `draft/event-playback`.
 - `soju.im/mention`: a message after the read marker mentions the user. In a
   channel, that's a message containing the user's nick; in a private
-  conversation, any message from the other user. The user's own messages and
+  conversation, any `PRIVMSG` from the other user (not `NOTICE`s, e.g. from
+  services, nor CTCP requests and replies other than `ACTION`), since a
+  client shows notices elsewhere. The user's own messages and
   messages from blocked users (the `blocked` target metadata, see
   `draft/metadata-2`) don't count. Muted
   targets are tagged too: whether a mention in one should notify is up to the
@@ -47,11 +50,13 @@ message reads it.
 
 ## Server
 
-The server keeps, for each target, the time of the latest message mentioning
-the user (`MessageTarget.highlight`, schema 35). It is written only when such
-a message arrives, never when a target is read: comparing the times with the
-read marker (`ReadReceipt`) gives both tags. Listing targets reads two index
-entries and the read marker per target, no message rows.
+The server keeps, for each conversation, the time of the latest message
+mentioning the user, in the `TargetHighlight` table (schema 35), keyed by
+network and target name. It is written only when such a message arrives,
+never when a target is read: comparing the times with the read marker
+(`ReadReceipt`) gives both tags. Listing targets reads the latest text time,
+the mention time and the read marker of each target, by index, and no
+message rows.
 
 The user's own messages after the read marker make a target unread: clients
 which send messages should move the read marker, as gamja does when the

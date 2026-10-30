@@ -777,39 +777,55 @@ fn target_unread_and_mentions() {
     db.store_network(u.id, &mut n).unwrap();
     let t = |s: &str| xirc::parse_server_time(s).unwrap();
     let at = |s: &str| msg!("PRIVMSG", "#a", "hi").with_tag("time", s);
+    // A mention may be recorded before its message is stored (Turso
+    // stores messages in the background): it doesn't create the target
+    db.store_message_target_highlight(n.id, "bob", t("2024-01-01T00:00:03.000Z"))
+        .unwrap();
     db.store_messages(n.id, "#a", &[at("2024-01-01T00:00:01.000Z")])
         .unwrap();
     db.store_messages(n.id, "#b", &[at("2024-01-01T00:00:02.000Z")])
         .unwrap();
-    // A mention of a target without messages creates it
-    db.store_message_target_highlight(n.id, "bob", t("2024-01-01T00:00:03.000Z"))
-        .unwrap();
+    db.store_messages(
+        n.id,
+        "#events",
+        &[msg!("JOIN", "#events").with_tag("time", "2024-01-01T00:00:02.000Z")],
+    )
+    .unwrap();
     db.store_message_target_highlight(n.id, "#a", t("2024-01-01T00:00:01.000Z"))
         .unwrap();
     // Only a later mention moves it
     db.store_message_target_highlight(n.id, "#a", t("2023-01-01T00:00:00.000Z"))
         .unwrap();
+    db.store_messages(n.id, "bob", &[at("2024-01-01T00:00:03.000Z")])
+        .unwrap();
 
-    let state = |db: &Database| {
+    let state = |db: &Database, events: bool| {
         let opts = MessageOptions {
             limit: 10,
+            events,
             ..Default::default()
         };
-        db.list_message_last_per_target(n.id, &opts)
+        let mut l = db
+            .list_message_last_per_target(n.id, &opts)
             .unwrap()
             .into_iter()
             .map(|t| (t.name.clone(), t.unread(), t.mention()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        l.sort();
+        l
     };
-    // bob has no text message: the TARGETS reply leaves it out
-    assert_eq!(
-        state(&db),
-        [
-            ("bob".to_owned(), false, true),
-            ("#a".to_owned(), true, true),
-            ("#b".to_owned(), true, false),
-        ]
-    );
+    // Events don't make a target unread, with or without event playback
+    for events in [false, true] {
+        assert_eq!(
+            state(&db, events),
+            [
+                ("#a".to_owned(), true, true),
+                ("#b".to_owned(), true, false),
+                ("#events".to_owned(), false, false),
+                ("bob".to_owned(), true, true),
+            ]
+        );
+    }
 
     for (target, time) in [
         ("#a", "2024-01-01T00:00:01.000Z"),
@@ -826,13 +842,22 @@ fn target_unread_and_mentions() {
         .unwrap();
     }
     assert_eq!(
-        state(&db),
+        state(&db, false),
         [
-            ("bob".to_owned(), false, true),
             ("#a".to_owned(), false, false),
             ("#b".to_owned(), true, false),
+            ("#events".to_owned(), false, false),
+            ("bob".to_owned(), true, true),
         ]
     );
+
+    // Deleting the network deletes its mentions
+    db.delete_network(n.id).unwrap();
+    let left: i64 = db
+        .conn()
+        .query_row("SELECT count(*) FROM TargetHighlight", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, 0);
 }
 
 #[test]

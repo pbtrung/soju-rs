@@ -138,9 +138,19 @@ CREATE TABLE MessageTarget (
 	pinned INTEGER NOT NULL DEFAULT 0,
 	muted INTEGER NOT NULL DEFAULT 0,
 	blocked INTEGER NOT NULL DEFAULT 0,
-	highlight TEXT,
 	FOREIGN KEY(network) REFERENCES Network(id),
 	UNIQUE(network, target)
 );
 
 CREATE INDEX MessageTarget_flags_index ON MessageTarget(network) WHERE pinned OR muted OR blocked;
+
+-- The time of the latest message mentioning the user in each conversation,
+-- see doc/unread.md. Keyed by name: unlike MessageTarget, a row never needs
+-- an ID before the conversation's messages are stored.
+CREATE TABLE TargetHighlight (
+	network INTEGER NOT NULL,
+	target TEXT NOT NULL,
+	time TEXT NOT NULL,
+	PRIMARY KEY(network, target),
+	FOREIGN KEY(network) REFERENCES Network(id)
+) WITHOUT ROWID;

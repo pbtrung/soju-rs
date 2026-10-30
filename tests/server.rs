@@ -1053,8 +1053,17 @@ async fn unread_targets() {
     uc.send(msg!("PRIVMSG", "#quiet", "hello").with_prefix(bob.clone()));
     uc.send(msg!("PRIVMSG", "#mention", format!("hi {nick}")).with_prefix(bob.clone()));
     uc.send(msg!("PRIVMSG", nick.clone(), "private").with_prefix(bob.clone()));
-    // Our own messages don't mention us
+    // Our own messages don't mention us, nor private notices and CTCP
     uc.send(msg!("PRIVMSG", "#quiet", format!("I am {nick}")).with_prefix(us.clone()));
+    uc.send(
+        msg!(
+            "NOTICE",
+            nick.clone(),
+            format!("{nick}: you are identified")
+        )
+        .with_prefix(Prefix::new("chanserv")),
+    );
+    uc.send(msg!("PRIVMSG", nick.clone(), "\u{1}VERSION\u{1}").with_prefix(Prefix::new("carol")));
     uc.roundtrip().await;
 
     let mut dc = connect_downstream(&env.srv);
@@ -1079,6 +1088,8 @@ async fn unread_targets() {
             ("#mention".to_owned(), true, true),
             ("#quiet".to_owned(), true, false),
             ("bob".to_owned(), true, true),
+            ("carol".to_owned(), true, false),
+            ("chanserv".to_owned(), true, false),
         ]
     );
 
@@ -1097,6 +1108,8 @@ async fn unread_targets() {
             ("#mention".to_owned(), false, false),
             ("#quiet".to_owned(), true, false),
             ("bob".to_owned(), false, false),
+            ("carol".to_owned(), true, false),
+            ("chanserv".to_owned(), true, false),
         ]
     );
 

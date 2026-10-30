@@ -183,6 +183,11 @@ impl Database {
             [id],
         )?;
         tx.execute(
+            "DELETE FROM TargetHighlight
+            WHERE network IN (SELECT id FROM Network WHERE user = ?)",
+            [id],
+        )?;
+        tx.execute(
             "DELETE FROM ReadReceipt
             WHERE id IN (
                 SELECT ReadReceipt.id

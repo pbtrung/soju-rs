@@ -115,10 +115,10 @@ impl Database {
         time: DateTime<Utc>,
     ) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO MessageTarget(network, target, highlight)
+            "INSERT INTO TargetHighlight(network, target, time)
             VALUES (:network, :target, :time)
-            ON CONFLICT(network, target) DO UPDATE SET highlight = excluded.highlight
-            WHERE highlight IS NULL OR highlight < excluded.highlight",
+            ON CONFLICT(network, target) DO UPDATE SET time = excluded.time
+            WHERE time < excluded.time",
             named_params! {
                 ":network": network_id,
                 ":target": target,
@@ -205,12 +205,15 @@ impl Database {
                 text,
             )
         } else {
+            // latest is the latest text message
             (text, "NULL")
         };
 
         // Seeks only: the read marker by its unique (network, target) key
         let mut query = format!(
-            "SELECT target, ({inner}) latest, ({latest_text}) latest_text, highlight,
+            "SELECT target, ({inner}) latest, ({latest_text}) latest_text,
+                (SELECT time FROM TargetHighlight
+                    WHERE network = :network AND target = MessageTarget.target) highlight,
                 (SELECT timestamp FROM ReadReceipt
                     WHERE network = :network AND target = MessageTarget.target) read
             FROM MessageTarget
@@ -256,10 +259,15 @@ impl Database {
         let mut l = Vec::new();
         for row in rows {
             let (name, latest, latest_text, highlight, read) = row?;
+            let latest_message = time_from_sql(latest)?;
             l.push(MessageTargetLast {
                 name,
-                latest_message: time_from_sql(latest)?,
-                latest_text: time_from_sql(latest_text)?,
+                latest_message,
+                latest_text: if options.events {
+                    time_from_sql(latest_text)?
+                } else {
+                    latest_message
+                },
                 highlight: time_from_sql(highlight)?,
                 read: time_from_sql(read)?,
             });

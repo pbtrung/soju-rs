@@ -269,10 +269,20 @@ pub const MIGRATIONS: &[&str] = &[
     TARGET_HIGHLIGHT,
 ];
 
-/// The time of the latest message mentioning the user, or of the latest
-/// private message from someone else: with the read marker, it tells
-/// clients which conversations have mentions without loading them.
-pub const TARGET_HIGHLIGHT: &str = "ALTER TABLE MessageTarget ADD COLUMN highlight TEXT";
+/// The time of the latest message mentioning the user in each conversation:
+/// with the read marker, it tells clients which conversations have mentions
+/// without loading them. Keyed by name rather than MessageTarget ID: Turso's
+/// background writer creates targets with IDs it picks, which a target
+/// created meanwhile for a mention would make it reference wrongly.
+pub const TARGET_HIGHLIGHT: &str = "
+    CREATE TABLE TargetHighlight (
+        network INTEGER NOT NULL,
+        target TEXT NOT NULL,
+        time TEXT NOT NULL,
+        PRIMARY KEY(network, target),
+        FOREIGN KEY(network) REFERENCES Network(id)
+    ) WITHOUT ROWID;
+";
 
 /// The migration clustering the local Message table. Turso tenants skip it:
 /// sqlite::turso::rebuild_turso_messages clusters them in resumable chunks.

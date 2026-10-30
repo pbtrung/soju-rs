@@ -123,6 +123,7 @@ impl Database {
         tx.execute("DELETE FROM WebPushSubscription WHERE network = ?", [id])?;
         tx.execute("DELETE FROM DeliveryReceipt WHERE network = ?", [id])?;
         tx.execute("DELETE FROM ReadReceipt WHERE network = ?", [id])?;
+        tx.execute("DELETE FROM TargetHighlight WHERE network = ?", [id])?;
         tx.execute("DELETE FROM Channel WHERE network = ?", [id])?;
         tx.execute("DELETE FROM Network WHERE id = ?", [id])?;
         tx.commit()?;
