@@ -905,12 +905,14 @@ static void test_message_text_index_query_plans(void **state) {
 		static const struct {
 			const char *sql, *plan;
 		} queries[] = {
-			{"SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex WHERE "
+			{"SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex "
+			 "WHERE "
 			 "target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) "
 			 "latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
 			 "MessageTextIndex"},
 			{"SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id "
-			 "ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER "
+			 "ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 "
+			 "ORDER "
 			 "BY latest DESC LIMIT 10",
 			 "PRIMARY KEY"},
 			{"SELECT m.raw FROM Message AS m INDEXED BY MessageTextIndex WHERE "
@@ -918,17 +920,23 @@ static void test_message_text_index_query_plans(void **state) {
 			 "target='#channel1') AND m.text IS NOT NULL ORDER BY time DESC, id DESC "
 			 "LIMIT 5",
 			 "MessageTextIndex"},
-			{"SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM MessageTarget "
-			 "WHERE network=1 AND target='#channel1') ORDER BY time DESC, id DESC LIMIT 5",
+			{"SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM "
+			 "MessageTarget "
+			 "WHERE network=1 AND target='#channel1') ORDER BY time DESC, id DESC "
+			 "LIMIT 5",
 			 "PRIMARY KEY"},
-			{"SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC "
+			{"SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id "
+			 "DESC "
 			 "LIMIT 1",
 			 "MessageTextIdIndex"},
-			{"SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN (SELECT "
-			 "time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) AND "
+			{"SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN "
+			 "(SELECT "
+			 "time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) "
+			 "AND "
 			 "m.text IS NOT NULL ORDER BY time ASC, id ASC LIMIT 5",
 			 "MessageTextIdIndex"},
-			{"SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m ON "
+			{"SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m "
+			 "ON "
 			 "m.target = t.id WHERE m.time < '2024' LIMIT 10",
 			 "PRIMARY KEY (target=? AND time<?)"},
 		};
@@ -952,10 +960,123 @@ static void test_message_text_index_query_plans(void **state) {
 			// lists their latest times.
 			if (sorted && !strstr(queries[q].sql, "latest") &&
 			    !strstr(queries[q].sql, " IN (")) {
-				fail_msg("unexpected sort (analyze=%d): %s", analyze, queries[q].sql);
+				fail_msg("unexpected sort (analyze=%d): %s", analyze,
+					 queries[q].sql);
 			}
 		}
 	}
+	db_close(db);
+}
+
+// "<name> <unread> <mention>,..." in name order
+static char *target_states(struct db *db, int64_t net, bool events) {
+	struct db_message_options o = {.limit = 10, .events = events};
+	db_target_last_vec v = {0};
+	T(db_list_message_last_per_target, db, net, &o, &v);
+	struct strbuf sb = STRBUF_INIT;
+	// Few targets: a selection by name
+	for (size_t n = 0; n < v.len; n++) {
+		size_t min = n;
+		for (size_t i = n + 1; i < v.len; i++) {
+			if (strcmp(v.data[i].name, v.data[min].name) < 0) {
+				min = i;
+			}
+		}
+		struct db_target_last t = v.data[min];
+		v.data[min] = v.data[n];
+		v.data[n] = t;
+		strbuf_printf(&sb, "%s%s %d %d", n > 0 ? "," : "", t.name,
+			      db_target_last_unread(&t), db_target_last_mention(&t));
+	}
+	db_target_last_vec_free(&v);
+	return strbuf_take(&sb);
+}
+
+static void test_target_unread_and_mentions(void **state) {
+	(void)state;
+	struct db *db = open_db();
+	struct db_user u;
+	store_user(db, &u, "alice");
+	struct db_network n;
+	store_network(db, u.id, &n, "irc.example.org");
+	// A mention may be recorded before its message is stored (Turso stores
+	// them in the background): it doesn't create the target
+	T(db_store_message_target_highlight, db, n.id, "bob", at("2024-01-01T00:00:03.000Z").t);
+	static const struct {
+		const char *target, *line, *time;
+	} msgs[] = {
+		{"#a", "PRIVMSG #a hi", "2024-01-01T00:00:01.000Z"},
+		{"#b", "PRIVMSG #b hi", "2024-01-01T00:00:02.000Z"},
+		{"#events", "JOIN #events", "2024-01-01T00:00:02.000Z"},
+	};
+	for (size_t i = 0; i < sizeof(msgs) / sizeof(msgs[0]); i++) {
+		struct irc_msg *m = msg_at(msgs[i].line, msgs[i].time);
+		i64vec ids = {0};
+		store_msgs(db, n.id, msgs[i].target, &m, 1, &ids);
+		vec_free(&ids);
+		irc_msg_free(m);
+	}
+	T(db_store_message_target_highlight, db, n.id, "#a", at("2024-01-01T00:00:01.000Z").t);
+	// Only a later mention moves it
+	T(db_store_message_target_highlight, db, n.id, "#a", at("2023-01-01T00:00:00.000Z").t);
+	struct irc_msg *m = msg_at("PRIVMSG alice hi", "2024-01-01T00:00:03.000Z");
+	i64vec ids = {0};
+	store_msgs(db, n.id, "bob", &m, 1, &ids);
+	vec_free(&ids);
+	irc_msg_free(m);
+
+	// Events don't make a target unread, with or without event playback
+	for (int events = 0; events < 2; events++) {
+		AUTOFREE char *got = target_states(db, n.id, events);
+		assert_string_equal(got, "#a 1 1,#b 1 0,#events 0 0,bob 1 1");
+	}
+
+	static const struct {
+		const char *target, *time;
+	} marks[] = {{"#a", "2024-01-01T00:00:01.000Z"}, {"#b", "2024-01-01T00:00:01.500Z"}};
+	for (size_t i = 0; i < 2; i++) {
+		struct db_read_receipt r;
+		db_read_receipt_init(&r);
+		xfree(r.target);
+		r.target = xstrdup(marks[i].target);
+		r.timestamp = at(marks[i].time);
+		T(db_store_read_receipt, db, n.id, &r);
+		db_read_receipt_free(&r);
+	}
+	AUTOFREE char *got = target_states(db, n.id, false);
+	assert_string_equal(got, "#a 0 0,#b 1 0,#events 0 0,bob 1 1");
+
+	// Deleting the network deletes its mentions
+	T(db_delete_network, db, n.id);
+	assert_int_equal(raw_i64(db_handle(db), "SELECT count(*) FROM TargetHighlight"), 0);
+	db_network_free(&n);
+	db_user_free(&u);
+	db_close(db);
+}
+
+static void test_flagging_an_existing_target(void **state) {
+	(void)state;
+	struct db *db = open_db();
+	struct db_user u;
+	store_user(db, &u, "alice");
+	struct db_network n;
+	store_network(db, u.id, &n, "irc.example.org");
+	// Storing messages creates the target, unknown to the caller
+	struct irc_msg *m = msg_at(":bob PRIVMSG alice spam", nullptr);
+	i64vec ids = {0};
+	store_msgs(db, n.id, "bob", &m, 1, &ids);
+	vec_free(&ids);
+	irc_msg_free(m);
+	struct db_message_target mt = {.target = xstrdup("bob"), .blocked = true};
+	T(db_store_message_target, db, n.id, &mt);
+	struct db_message_target stored;
+	T(db_get_message_target, db, n.id, "bob", &stored);
+	assert_int_equal(stored.id, mt.id);
+	assert_true(stored.blocked);
+	db_message_target_free(&stored);
+	db_message_target_free(&mt);
+	db_network_free(&n);
+	db_user_free(&u);
 	db_close(db);
 }
 
@@ -1194,6 +1315,8 @@ T_MAIN(cmocka_unit_test(test_actor_ids_not_reused), cmocka_unit_test(test_users)
        cmocka_unit_test(test_receipts_targets_webpush_certs), cmocka_unit_test(test_fts_quote),
        cmocka_unit_test(test_migrations), cmocka_unit_test(test_message_text_index_migration),
        cmocka_unit_test(test_message_text_index_query_plans),
+       cmocka_unit_test(test_target_unread_and_mentions),
+       cmocka_unit_test(test_flagging_an_existing_target),
        cmocka_unit_test(test_newer_schema_rejected),
        cmocka_unit_test(test_unchanged_records_and_receipts_do_not_write),
        cmocka_unit_test(test_sparse_fts_preserves_updates_and_event_history_ordering),

@@ -356,6 +356,135 @@ static void test_chat_history_limit(void **state) {
 	fixture_finish(&e);
 }
 
+static int cstr_cmp(const void *a, const void *b) {
+	return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+// The targets of CHATHISTORY TARGETS, each "<name> <unread> <mention>"
+static char *unread_targets(struct test_peer *dc) {
+	peer_send(dc, "CHATHISTORY TARGETS timestamp=2000-01-01T00:00:00.000Z "
+		      "timestamp=2100-01-01T00:00:00.000Z 1000");
+	irc_msg_vec replies = {0};
+	peer_roundtrip(dc, &replies);
+	strvec lines = {0};
+	for (size_t i = 0; i < replies.len; i++) {
+		struct irc_msg *m = replies.data[i];
+		if (!cstr_eq(m->command, "CHATHISTORY")) {
+			continue;
+		}
+		strvec_push_take(&lines,
+				 xasprintf("%s %d %d", irc_msg_param(m, 1),
+					   irc_tags_get(&m->tags, "soju.im/unread") != nullptr,
+					   irc_tags_get(&m->tags, "soju.im/mention") != nullptr));
+	}
+	irc_msg_vec_free(&replies);
+	if (lines.len > 1) {
+		qsort(lines.data, lines.len, sizeof(lines.data[0]), cstr_cmp);
+	}
+	struct strbuf sb = STRBUF_INIT;
+	for (size_t i = 0; i < lines.len; i++) {
+		strbuf_printf(&sb, "%s%s", i > 0 ? "," : "", lines.data[i]);
+	}
+	strvec_free(&lines);
+	return strbuf_take(&sb);
+}
+
+// soju.im/unread tags TARGETS with unread text and mentions, relative to
+// the read markers, without the client loading any history
+static void test_unread_targets(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct server_config *cfg = server_config_default();
+	cfg->cfg.basic.msg_store_driver = MSG_STORE_DB;
+	server_config_set(&e.srv, cfg);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	for (int i = 0; i < 2; i++) {
+		const char *ch = i == 0 ? "#quiet" : "#mention";
+		AUTOFREE char *join = xasprintf(":test!u@h JOIN %s", ch);
+		AUTOFREE char *end = xasprintf(":srv 366 test %s :End of /NAMES list", ch);
+		peer_send(up, join);
+		peer_send(up, end);
+	}
+	peer_send(up, ":bob PRIVMSG #quiet :hello");
+	peer_send(up, ":bob PRIVMSG #mention :hi test");
+	peer_send(up, ":bob PRIVMSG test :private");
+	// Our own messages don't mention us, nor private notices and CTCP
+	peer_send(up, ":test!u@h PRIVMSG #quiet :I am test");
+	peer_send(up, ":chanserv NOTICE test :test: you are identified");
+	peer_send(up, ":carol PRIVMSG test :\x01VERSION\x01");
+	peer_sync(up);
+
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, true,
+			 "batch server-time draft/chathistory draft/read-marker soju.im/unread");
+	static const char want[] = "#mention 1 1,#quiet 1 0,bob 1 1,carol 1 0,chanserv 1 0";
+	// Mentions are recorded in the background
+	char *got = nullptr;
+	for (int i = 0; i < 300; i++) {
+		xfree(got);
+		got = unread_targets(dc);
+		if (cstr_eq(got, want)) {
+			break;
+		}
+		usleep(10000);
+	}
+	assert_string_equal(got, want);
+	xfree(got);
+
+	// Read markers clear them
+	for (int i = 0; i < 2; i++) {
+		AUTOFREE char *line = xasprintf("MARKREAD %s timestamp=2100-01-01T00:00:00.000Z",
+						i == 0 ? "#mention" : "bob");
+		peer_send(dc, line);
+		irc_msg_free(peer_until(dc, "MARKREAD"));
+	}
+	got = unread_targets(dc);
+	assert_string_equal(got, "#mention 0 0,#quiet 1 0,bob 0 0,carol 1 0,chanserv 1 0");
+	xfree(got);
+
+	// Not without the capability
+	struct test_peer *plain = fixture_connect(&e);
+	fixture_register(&e, plain, true, "batch server-time draft/chathistory");
+	got = unread_targets(plain);
+	assert_null(strstr(got, " 1"));
+	xfree(got);
+	fixture_finish(&e);
+}
+
+// Blocking a sender whose messages created the target already
+static void test_blocked_users(void **state) {
+	(void)state;
+	struct server_fixture e;
+	fixture_init(&e, false);
+	struct server_config *cfg = server_config_default();
+	cfg->cfg.basic.msg_store_driver = MSG_STORE_DB;
+	server_config_set(&e.srv, cfg);
+	struct test_peer *up = fixture_upstream(&e, "", "");
+	peer_send(up, ":spammer PRIVMSG test :first");
+	peer_sync(up);
+	struct test_peer *dc = fixture_connect(&e);
+	fixture_register(&e, dc, true, "draft/metadata-2");
+	peer_send(dc, "METADATA spammer SET soju.im/blocked 1");
+	struct irc_msg *m = peer_until(dc, "761");
+	assert_string_equal(irc_msg_param(m, 3), "*");
+	assert_string_equal(irc_msg_param(m, 4), "1");
+	irc_msg_free(m);
+	irc_msg_free(peer_until(dc, "METADATA"));
+	peer_send(up, ":SPAMMER PRIVMSG test :spam");
+	peer_send(up, ":friend PRIVMSG test :hello");
+	m = peer_until(dc, "PRIVMSG");
+	assert_string_equal(irc_msg_param(m, 1), "hello");
+	irc_msg_free(m);
+	peer_send(dc, "METADATA spammer SET soju.im/blocked 0");
+	irc_msg_free(peer_until(dc, "METADATA"));
+	peer_send(up, ":spammer PRIVMSG test :back");
+	m = peer_until(dc, "PRIVMSG");
+	assert_string_equal(irc_msg_param(m, 1), "back");
+	irc_msg_free(m);
+	fixture_finish(&e);
+}
+
 static struct irc_msg *until_tagged(struct test_peer *p, const char *cmd, const char *tag) {
 	for (;;) {
 		struct irc_msg *m = peer_until(p, cmd);
@@ -1047,5 +1176,6 @@ T_MAIN(cmocka_unit_test(test_service_deleted_identity),
        cmocka_unit_test(test_monitor_invalid_targets), cmocka_unit_test(test_statusmsg_keeps_sigil),
        cmocka_unit_test(test_upstream_malformed_messages), cmocka_unit_test(test_cap_req_removal),
        cmocka_unit_test(test_sasl_errors), cmocka_unit_test(test_upstream_clock_skew),
-       cmocka_unit_test(test_chat_history_limit), cmocka_unit_test(test_multiplex),
+       cmocka_unit_test(test_chat_history_limit), cmocka_unit_test(test_unread_targets),
+       cmocka_unit_test(test_blocked_users), cmocka_unit_test(test_multiplex),
        cmocka_unit_test(test_multiplex_unsupported), cmocka_unit_test(test_multiline))

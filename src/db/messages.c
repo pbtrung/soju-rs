@@ -115,11 +115,17 @@ bool db_store_message_target(struct db *db, int64_t network_id, struct db_messag
 		}
 		bind_i64(st, ":id", t->id);
 	} else {
+		// Storing messages may have created the target meanwhile (Turso
+		// stores them in the background)
 		st = db_prepare(
 			dbc,
 			"INSERT INTO\n"
 			"                MessageTarget(network, target, pinned, muted, blocked)\n"
-			"                VALUES (:network, :target, :pinned, :muted, :blocked)",
+			"                VALUES (:network, :target, :pinned, :muted, :blocked)\n"
+			"                ON CONFLICT(network, target) DO UPDATE SET pinned = "
+			"excluded.pinned,\n"
+			"                    muted = excluded.muted, blocked = excluded.blocked\n"
+			"                RETURNING id",
 			err);
 		if (st == nullptr) {
 			return false;
@@ -130,18 +136,22 @@ bool db_store_message_target(struct db *db, int64_t network_id, struct db_messag
 	bind_i64(st, ":pinned", t->pinned);
 	bind_i64(st, ":muted", t->muted);
 	bind_i64(st, ":blocked", t->blocked);
-	bool ok = db_step_done(st, err);
-	db_finalize(st);
-	if (ok && t->id == 0) {
-		t->id = db_last_insert_rowid(dbc);
+	bool ok;
+	if (t->id != 0) {
+		ok = db_step_done(st, err);
+	} else {
+		ok = db_step(st) == SQLITE_ROW || db_sql_err(dbc, err);
+		if (ok) {
+			t->id = col_i64(st, 0);
+		}
 	}
+	db_finalize(st);
 	return ok;
 }
 
 // The stored time and searchable text of a message (text: nullptr for
 // none)
-bool message_time_text(const struct irc_msg *msg, char **time, char **text,
-			      struct err **err) {
+bool message_time_text(const struct irc_msg *msg, char **time, char **text, struct err **err) {
 	struct timestamp t;
 	const char *tag = irc_tags_get(&msg->tags, "time");
 	if (tag != nullptr) {
@@ -260,6 +270,44 @@ bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 	return true;
 }
 
+static bool after_read(const struct db_time *t, const struct db_time *read) {
+	return t->set && (!read->set || timestamp_cmp(t->t, read->t) > 0);
+}
+
+bool db_target_last_unread(const struct db_target_last *t) {
+	return after_read(&t->latest_text, &t->read);
+}
+
+bool db_target_last_mention(const struct db_target_last *t) {
+	return after_read(&t->highlight, &t->read);
+}
+
+bool db_store_message_target_highlight(struct db *db, int64_t network_id, const char *target,
+				       struct timestamp time, struct err **err) {
+	struct db_conn *dbc = db_network_conn(db, network_id, err);
+	if (dbc == nullptr) {
+		return false;
+	}
+	struct db_stmt *st =
+		db_prepare(dbc,
+			   "INSERT INTO TargetHighlight(network, target, time)\n"
+			   "            VALUES (:network, :target, :time)\n"
+			   "            ON CONFLICT(network, target) DO UPDATE SET time = "
+			   "excluded.time\n"
+			   "            WHERE time < excluded.time",
+			   err);
+	if (st == nullptr) {
+		return false;
+	}
+	AUTOFREE char *t = format_server_time_cstr(time);
+	bind_i64(st, ":network", network_id);
+	bind_text(st, ":target", target);
+	bind_text(st, ":time", t);
+	bool ok = db_step_done(st, err);
+	db_finalize(st);
+	return ok;
+}
+
 bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 				     const struct db_message_options *o, db_target_last_vec *out,
 				     struct err **err) {
@@ -267,28 +315,37 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 	if (dbc == nullptr) {
 		return false;
 	}
-	const char *inner =
-		o->events && dbc->remote
-			// Turso tenants cluster messages by target and time
-			? "SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time "
-			  "DESC "
-			  "LIMIT 1"
-			: o->events ? "SELECT max(latest) FROM (\n"
-				      "                SELECT max(time) latest FROM Message WHERE "
-				      "target=MessageTarget.id AND text IS NULL\n"
-				      "                UNION ALL\n"
-				      "                SELECT max(time) latest FROM Message WHERE "
-				      "target=MessageTarget.id AND text IS NOT NULL\n"
-				      "            )"
-				    : "SELECT time FROM Message WHERE target=MessageTarget.id AND "
-				      "text IS NOT "
-				      "NULL ORDER BY time DESC LIMIT 1";
+	const char *text =
+		dbc->remote
+			// Turso tenants have no text time index: step over events
+			? "SELECT time FROM Message WHERE target=MessageTarget.id AND "
+			  "text IS NOT NULL ORDER BY time DESC LIMIT 1"
+			// Without statistics, SQLite prefers the primary key,
+			// reading every event between text messages
+			: "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE "
+			  "target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC "
+			  "LIMIT 1";
+	// Messages are clustered by target and time: one seek. Unread state
+	// only counts text messages.
+	const char *inner = o->events ? "SELECT time FROM Message WHERE target=MessageTarget.id "
+					"ORDER BY time DESC LIMIT 1"
+				      : text;
+	// latest is the latest text message without events
+	const char *latest_text = o->events ? text : "NULL";
+	// Seeks only: the mention and the read marker by their (network, target)
+	// keys
 	AUTO_STRBUF struct strbuf q = STRBUF_INIT;
 	strbuf_printf(&q,
-		      "SELECT target, (%s) latest\n"
+		      "SELECT target, (%s) latest, (%s) latest_text,\n"
+		      "                (SELECT time FROM TargetHighlight\n"
+		      "                    WHERE network = :network AND target = "
+		      "MessageTarget.target) highlight,\n"
+		      "                (SELECT timestamp FROM ReadReceipt\n"
+		      "                    WHERE network = :network AND target = "
+		      "MessageTarget.target) read\n"
 		      "            FROM MessageTarget\n"
 		      "            WHERE network = :network ",
-		      inner);
+		      inner, latest_text);
 	if (o->after_time.set) {
 		// compares time strings by lexicographical order
 		strbuf_append_cstr(&q, "AND latest > :after ");
@@ -315,7 +372,12 @@ bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 	bool ok = true;
 	while (ok && (rc = db_step(st)) == SQLITE_ROW) {
 		struct db_target_last t = {.name = col_lossy(st, 0)};
-		ok = col_time(st, 1, &t.latest_message, err);
+		ok = col_time(st, 1, &t.latest_message, err) &&
+		     col_time(st, 2, &t.latest_text, err) && col_time(st, 3, &t.highlight, err) &&
+		     col_time(st, 4, &t.read, err);
+		if (ok && !o->events) {
+			t.latest_text = t.latest_message;
+		}
 		if (ok) {
 			vec_push(&v, t);
 		} else {
@@ -491,14 +553,14 @@ static bool delete_before(struct db_conn *dbc, struct timestamp before, size_t l
 		return false;
 	}
 	// Seek each target's oldest messages in the clustered table
-	struct db_stmt *st =
-		db_prepare(dbc,
-			   "DELETE FROM Message WHERE (target, time, id) IN (\n"
-			   "                    SELECT m.target, m.time, m.id FROM MessageTarget t\n"
-			   "                    CROSS JOIN Message m ON m.target = t.id\n"
-			   "                    WHERE m.time < :before LIMIT :limit\n"
-			   "                )",
-			   err);
+	struct db_stmt *st = db_prepare(
+		dbc,
+		"DELETE FROM Message WHERE (target, time, id) IN (\n"
+		"                    SELECT m.target, m.time, m.id FROM MessageTarget t\n"
+		"                    CROSS JOIN Message m ON m.target = t.id\n"
+		"                    WHERE m.time < :before LIMIT :limit\n"
+		"                )",
+		err);
 	bool ok = st != nullptr;
 	if (ok) {
 		AUTOFREE char *b = format_server_time_cstr(before);

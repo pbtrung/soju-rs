@@ -181,7 +181,19 @@ void db_message_target_free(struct db_message_target *t);
 struct db_target_last {
 	char *name;
 	struct db_time latest_message;
+	// The latest text message: latest_message may be an event
+	struct db_time latest_text;
+	// The latest message mentioning the user, see
+	// db_store_message_target_highlight
+	struct db_time highlight;
+	// The read marker
+	struct db_time read;
 };
+
+// Whether a text message is after the read marker
+bool db_target_last_unread(const struct db_target_last *t);
+// Whether a message mentioning the user is after the read marker
+bool db_target_last_mention(const struct db_target_last *t);
 
 struct db_message_options {
 	int64_t after_id;
@@ -358,6 +370,13 @@ void db_close(struct db *db);
 [[nodiscard]] bool db_store_messages(struct db *db, int64_t network_id, const char *name,
 				     struct irc_msg *const *msgs, size_t n, i64vec *ids,
 				     struct err **err);
+// Records a message mentioning the user, or a private message from
+// someone else: the latest one's time, compared to the read marker, tells
+// clients which conversations have mentions without loading their history.
+// One guarded write per mention, none on read.
+[[nodiscard]] bool db_store_message_target_highlight(struct db *db, int64_t network_id,
+						     const char *target, struct timestamp time,
+						     struct err **err);
 [[nodiscard]] bool db_list_message_last_per_target(struct db *db, int64_t network_id,
 						   const struct db_message_options *o,
 						   db_target_last_vec *out, struct err **err);

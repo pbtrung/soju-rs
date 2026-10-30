@@ -358,9 +358,15 @@ static int target_cmp(const void *a, const void *b) {
 
 // Bounds apply to each target's latest line AFTER combining buffered and
 // committed lines, out-of-order server times included
-static bool targets_batches(struct msgstore *s, int64_t net_id,
-			    const struct db_message_options *o, db_target_last_vec *out,
-			    struct err **err) {
+// *into = the later of *into and *t
+static void max_time(struct db_time *into, const struct db_time *t) {
+	if (t->set && (!into->set || timestamp_cmp(t->t, into->t) > 0)) {
+		*into = *t;
+	}
+}
+
+static bool targets_batches(struct msgstore *s, int64_t net_id, const struct db_message_options *o,
+			    db_target_last_vec *out, struct err **err) {
 	struct db_message_options all = {.limit = INT64_MAX, .events = o->events};
 	db_target_last_vec v = {0};
 	if (!db_list_message_last_per_target(batch_store_index(s->batch), net_id, &all, &v, err)) {
@@ -388,11 +394,12 @@ static bool targets_batches(struct msgstore *s, int64_t net_id,
 			vec_push(&merged, *t);
 			continue;
 		}
-		if (t->latest_message.set &&
-		    (!m->latest_message.set ||
-		     timestamp_cmp(t->latest_message.t, m->latest_message.t) > 0)) {
-			m->latest_message = t->latest_message;
-		}
+		// Pending targets have no mention or read marker: those come from
+		// the database
+		max_time(&m->latest_message, &t->latest_message);
+		max_time(&m->latest_text, &t->latest_text);
+		max_time(&m->highlight, &t->highlight);
+		max_time(&m->read, &t->read);
 		xfree(t->name);
 	}
 	vec_free(&v);

@@ -124,6 +124,37 @@ void user_produce(struct user *u, struct user_network *net, struct irc_msg *msg,
 	}
 }
 
+// Clients learn which conversations mention them from CHATHISTORY TARGETS
+// (soju.im/unread), without loading their history
+static void record_mention(struct user *u, struct user_network *net, const struct irc_msg *msg,
+			   const char *buffer, bool direct, bool from_us) {
+	bool is_text = cstr_eq(msg->command, "PRIVMSG") || cstr_eq(msg->command, "NOTICE");
+	if (!is_text || from_us || buffer[0] == '\0' || u->store.db == nullptr ||
+	    cmmap_has(&net->blocked_targets, irc_msg_prefix_name(msg))) {
+		return;
+	}
+	// A private PRIVMSG, which clients show in its own conversation,
+	// unlike NOTICEs (e.g. from services) and CTCP requests or replies
+	const char *text = irc_msg_param(msg, 1);
+	bool mention =
+		direct ? cstr_eq(msg->command, "PRIVMSG") && (text[0] != '\x01' || strncmp(text,
+											   "\x01"
+											   "ACTION",
+											   7) == 0)
+		       : user_network_highlight(u, net, msg);
+	if (!mention) {
+		return;
+	}
+	struct timestamp time;
+	if (!parse_server_time(str_from(irc_tags_get_or_empty(&msg->tags, "time")), &time)) {
+		time = timestamp_now();
+	}
+	enum casemapping cm =
+		net->upstream != nullptr ? net->upstream->casemap : CASEMAPPING_RFC1459;
+	AUTOFREE char *target = casemap_cstr(cm, buffer);
+	user_record_mention(u, net->record.id, target, time);
+}
+
 void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc_id, void *data) {
 	struct user *u = user_lookup(uc->srv, (int64_t)(uintptr_t)data);
 	struct user_network *net = u != nullptr ? user_get_network(u, uc->network.id) : nullptr;
@@ -161,6 +192,7 @@ void user_upstream_message(struct upstream *uc, struct irc_msg *msg, uint64_t dc
 		}
 		user_produce(u, net, msg, buffer, from_us ? dc_id : 0, dc_id);
 		user_web_push_message(u, net, msg, buffer, direct, from_us);
+		record_mention(u, net, msg, buffer, direct, from_us);
 		goto out;
 	}
 	if (cstr_eq(cmd, "730") || cstr_eq(cmd, "731")) {

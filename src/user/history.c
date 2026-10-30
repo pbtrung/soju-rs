@@ -107,6 +107,10 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 		db_target_last_vec list = {0};
 		ok = msgstore_targets(&u->store, net->record.id, &o, &list, &err);
 		p->batch_type = xstrdup("draft/chathistory-targets");
+		// soju.im/unread: whether each target has text messages or
+		// mentions after its read marker, so that clients can show it
+		// without loading the history
+		bool unread_tags = cap_registry_is_enabled(&dc->caps, "soju.im/unread");
 		for (size_t i = 0; i < list.len; i++) {
 			struct db_target_last *t = &list.data[i];
 			struct db_channel *ch = cmmap_get(&net->channels, t->name);
@@ -114,7 +118,14 @@ void user_history(struct user *u, struct user_client *dc, const struct irc_msg *
 				continue;
 			}
 			AUTOFREE char *time = format_server_time_cstr(t->latest_message.t);
-			user_packet_add_take(p, IRC_MSG("CHATHISTORY", "TARGETS", t->name, time));
+			struct irc_msg *m = IRC_MSG("CHATHISTORY", "TARGETS", t->name, time);
+			if (unread_tags && db_target_last_unread(t)) {
+				irc_tags_set(&m->tags, "soju.im/unread", "");
+			}
+			if (unread_tags && db_target_last_mention(t)) {
+				irc_tags_set(&m->tags, "soju.im/mention", "");
+			}
+			user_packet_add_take(p, m);
 		}
 		db_target_last_vec_free(&list);
 	} else {

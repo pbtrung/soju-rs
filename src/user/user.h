@@ -55,6 +55,8 @@ struct user {
 	struct strmap web_push_checks;
 	uint64_t next_web_push_check;
 	VEC(struct push_delay *) push_delays; // highlights waiting to be pushed
+	// Mentions waiting to be stored (user/mention.c), nullptr if none
+	struct mention_batch *mentions;
 };
 
 // Local lookup only. No user pointer may cross a loop boundary.

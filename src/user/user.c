@@ -383,6 +383,7 @@ static void stop_user(struct user *u, void *data) {
 	}
 	vec_free(&u->clients);
 	user_web_push_stop(u);
+	user_mentions_stop(u);
 	msgstore_destroy(&u->store);
 	pthread_mutex_lock(&u->srv->users_mu);
 	strmap_remove(&u->srv->users, u->record.username);

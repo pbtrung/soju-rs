@@ -82,6 +82,7 @@ static const char *const PERMANENT_CAPS[][2] = {
 	{"soju.im/multiplex", ""},
 	{"soju.im/no-implicit-names", ""},
 	{"soju.im/read", ""},
+	{"soju.im/unread", ""},
 	{"soju.im/webpush", ""},
 };
 
@@ -278,6 +279,10 @@ static bool tag_allowed(const char *key, const char *value, void *data) {
 	}
 	if (cstr_eq(key, "batch")) {
 		return cap_registry_is_enabled(caps, "batch");
+	}
+	// Enabled by their own capability, like server-time
+	if (cstr_eq(key, "soju.im/unread") || cstr_eq(key, "soju.im/mention")) {
+		return cap_registry_is_enabled(caps, "soju.im/unread");
 	}
 	return false;
 }

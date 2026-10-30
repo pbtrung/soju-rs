@@ -72,6 +72,13 @@ void user_web_push_read(struct user *u, struct user_network *net, const char *ta
 [[nodiscard]] bool user_webpush_command(struct user *u, struct user_client *dc,
 					const struct irc_msg *msg, struct user_packet *p);
 
+// soju.im/unread (user/mention.c): records the latest mention of a
+// conversation, stored in the background with the others of the period
+void user_record_mention(struct user *u, int64_t net_id, const char *target_cm,
+			 struct timestamp time);
+// Stores the mentions waiting to be stored
+void user_mentions_stop(struct user *u);
+
 void user_metadata(struct user *u, struct user_client *dc, const struct irc_msg *msg,
 		   struct user_packet *p);
 
