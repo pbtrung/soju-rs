@@ -38,3 +38,7 @@ run-clang-tidy -quiet -p build/clang-asan -config='{Checks: "-*,performance-*,co
 
 GCC `-fanalyzer` (GCC 16) over every `src/` file, with the gcc-debug
 compile commands minus `-Werror`: no warnings, so no finding rows.
+
+Oracle pass rate: `diff_oracle` replays its 146 seeds through the C and
+Rust (soju-rs 6b9bf15) implementations of the 24 differential ops and
+aborts on the first difference; all 146 match, and each op has seeds.

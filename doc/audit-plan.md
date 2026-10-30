@@ -81,7 +81,11 @@ in audit-findings.md (A-01 to A-08); nothing above S3.
 Done: GCC 16 `-fanalyzer` over the 104 `src/` files with the gcc-debug
 flags: no warnings (the analyzer was checked to report a planted leak).
 
-Not yet run: 1 CPU-hour per fuzzer, the oracle pass rate.
+Done: the oracle pass rate. `diff_oracle` replays its 146 seeds against
+soju-rs at 6b9bf15 (v0.99.24, tools/oracle.sh): 146/146 match, every one
+of the 24 ops has at least one seed.
+
+Deferred: 1 CPU-hour per fuzzer (6 harnesses), run before phase B ends.
 
 ---
 
@@ -312,7 +316,7 @@ benchmark shows a cliff.
 
 | # | Work | Depends on | Size | Status |
 |---|------|------------|------|--------|
-| 1 | Phase A tooling + baseline | — | S | coverage, metrics, clang-tidy, -fanalyzer done |
+| 1 | Phase A tooling + baseline | — | S | done; fuzzing deferred |
 | 2 | Split `downstream.c` | 1 | M | |
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |
