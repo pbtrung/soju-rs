@@ -320,7 +320,7 @@ benchmark shows a cliff.
 | 2 | Split `downstream.c` | 1 | M | done: 9 files, largest 424 lines |
 | 3 | Split `user/commands.c`; audit of client commands | 1 | M | split done: 6 files, largest 320 lines; audit open |
 | 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | splits done (channels.c 333, users.c 280, upstream.c 454, receive.c 212); `upstream_receive_take` still has complexity 27; audit open |
-| 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | |
+| 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | A-04 (close re-entrancy) closed; rest open |
 | 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | split done; audit open |
 | 7 | Split `config.c`; audit config + scfg | 1 | M | |
 | 8 | Split `user.c`, `user/network.c`, the `db/` files, `service/user.c`, `http/client.c`; correctness audit of `user/`, `db/`, `msgstore/`, `service/` | 1 | L | |

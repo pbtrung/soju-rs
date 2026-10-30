@@ -1,0 +1,10 @@
+PASS secret
+NICK a
+USER a 0 * :a
+PING x
+QUIT
+PING y
+NICK b
+CAP LS 302
+
+PING z
