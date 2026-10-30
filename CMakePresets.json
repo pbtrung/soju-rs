@@ -137,6 +137,15 @@
         "CMAKE_C_COMPILER": "clang",
         "SOJU_MODE": "fuzz"
       }
+    },
+    {
+      "name": "clang-coverage",
+      "inherits": "base",
+      "displayName": "coverage (clang)",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "SOJU_MODE": "coverage"
+      }
     }
   ],
   "buildPresets": [
@@ -195,6 +204,10 @@
     {
       "name": "clang-fuzz",
       "configurePreset": "clang-fuzz"
+    },
+    {
+      "name": "clang-coverage",
+      "configurePreset": "clang-coverage"
     }
   ],
   "testPresets": [
@@ -344,6 +357,17 @@
     {
       "name": "clang-fuzz",
       "configurePreset": "clang-fuzz",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 16,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "clang-coverage",
+      "configurePreset": "clang-coverage",
       "output": {
         "outputOnFailure": true
       },

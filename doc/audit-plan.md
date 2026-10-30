@@ -1,15 +1,18 @@
 # Audit and refactor plan
 
-Status: **proposed**. Scope: the C port on `c-port` at phases 0–7
-(`src/` ≈ 24k lines, `tests/` + `fuzz/` ≈ 8k lines). Read with
+Status: **in progress** (phase A). Scope: the C port on `c-port` after
+phase 11 (`src/` ≈ 36k lines, `tests/` + `fuzz/` ≈ 14k lines), qualified
+against soju-rs v0.99.24 (doc/phase11-wip.md). Read with
 [PLAN.md](../PLAN.md) (sections 2 and 4) and
 [conventions.md](conventions.md); this plan doesn't change their rules, it
 checks that the code follows them and restructures what has outgrown them.
 
-Why now: phase 8 (HTTP/WebSocket) and phase 9 (auth, Web Push, Turso) add
-code to `downstream/`, `net/` and `db/`. Splitting the large files first
-keeps those diffs small and reviewable, and the audit catches defects
-before more code depends on them.
+Why now: phases 8–11 (HTTP/WebSocket, auth, Web Push, Turso, process glue,
+three-way compatibility) are done, and grew the large files further. The
+plan was written at phase 7; this revision updates the numbers to the
+current tree. The differential, IRCv3 and plumbing suites now pass, so
+they're the safety net for the refactor: a split must keep all of them
+green (tests/compat/run-diff.sh 25/25, plumbing 20/20).
 
 ---
 
@@ -57,6 +60,24 @@ Measure first so the refactor and audit have something to compare against.
 Exit: baseline numbers recorded; triage lists filed as findings (most will be
 S4 or false positives — mark them so and move on).
 
+### 2.1 Baseline (2026-10-30, commit after 7153733)
+
+Done: the `coverage` mode and `clang-coverage` preset, `tools/coverage.sh`
+and `tools/metrics.sh` (lizard, from PATH or `build/venv`).
+
+| Measure | Value |
+|---------|-------|
+| Unit + integration tests | 428, all passing |
+| Line coverage of `src/` | 78.2% (5,835 of 26,774 lines uncovered) |
+| Function coverage | 93.1% (110 of 1,587 functions never run) |
+| Branch coverage | 63.4% |
+| Files over 500 lines (`src/`, `tests/`, `fuzz/`) | 21 (11 in `src/`) |
+| `src/` functions over 80 lines | 36 |
+| `src/` functions with cyclomatic complexity over 15 | 104 |
+
+Not yet run: the clang-tidy report with extra checks, `scan-build` and
+`-fanalyzer`, 1 CPU-hour per fuzzer, the oracle pass rate.
+
 ---
 
 ## 3. Phase B — Structural refactor (split large files)
@@ -65,7 +86,7 @@ S4 or false positives — mark them so and move on).
 
 **Hard limit: 500 lines per `.c`/`.h` file** in `src/`, `tests/` and
 `fuzz/` (generated `*.inc` tables and vendored `deps/` excluded).
-`tools/lint.sh` enforces the limit once phase B ends, so phases 8–11 can't
+`tools/lint.sh` enforces the limit once phase B ends, so later work can't
 reintroduce large files.
 
 Function limits, chosen for readability (a function should fit on one
@@ -86,27 +107,41 @@ area, lifecycle versus I/O); a file isn't cut in half just to meet the
 number. Line counts below are estimates taken from each file's section
 boundaries.
 
-Files over the limit today:
+Files over the limit today (2026-10-30):
 
 | File | Lines | Split into (~lines) |
 |------|------:|---------------------|
-| `src/downstream/downstream.c` | 1953 | Its header says it combines four Rust modules (`mod.rs`, `send.rs`, `caps.rs`, `registration.rs`); `handle_cap` 102 lines, `downstream_send` 75, `handle_unregistered` 74. New layout (PLAN.md section 4): `downstream.c` lifecycle, loop table, cap tables (~255); `receive.c` receive dispatch and pending input while busy (~310); `send.c` sending, batches, labeled-response, `send_reply` (~305); `caps.c` CAP LS/LIST/REQ with `handle_cap` split per subcommand, handler result helpers, ISUPPORT (~290); `util.c` username unmarshalling, NickServ credentials, network attrs (~150); `registration.c` PASS/USER/NICK, `try_register` (~220); SASL completion and AUTHENTICATE move into `sasl.c` (156 → ~465); pre-registration METADATA SUB moves into `sync.c` (210 → ~320). Private declarations go in a new `downstream/internal.h`, as in `upstream/`, `user/` and `service/` |
-| `src/net/conn.c` | 882 | `conn.c` refcount, close/fail, setup timeout, views (~360); `conn_write.c` write queue, rate timer, `flush_writes`, shutdown, `conn_format_line` (~285); `conn_read.c` `conn_parse_line`, `process_lines`, TLS input, `on_read` (~240) |
-| `src/config/config.c` | 741 | `parse_into` (336 lines) becomes table-driven, `{name, handler}` per block kind; handlers go in `config_directives.c` grouped by area: listeners/TLS, limits, message store, auth (~400); `config.c` keeps defaults, load/free, duration and float parsing (~300). Directive order and error text stay identical, which the oracle `config`/`scfg` ops check |
-| `src/user/user.c` | 716 | `attach.c`: `attach_run` (96 lines, split into network selection, view creation and replay steps), `client_snapshot`, `register_done` (~250); `user.c`: lifecycle, `start_run`, stop and event queue (~470) |
-| `src/upstream/upstream.c` | 564 | `upstream_receive_take` (116 lines) becomes a command-to-handler table; handlers move by topic into the existing `channels.c`/`registration.c`/`commands.c` (each stays under 500: `channels.c` is 432 today, so if it's tight, add `users.c` for nick/away/account handling); `upstream.c` keeps lifecycle, `tick` and send (~400) |
-| `src/db/messages.c` | 511 | `messages_search.c`: FTS query quoting and search (~150); `messages.c`: storage, history, ID high water (~360) |
-| `src/service/user.c` | 501 | `user_change.c`: `apply_change` (75 lines, field validation split from applying), `change_continue`, `store_user` (~200); `user.c`: create, delete, status, run (~300) |
-| `tests/unit/test_db_sqlite.c` | 1164 | Split by query family to match `src/db/`: `test_db_users.c`, `test_db_networks.c`, `test_db_messages.c`, `test_db_receipts.c`, `test_db_migrations.c`; the shared fixture goes to `tests/support/db_fixture.c`. Each file's header comment still names the Rust test file, and `tests/PORTED_TESTS.md` lists the new file of each test |
-| `tests/integration/test_server.c` | 1051 | Split by scenario area: registration/SASL, networks/BouncerServ, history/CHATHISTORY and multiplex (~250 each), on top of the existing `server_fixture.c` |
-| `fuzz/oracle_ops.c` | 539 | `oracle_ops.c` op table and C-side ops (~350); `oracle_proc.c` running and talking to the Rust oracle process (~190) |
+| `src/downstream/downstream.c` | 2026 | Its header says it combines four Rust modules (`mod.rs`, `send.rs`, `caps.rs`, `registration.rs`); `handle_cap` 103 lines. New layout (PLAN.md section 4): `downstream.c` lifecycle, loop table, cap tables; `receive.c` receive dispatch and pending input while busy; `send.c` sending, batches, labeled-response; `caps.c` CAP LS/LIST/REQ with `handle_cap` split per subcommand, ISUPPORT; `util.c` username unmarshalling, NickServ credentials, network attrs; `registration.c` PASS/USER/NICK, `try_register`; SASL and AUTHENTICATE move into `sasl.c`; pre-registration METADATA SUB into `sync.c`. Private declarations go in a new `downstream/internal.h` |
+| `src/user/commands.c` | 1183 | Mirrors soju-rs `downstream/cmds/`: `commands.c` dispatch and BOUNCER (`user_handle_command` 204 lines becomes a command table); `channel_cmds.c` JOIN/PART/MODE/TOPIC/NAMES (basic.rs); `query_cmds.c` WHO/WHOIS/MONITOR and the WHO cache (query.rs); `privmsg.c` PRIVMSG/NOTICE/TAGMSG and broadcasts (privmsg.rs); `account_cmds.c` NICK/SETNAME/AUTHENTICATE (account.rs) |
+| `src/net/conn.c` | 938 | `conn.c` refcount, close/fail, setup timeout, views; `conn_write.c` write queue, rate timer, `flush_writes`, shutdown, `conn_format_line`; `conn_read.c` `conn_parse_line`, `process_lines`, TLS input, `on_read` |
+| `src/user/user.c` | 828 | `attach.c`: `attach_run` (101 lines, split into network selection, view creation and replay steps), `client_snapshot`, `register_done`; `user.c`: lifecycle, `start_run`, stop and event queue |
+| `src/db/hrana.c` | 808 | `hrana.c` protocol and value encoding; `hrana_pipeline.c` request pipelining (`pipeline` 124 lines) |
+| `src/config/config.c` | 741 | `parse_into` (337 lines) becomes table-driven, `{name, handler}` per block kind; handlers go in `config_directives.c` grouped by area; `config.c` keeps defaults, load/free, duration and float parsing. Directive order and error text stay identical, which the oracle `config`/`scfg` ops check |
+| `src/db/turso.c` | 663 | By role: connection and routing (`turso.c`), statement execution (`turso_exec.c`) |
+| `src/upstream/upstream.c` | 640 | `upstream_receive_take` (152 lines) becomes a command-to-handler table, batches move to `batches.c`; `upstream.c` keeps lifecycle, `tick` and send |
+| `src/db/messages.c` | 629 | `messages_search.c`: FTS query quoting and search; `messages.c`: storage, history (`db_list_message_rows` 123 lines), ID high water |
+| `src/user/network.c` | 591 | `channel_state.c`: store/attach/detach/delete channel; `network.c`: network store, attrs, receipts, away/monitor |
+| `src/db/tenant.c` | 585 | `tenant_migrate.c`: `rebuild_messages` (108 lines) and schema upgrades; `tenant.c` the rest |
+| `src/upstream/channels.c` | 543 | `upstream_handle_channel` (376 lines, complexity 137) becomes a table; user state (NICK/QUIT/AWAY/ACCOUNT/CHGHOST/WHO cache) moves to `users.c`, as in soju-rs `upstream/users.rs` |
+| `src/db/conn.c` | 538 | Statement cache and helpers out of connection setup |
+| `src/service/user.c` | 525 | `user_change.c`: `apply_change`, `store_user`; `user.c`: create, delete, status, run |
+| `src/db/users.c` | 521 | Device certificates to `device_certs.c` |
+| `src/http/client.c` | 509 | Response parsing out of request sending |
+| `tests/unit/test_db_sqlite.c` | 1323 | Split by query family to match `src/db/`; the shared fixture goes to `tests/support/db_fixture.c`; `tests/PORTED_TESTS.md` lists the new file of each test |
+| `tests/integration/test_server.c` | 1265 | Split by scenario area: registration/SASL, networks/BouncerServ, history/CHATHISTORY and multiplex, on top of the existing `server_fixture.c` |
+| `tests/unit/test_db_turso.c` | 1201 | Split like `test_db_sqlite.c`, sharing the query-family files' cases where they're the same |
+| `tests/support/turso_mock.c` | 739 | Hrana protocol encoding out of the mock server |
+| `fuzz/oracle_ops.c` | 539 | `oracle_ops.c` op table and C-side ops; `oracle_proc.c` running and talking to the Rust oracle process |
 
-Close to the limit (watch while adding phase 8–9 code): `irc/message.c`
-492, `db/db.c` 490, `db/users.c` 483, `net/tls.c` 469, `net/listener.c`
-453. `db/db.h` (366) is under the limit but still split by query family
-(`db/users.h`, `db/networks.h`, `db/messages.h`, `db/receipts.h`) so that
-phase 9b's Turso code doesn't push it over; `db.h` keeps the handle, job
-queue and shared types.
+Close to the limit: `irc/message.c` 492, `net/tls.c` 487, `db/writer.c`
+475, `user/upstream.c` 467 (`user_upstream_message` 157 lines),
+`msgstore/msgstore.c` 457.
+
+Longest `src/` functions besides those above (all to split, or justify as
+flat dispatch): `user_history` 160, `db_store_network` 133,
+`user_read_marker` 122, `upstream_handle_registration` 121,
+`user_clientcert` 110, `write_batch` 105, `store_changes` 105,
+`flag_set_parse` 104. `tools/metrics.sh` lists all 36.
 
 ### 3.2 How each split is done
 
@@ -121,9 +156,11 @@ queue and shared types.
    matching session fuzzer (`fuzz_downstream_session` for `downstream/`,
    `fuzz_upstream_session` for `upstream/`).
 
-Order: `downstream.c` → `conn.c` → `config.c` → `upstream.c` → `user.c` →
-`db/messages.c` + `db.h` → `service/user.c` → test and fuzz files → lint
-gate. Downstream and conn first because phase 8 touches them most.
+Order: `downstream.c` → `user/commands.c` → `upstream/channels.c` +
+`upstream.c` → `conn.c` → `config.c` → `user.c` + `user/network.c` → `db/`
+files → `service/user.c` → `http/client.c` → test and fuzz files → lint
+gate. Protocol-facing files first: they changed most in phase 11 and the
+differential suite checks them.
 
 ---
 
@@ -147,7 +184,9 @@ clients, then upstream servers (also untrusted).
 | Database | `db/*` | All SQL uses bound parameters (grep for `printf`-built SQL), FTS query quoting (`quote_fts_query`), file permissions of `soju.db` and the admin socket (0600/0775) |
 | Process | `config`, `listener`, `certfp` | Unix socket path length, symlink handling when creating sockets, key file permissions on `certfp generate` |
 
-Tools: new fuzz harnesses `fuzz_proxyproto`, `fuzz_identd`,
+Existing harnesses: `fuzz_irc_line`, `fuzz_downstream_session`,
+`fuzz_upstream_session`, `fuzz_http_request`, `fuzz_ws_frame`,
+`diff_oracle`. Tools: new fuzz harnesses `fuzz_proxyproto`, `fuzz_identd`,
 `fuzz_forwarded`, `fuzz_sasl` (PLAIN/EXTERNAL/OAUTHBEARER payloads),
 `fuzz_isupport`; add `proxyproto`/`forwarded` ops to the oracle so they're
 checked against soju-rs too. Each harness asserts a property (round trip,
@@ -200,8 +239,9 @@ test exists for each:
   Draw each as a state table in its module header; the session fuzzers
   check no transition is missing (assert on unexpected states).
 - **Open TODOs**: `irc/ircutil.c:199` (multi-prefix), `irc/whox.c:134`,
-  `downstream.c:1356`, `downstream.c:1925` — check each still matches soju-rs
-  and decide port-now or keep-as-upstream.
+  `irc/genmsg.c:96`, `downstream.c:1398`, `downstream.c:1998`,
+  `user/webpush.c:368` — check each still matches soju-rs and decide
+  port-now or keep-as-upstream.
 
 Tools: oracle differential runs for every pure function (extend
 `oracle_ops` for anything not yet listed: `genmsg`, `multiline`, ISUPPORT
@@ -219,8 +259,8 @@ parsing); `tests/PORTED_TESTS.md` cross-checked against `#[test]`s on
 - **Reconnect**: backoff with jitter bounds, no reconnect storm after a
   network outage, pinned-fingerprint failure doesn't loop fast.
 - **Shutdown and reload**: SIGTERM with pending DB jobs, with buffered
-  writes, mid-SASL; everything freed (PLAN.md 2.4). SIGHUP reload races are
-  phase 8/10 work but the hooks should be audited now.
+  writes, mid-SASL; everything freed (PLAN.md 2.4). SIGHUP reload (phase 10) is
+  in place: audit its races with live clients.
 - **Database failures**: disk full, locked database, corrupt page — the
   bouncer logs and keeps serving instead of aborting where soju-rs does.
 - **Threading**: only the DB thread touches SQLite; cross-loop events only
@@ -265,21 +305,22 @@ benchmark shows a cliff.
 
 ## 5. Order of work
 
-| # | Work | Depends on | Size |
-|---|------|------------|------|
-| 1 | Phase A tooling + baseline | — | S |
-| 2 | Split `downstream.c` (8 files) | 1 | M |
-| 3 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L |
-| 4 | Split `conn.c`; robustness audit of `net/` | 3 | M |
-| 5 | Split `config.c`; audit config + scfg | 1 | M |
-| 6 | Split `upstream.c`; security audit of upstream input | 1 | M |
-| 7 | Split `user.c`, `db/messages.c`, `db.h`, `service/user.c`; correctness audit of `user/`, `db/`, `msgstore/`, `service/` | 1 | L |
-| 7b | Split `test_db_sqlite.c`, `test_server.c`, `oracle_ops.c`; add the 500-line check to `tools/lint.sh` | 7 | S |
-| 8 | Cross-cutting: threading/TSan, shutdown, soak | 2–7 | M |
-| 9 | Performance benchmarks and fixes | 8 | M |
-| 10 | Quality pass, promote lint rules, update PLAN.md section 4 | all | S |
+| # | Work | Depends on | Size | Status |
+|---|------|------------|------|--------|
+| 1 | Phase A tooling + baseline | — | S | coverage, metrics done |
+| 2 | Split `downstream.c` | 1 | M | |
+| 3 | Split `user/commands.c`; audit of client commands | 1 | M | |
+| 4 | Split `upstream/channels.c` + `upstream.c`; security audit of upstream input | 1 | M | |
+| 5 | Security + memory audit of `net/*`, `downstream/*` (incl. new fuzzers) | 2 | L | |
+| 6 | Split `conn.c`; robustness audit of `net/` | 5 | M | |
+| 7 | Split `config.c`; audit config + scfg | 1 | M | |
+| 8 | Split `user.c`, `user/network.c`, the `db/` files, `service/user.c`, `http/client.c`; correctness audit of `user/`, `db/`, `msgstore/`, `service/` | 1 | L | |
+| 9 | Split the test and fuzz files; add the 500-line check to `tools/lint.sh` | 8 | S | |
+| 10 | Cross-cutting: threading/TSan, shutdown, soak | 2–9 | M | |
+| 11 | Performance benchmarks and fixes | 10 | M | |
+| 12 | Quality pass, promote lint rules, update PLAN.md section 4 | all | S | |
 
-Steps 2–7 can be interleaved, one module at a time; each step ends with a
+Steps 2–8 can be interleaved, one module at a time; each step ends with a
 commit (or series) that passes CI and updates `doc/audit-findings.md`.
 
 ## 6. Done when

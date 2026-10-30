@@ -5,7 +5,7 @@
 #   SOJU_MIMALLOC_DEBUG / _SECURE / _TRACK
 #   SOJU_BUNDLE_OPENSSL, SOJU_BUNDLE_LIBXCRYPT, SOJU_MUSL
 
-set(SOJU_MODES debug asan msan tsan valgrind release ubsan-trap fuzz)
+set(SOJU_MODES debug asan msan tsan valgrind release ubsan-trap fuzz coverage)
 if(NOT SOJU_MODE IN_LIST SOJU_MODES)
 	message(FATAL_ERROR "SOJU_MODE must be one of: ${SOJU_MODES}")
 endif()
@@ -17,7 +17,7 @@ elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
 else()
 	message(FATAL_ERROR "Unsupported compiler ${CMAKE_C_COMPILER_ID}")
 endif()
-if(SOJU_MODE MATCHES "^(msan|fuzz)$" AND NOT SOJU_CLANG)
+if(SOJU_MODE MATCHES "^(msan|fuzz|coverage)$" AND NOT SOJU_CLANG)
 	message(FATAL_ERROR "SOJU_MODE=${SOJU_MODE} needs Clang")
 endif()
 
@@ -87,6 +87,11 @@ elseif(SOJU_MODE STREQUAL "ubsan-trap")
 	set(SOJU_CFLAGS "-O1 -g -fsanitize=undefined ${trap}")
 	set(SOJU_DEP_CFLAGS "-O1 -g")
 	set(SOJU_USE_MIMALLOC ON)
+elseif(SOJU_MODE STREQUAL "coverage")
+	# Source-based coverage (tools/coverage.sh); dependencies aren't measured
+	set(SOJU_CFLAGS "-O0 -g -fprofile-instr-generate -fcoverage-mapping")
+	set(SOJU_DEP_CFLAGS "-O1 -g")
+	set(SOJU_LDFLAGS "-fprofile-instr-generate")
 elseif(SOJU_MODE STREQUAL "fuzz")
 	set(san "-fsanitize=address,undefined ${san_common}")
 	set(SOJU_CFLAGS "-O1 -g ${san} -fsanitize=fuzzer-no-link")
