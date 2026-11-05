@@ -1,0 +1,178 @@
+[
+  {
+    "VmRSS": 19208,
+    "VmSize": 1100196,
+    "RssAnon": 7396,
+    "RssFile": 11780,
+    "Threads": 5,
+    "Pss": 11167,
+    "name": "c-debug",
+    "workers": 4,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 23812,
+    "VmSize": 1132980,
+    "RssAnon": 11528,
+    "RssFile": 12252,
+    "Threads": 9,
+    "Pss": 15723,
+    "name": "c-debug",
+    "workers": 4,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 20204,
+    "VmSize": 1100084,
+    "RssAnon": 8240,
+    "RssFile": 11932,
+    "Threads": 5,
+    "Pss": 12203,
+    "name": "c-release",
+    "workers": 4,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 24596,
+    "VmSize": 1132868,
+    "RssAnon": 12372,
+    "RssFile": 12192,
+    "Threads": 9,
+    "Pss": 16557,
+    "name": "c-release",
+    "workers": 4,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 17952,
+    "VmSize": 1405064,
+    "RssAnon": 9128,
+    "RssFile": 2476,
+    "Threads": 6,
+    "Pss": 15536,
+    "name": "rust-gnu",
+    "workers": 4,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 20856,
+    "VmSize": 1405064,
+    "RssAnon": 11264,
+    "RssFile": 2476,
+    "Threads": 6,
+    "Pss": 18440,
+    "name": "rust-gnu",
+    "workers": 4,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 13420,
+    "VmSize": 1076372,
+    "RssAnon": 6964,
+    "RssFile": 8,
+    "Threads": 6,
+    "Pss": 13408,
+    "name": "rust-musl",
+    "workers": 4,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 18156,
+    "VmSize": 1076372,
+    "RssAnon": 11188,
+    "RssFile": 8,
+    "Threads": 6,
+    "Pss": 18144,
+    "name": "rust-musl",
+    "workers": 4,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 21512,
+    "VmSize": 1165988,
+    "RssAnon": 9572,
+    "RssFile": 11908,
+    "Threads": 13,
+    "Pss": 13586,
+    "name": "c-debug",
+    "workers": 12,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 23812,
+    "VmSize": 1198772,
+    "RssAnon": 11656,
+    "RssFile": 12124,
+    "Threads": 17,
+    "Pss": 15835,
+    "name": "c-debug",
+    "workers": 12,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 20376,
+    "VmSize": 1165876,
+    "RssAnon": 8324,
+    "RssFile": 12020,
+    "Threads": 13,
+    "Pss": 12411,
+    "name": "c-release",
+    "workers": 12,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 24688,
+    "VmSize": 1198660,
+    "RssAnon": 12456,
+    "RssFile": 12200,
+    "Threads": 17,
+    "Pss": 16694,
+    "name": "c-release",
+    "workers": 12,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 18344,
+    "VmSize": 1814796,
+    "RssAnon": 9228,
+    "RssFile": 2492,
+    "Threads": 14,
+    "Pss": 15908,
+    "name": "rust-gnu",
+    "workers": 12,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 21056,
+    "VmSize": 1814796,
+    "RssAnon": 11364,
+    "RssFile": 2492,
+    "Threads": 14,
+    "Pss": 18620,
+    "name": "rust-gnu",
+    "workers": 12,
+    "phase": "logged-in"
+  },
+  {
+    "VmRSS": 15508,
+    "VmSize": 1092948,
+    "RssAnon": 9052,
+    "RssFile": 8,
+    "Threads": 14,
+    "Pss": 15496,
+    "name": "rust-musl",
+    "workers": 12,
+    "phase": "idle"
+  },
+  {
+    "VmRSS": 20248,
+    "VmSize": 1092948,
+    "RssAnon": 13280,
+    "RssFile": 8,
+    "Threads": 14,
+    "Pss": 20236,
+    "name": "rust-musl",
+    "workers": 12,
+    "phase": "logged-in"
+  }
+]

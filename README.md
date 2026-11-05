@@ -107,6 +107,10 @@ Each build mode has a CMake preset (`gcc-debug`, `clang-asan`,
 lint checks. See [PLAN.md](PLAN.md) for the design and testing strategy and
 [doc/conventions.md](doc/conventions.md) for coding rules.
 
+For Linux RSS/PSS comparisons with prebuilt Rust binaries, use
+`tools/bench-memory.py`. The [memory benchmark report](doc/benchmarks/memory-2026-11-04.md)
+includes the measured results, limitations, and reproduction commands.
+
 ## License
 
 AGPLv3, see [LICENSE](LICENSE).
