@@ -231,6 +231,9 @@ async fn authenticate(
                 if !u.admin {
                     bail!("SASL impersonation only allowed for admin users");
                 }
+                if !u.enabled {
+                    bail!("SASL impersonation not allowed for disabled admin users");
+                }
                 (username, client, network) = unmarshal_username(&plain.identity);
                 let name = username.clone();
                 if db::run(&srv.db, move |db| db.get_user(&name))

@@ -43,6 +43,7 @@ test_on_both_runtimes!(
     cap_req_removal,
     labeled_response_ack,
     sasl_errors,
+    disabled_admin_impersonation,
     chat_history_params,
     read_marker,
     upstream_clock_skew,
@@ -1455,5 +1456,52 @@ async fn multiplex_unsupported() {
     bound.send(msg!("BOUNCER", "ATTACH", net));
     let m = read_until(&mut bound, "FAIL").await;
     assert_eq!(m.params[..3], ["BOUNCER", "INVALID_CONNECTION", "ATTACH"]);
+    env.srv.shutdown().await;
+}
+
+async fn disabled_admin_impersonation() {
+    use base64::Engine;
+    let env = setup_with(
+        MsgStore {
+            driver: MsgStoreDriver::Db,
+            source: String::new(),
+        },
+        |db, _| {
+            let mut admin = database::User::new("admin");
+            admin.admin = true;
+            admin.enabled = false;
+            admin.set_password("secret").unwrap();
+            db.store_user(&mut admin).unwrap();
+        },
+    )
+    .await;
+    for enabled in [false, true] {
+        let mut admin = env.srv.db.get_user("admin").unwrap().unwrap();
+        admin.enabled = enabled;
+        env.srv.db.store_user(&mut admin).unwrap();
+        let mut dc = connect_downstream(&env.srv);
+        dc.send(msg!("CAP", "LS", "302"));
+        dc.send(msg!("CAP", "REQ", "sasl"));
+        dc.send(msg!("AUTHENTICATE", "PLAIN"));
+        let payload = format!("{TEST_USERNAME}\0admin\0secret");
+        dc.send(msg!(
+            "AUTHENTICATE",
+            base64::engine::general_purpose::STANDARD.encode(payload)
+        ));
+        loop {
+            let m = dc.read().await;
+            if m.command == "903" || m.command == "904" {
+                assert_eq!(m.command, if enabled { "903" } else { "904" });
+                break;
+            }
+        }
+        if enabled {
+            dc.send(msg!("NICK", "test"));
+            dc.send(msg!("USER", TEST_USERNAME, "0", "*", "test"));
+            dc.send(msg!("CAP", "END"));
+            read_until(&mut dc, "001").await;
+        }
+        dc.conn.close();
+    }
     env.srv.shutdown().await;
 }
