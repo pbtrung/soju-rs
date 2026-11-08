@@ -36,6 +36,15 @@ and `musl` supply the Rust targets and C compilers (with `gcc` for GNU).
 A local musl compiler wrapper can be selected with
 `CC_x86_64_unknown_linux_musl=/path/to/musl-gcc`.
 
+With these tools installed, run:
+
+    ./scripts/build-release.sh
+
+This writes the two x86_64 archives and `SHA256SUMS` to `dist/`. It uses
+the installed toolchains directly, verifies both musl executables are fully
+static, and requires neither Docker nor rustup. Set `DIST_DIR` to choose a
+different archive directory.
+
 ## Differences from upstream soju
 
 Not supported:
