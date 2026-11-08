@@ -17,7 +17,8 @@ if [[ $# -gt 1 || "$version" != "v${package_version}" ]]; then
 fi
 
 export CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-musl-gcc}"
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER:-$CC_x86_64_unknown_linux_musl}"
+# Rust supplies its own musl CRT and libc. Its default native linker handles
+# static PIE correctly; musl-gcc wrappers may add a dynamic loader to it.
 if ! command -v "$CC_x86_64_unknown_linux_musl" >/dev/null; then
 	printf 'Missing musl C compiler: %s (install musl or set CC_x86_64_unknown_linux_musl)\n' "$CC_x86_64_unknown_linux_musl" >&2
 	exit 1
