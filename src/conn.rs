@@ -45,8 +45,12 @@ const QUEUED_LINE_OVERHEAD: usize = 64;
 /// control instead of growing the event queue.
 pub const MAX_INPUT_IN_FLIGHT: usize = 64;
 
+/// Keepalives bypass ordinary input backpressure but still have a bounded
+/// backlog, so PING/PONG floods cannot fill the user's event queue.
+const MAX_KEEPALIVE_IN_FLIGHT: usize = 4;
+
 /// Held while a message returned by ConnReader::read_message_limited is
-/// being processed. None for keepalives (PING, PONG), which don't count.
+/// being processed. Keepalives use their own pool of permits.
 pub type InputPermit = Option<tokio::sync::OwnedSemaphorePermit>;
 
 pub trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
@@ -372,6 +376,7 @@ impl Conn {
         let reader = ConnReader {
             reader,
             input: Arc::new(Semaphore::new(MAX_INPUT_IN_FLIGHT)),
+            keepalive_input: Arc::new(Semaphore::new(MAX_KEEPALIVE_IN_FLIGHT)),
             pending: None,
             cancel: conn.shared.cancel.clone(),
             logger,
@@ -503,6 +508,7 @@ impl Conn {
 pub struct ConnReader {
     reader: Reader,
     input: Arc<Semaphore>,
+    keepalive_input: Arc<Semaphore>,
     /// A message read while waiting for an input permit
     pending: Option<Message>,
     cancel: CancellationToken,
@@ -526,9 +532,9 @@ impl ConnReader {
     /// Like read_message, but the message is returned once less than
     /// MAX_INPUT_IN_FLIGHT messages previously returned by this function
     /// still have their permit alive. The permit is meant to be dropped once
-    /// the message is processed. PING and PONG are returned right away,
-    /// without a permit: the connection stays alive while its other input
-    /// waits, at the cost of one message read ahead. Cancel-safe.
+    /// the message is processed. PING and PONG use a separate small pool:
+    /// the connection stays alive while its other input waits without
+    /// allowing an unbounded keepalive backlog. Cancel-safe.
     pub async fn read_message_limited(&mut self) -> Result<Option<(Message, InputPermit)>> {
         if self.pending.is_none() {
             match self.read_message().await? {
@@ -540,13 +546,14 @@ impl ConnReader {
             .pending
             .as_ref()
             .is_some_and(|m| m.command == "PING" || m.command == "PONG");
-        let permit = if keepalive {
-            None
+        let input = if keepalive {
+            &self.keepalive_input
         } else {
-            tokio::select! {
-                p = self.input.clone().acquire_owned() => Some(p.expect("semaphore is never closed")),
-                _ = self.cancel.cancelled() => return Ok(None),
-            }
+            &self.input
+        };
+        let permit = tokio::select! {
+            p = input.clone().acquire_owned() => Some(p.expect("semaphore is never closed")),
+            _ = self.cancel.cancelled() => return Ok(None),
         };
         Ok(self.pending.take().map(|msg| (msg, permit)))
     }
@@ -700,7 +707,40 @@ mod tests {
         // Keepalives are read even when every permit is held
         let (msg, permit) = rb.read_message_limited().await.unwrap().unwrap();
         assert_eq!(msg.command, "PING");
-        assert!(permit.is_none());
+        assert!(permit.is_some());
+    }
+
+    #[tokio::test]
+    async fn keepalive_flood_has_a_separate_bounded_backlog() {
+        let (a, b) = tokio::io::duplex(1 << 16);
+        let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let (_peer, mut r) = Conn::new_stream(Box::new(b), Logger::new(false), None);
+        let mut ordinary = Vec::new();
+        for _ in 0..MAX_INPUT_IN_FLIGHT {
+            c.send_message(crate::msg!("PRIVMSG", "#a", "text"));
+            ordinary.push(r.read_message_limited().await.unwrap().unwrap());
+        }
+        let mut keepalives = Vec::new();
+        for i in 0..=MAX_KEEPALIVE_IN_FLIGHT {
+            c.send_message(crate::msg!(
+                if i % 2 == 0 { "PING" } else { "PONG" },
+                i.to_string()
+            ));
+        }
+        for _ in 0..MAX_KEEPALIVE_IN_FLIGHT {
+            keepalives.push(r.read_message_limited().await.unwrap().unwrap());
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), r.read_message_limited())
+                .await
+                .is_err()
+        );
+        keepalives.pop();
+        let (m, permit) = r.read_message_limited().await.unwrap().unwrap();
+        assert_eq!(m.params[0], MAX_KEEPALIVE_IN_FLIGHT.to_string());
+        assert!(permit.is_some());
+        // No ordinary-message permits were released to allow this keepalive.
+        assert_eq!(ordinary.len(), MAX_INPUT_IN_FLIGHT);
     }
 
     #[tokio::test]
