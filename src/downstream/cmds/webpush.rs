@@ -6,7 +6,7 @@ use super::*;
 const MAX_SUBSCRIPTIONS: usize = 25;
 
 /// Maximum number of test notifications being sent at once per user.
-const MAX_PENDING_CHECKS: usize = 4;
+const MAX_PENDING_CHECKS: usize = crate::user::MAX_PENDING_WEB_PUSH_CHECKS;
 
 /// Finishes WEBPUSH REGISTER, once the test notification was sent.
 pub fn web_push_tested(
@@ -198,6 +198,18 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         "Too many pending subscriptions, try again later",
                     ]));
                 }
+                let slot = u
+                    .web_push_check_slots
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| {
+                        fail(&[
+                            "WEBPUSH",
+                            "INTERNAL_ERROR",
+                            &subcommand,
+                            "Too many pending subscriptions, try again later",
+                        ])
+                    })?;
                 let check = u.next_web_push_check;
                 u.next_web_push_check += 1;
                 u.web_push_checks.insert(key, check);
@@ -207,6 +219,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                 let label = dc!(u, i).take_label();
                 let tx = u.tx.clone();
                 tokio::spawn(async move {
+                    let _slot = slot;
                     let test = msg!(
                         "NOTE",
                         "WEBPUSH",
@@ -282,4 +295,88 @@ fn sanity_check_web_push_endpoint(endpoint: &str) -> Result<()> {
         anyhow::bail!("scheme must be HTTPS");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::user::UserHandle;
+    use std::sync::{Mutex, atomic::AtomicI64};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn duplicate_and_cancelled_checks_share_the_running_limit() {
+        for unregister in [false, true] {
+            let srv = Server::new(db::Database::open_in_memory().unwrap(), Logger::new(false));
+            srv.start().unwrap();
+            let mut record = db::User::new("probe");
+            srv.db.store_user(&mut record).unwrap();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let handle = UserHandle {
+                tx: tx.clone(),
+                done: CancellationToken::new(),
+                num_downstream_conns: Arc::new(AtomicI64::new(0)),
+                record: Arc::new(Mutex::new(record.clone())),
+            };
+            let mut user = User::new(srv.clone(), record, tx, &handle);
+            let (a, _b) = tokio::io::duplex(4096);
+            let (conn, _reader) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+            let mut dc = DownstreamConn::new(
+                srv.clone(),
+                conn,
+                ConnInfo::default(),
+                1,
+                Logger::new(false),
+            );
+            dc.registered = true;
+            dc.caps.set_enabled("soju.im/webpush", true);
+            user.downstreams.push(dc);
+            // Invalid keys finish without contacting an external service.
+            // With no yield, all admitted tasks are still pending below.
+            let register = msg!(
+                "WEBPUSH",
+                "REGISTER",
+                "https://example.org/push",
+                "auth=invalid;p256dh=invalid"
+            );
+            for _ in 0..MAX_PENDING_CHECKS {
+                handle_webpush(&mut user, 0, &register).unwrap();
+                if unregister {
+                    handle_webpush(
+                        &mut user,
+                        0,
+                        &msg!("WEBPUSH", "UNREGISTER", "https://example.org/push"),
+                    )
+                    .unwrap();
+                }
+            }
+            assert!(handle_webpush(&mut user, 0, &register).is_err());
+            assert_eq!(user.next_web_push_check, MAX_PENDING_CHECKS as u64 + 1);
+            for _ in 0..MAX_PENDING_CHECKS {
+                let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let Event::WebPushTested {
+                    dc_id,
+                    label,
+                    network_id,
+                    sub,
+                    res,
+                    check,
+                } = event
+                else {
+                    panic!("unexpected event")
+                };
+                web_push_tested(&mut user, dc_id, label, network_id, sub, res, check);
+            }
+            assert_eq!(
+                user.web_push_check_slots.available_permits(),
+                MAX_PENDING_CHECKS
+            );
+            handle_webpush(&mut user, 0, &register).unwrap();
+            srv.shutdown().await;
+        }
+    }
 }

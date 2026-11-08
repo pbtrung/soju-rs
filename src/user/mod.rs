@@ -41,6 +41,8 @@ pub const RETRY_CONNECT_MIN_DELAY: Duration = Duration::from_secs(60);
 pub const RETRY_CONNECT_MAX_DELAY: Duration = Duration::from_secs(10 * 60);
 pub const RETRY_CONNECT_JITTER: Duration = Duration::from_secs(60);
 
+pub(crate) const MAX_PENDING_WEB_PUSH_CHECKS: usize = 4;
+
 /// Messages a user's event loop receives.
 pub enum Event {
     /// A runner connected to an upstream server (not registered yet).
@@ -223,6 +225,8 @@ pub struct User {
     /// network ID and endpoint: the ID of the latest check. UNREGISTER
     /// removes the entry, cancelling the check.
     pub web_push_checks: HashMap<(i64, String), u64>,
+    /// Counts running checks, including superseded and unregistered ones.
+    pub web_push_check_slots: Arc<tokio::sync::Semaphore>,
     /// The networks with Web Push subscriptions (0 for the bouncer
     /// connection), if loaded. Subscriptions are only added by the event
     /// loop, which resets it: it may only list networks whose subscriptions
@@ -265,6 +269,9 @@ impl User {
             msg_store,
             certfp_generating: Arc::new(tokio::sync::Semaphore::new(1)),
             web_push_checks: HashMap::new(),
+            web_push_check_slots: Arc::new(tokio::sync::Semaphore::new(
+                MAX_PENDING_WEB_PUSH_CHECKS,
+            )),
             web_push_networks: None,
             next_web_push_check: 1,
             next_runner_id: 1,
