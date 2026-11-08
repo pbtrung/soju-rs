@@ -300,5 +300,5 @@ it up first.
 
 The old table's pages stay in the file as free pages, which new messages
 reuse; nothing reads them. With `message-expiry`, soju vacuums on startup
-and gives them back. Otherwise, run `sqlite3 soju.db VACUUM` while soju is
-stopped to shrink the file.
+if at least 25% of its pages are free and gives them back. Otherwise, run
+`sqlite3 soju.db VACUUM` while soju is stopped to shrink the file.

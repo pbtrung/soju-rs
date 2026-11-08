@@ -281,7 +281,8 @@ The following directives are supported:
 	optimized after messages are deleted. The space freed by deleted
 	messages is reused for new ones. The database is vacuumed to reclaim
 	disk space on startup, before clients can connect, and when a
-	configuration reload changes the duration. Vacuuming rewrites the
+	configuration reload changes the duration, if at least 25% of its pages
+	are free. Vacuuming rewrites the
 	database file, temporarily needing about its size again in free disk
 	space. During a reload's vacuum, all database access waits, so clients
 	and upstream connections may stall for the duration.

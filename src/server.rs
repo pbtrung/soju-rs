@@ -483,7 +483,7 @@ impl Server {
 
     /// Deletes expired messages, and vacuums local SQLite if asked: on
     /// startup, before users start, and when message-expiry changes, which
-    /// may leave much of the database free. Otherwise, the space freed each
+    /// may leave at least 25% of the database free. Otherwise, the space freed each
     /// day is reused by the next day's messages, and rewriting the database
     /// would hold it meanwhile. Turso never receives file maintenance SQL.
     pub(crate) fn delete_expired_messages(&self, vacuum: bool) -> Result<()> {
@@ -529,16 +529,18 @@ impl Server {
                         .db
                         .free_page_ratio()
                         .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
-                    let start = Instant::now();
-                    self.db
-                        .vacuum()
-                        .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
-                    logf!(
-                        self.logger,
-                        "vacuumed db in {:.1}s ({:.0}% of it was free)",
-                        start.elapsed().as_secs_f64(),
-                        free * 100.0
-                    );
+                    if free >= 0.25 {
+                        let start = Instant::now();
+                        self.db
+                            .vacuum()
+                            .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
+                        logf!(
+                            self.logger,
+                            "vacuumed db in {:.1}s ({:.0}% of it was free)",
+                            start.elapsed().as_secs_f64(),
+                            free * 100.0
+                        );
+                    }
                 }
                 if local_sqlite {
                     self.db
@@ -683,6 +685,47 @@ pub async fn load_server_config(raw: &config::Server) -> Result<ServerConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vacuum_requires_25_percent_free_and_maintenance_request() {
+        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+        let mut cfg = ServerConfig::default();
+        cfg.basic.message_expiry = Duration::from_secs(86400);
+        srv.set_config(cfg);
+        let mut user = db::User::new("vacuum");
+        srv.db.store_user(&mut user).unwrap();
+        let mut net = db::Network::new("irc.example.org");
+        srv.db.store_network(user.id, &mut net).unwrap();
+        let text = "x".repeat(1000);
+        let now = Utc::now();
+        for (count, time) in [(300, now - chrono::Duration::days(3)), (3700, now)] {
+            let messages: Vec<_> = (0..count)
+                .map(|_| {
+                    msg!("PRIVMSG", "#a", text.clone())
+                        .with_tag("time", xirc::format_server_time(time))
+                })
+                .collect();
+            srv.db.store_messages(net.id, "#a", &messages).unwrap();
+        }
+        // Daily expiry frees some pages but does not rewrite the file.
+        srv.delete_expired_messages(false).unwrap();
+        let low = srv.db.free_page_ratio().unwrap();
+        assert!(low > 0.0 && low < 0.25, "{low}");
+        // Startup/reload maintenance must preserve free pages below 25%.
+        srv.delete_expired_messages(true).unwrap();
+        assert_eq!(srv.db.free_page_ratio().unwrap(), low);
+
+        srv.db
+            .delete_messages_before(now + chrono::Duration::days(1), usize::MAX)
+            .unwrap();
+        let high = srv.db.free_page_ratio().unwrap();
+        assert!(high >= 0.25, "{high}");
+        // Even a mostly empty file is not vacuumed during daily expiry.
+        srv.delete_expired_messages(false).unwrap();
+        assert_eq!(srv.db.free_page_ratio().unwrap(), high);
+        srv.delete_expired_messages(true).unwrap();
+        assert_eq!(srv.db.free_page_ratio().unwrap(), 0.0);
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_user_on_auth_concurrently() {
