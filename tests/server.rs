@@ -1181,12 +1181,20 @@ async fn blocked_users() {
     let m = read_until(&mut dc, "PRIVMSG").await;
     assert_eq!(m.params[1], "hello");
 
+    // Invites obey the same block flag, including case-mapped sources.
+    uc.send(msg!("INVITE", nick.clone(), "#spam").with_prefix(Prefix::new("SPAMMER")));
+    uc.send(msg!("INVITE", nick.clone(), "#friend").with_prefix(Prefix::new("friend")));
+    let m = read_until(&mut dc, "INVITE").await;
+    assert_eq!(m.params[1], "#friend");
+
     // Unblocking shows them again
     dc.send(msg!("METADATA", "spammer", "SET", "soju.im/blocked", "0"));
     read_until(&mut dc, "METADATA").await;
-    uc.send(msg!("PRIVMSG", nick, "back").with_prefix(Prefix::new("spammer")));
+    uc.send(msg!("PRIVMSG", nick.clone(), "back").with_prefix(Prefix::new("spammer")));
     let m = read_until(&mut dc, "PRIVMSG").await;
     assert_eq!(m.params[1], "back");
+    uc.send(msg!("INVITE", nick, "#back").with_prefix(Prefix::new("spammer")));
+    assert_eq!(read_until(&mut dc, "INVITE").await.params[1], "#back");
     env.srv.shutdown().await;
 }
 

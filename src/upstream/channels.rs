@@ -308,7 +308,7 @@ pub(super) fn handle_message(
                 }
                 dc.send_message(msg.clone());
             }
-            if we_are_invited {
+            if we_are_invited && !blocked {
                 u.broadcast_web_push(ni, msg.clone());
             }
         }
