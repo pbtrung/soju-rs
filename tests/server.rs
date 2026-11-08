@@ -44,6 +44,7 @@ test_on_both_runtimes!(
     labeled_response_ack,
     sasl_errors,
     disabled_admin_impersonation,
+    setname_survives_network_update,
     chat_history_params,
     read_marker,
     upstream_clock_skew,
@@ -1503,5 +1504,37 @@ async fn disabled_admin_impersonation() {
         }
         dc.conn.close();
     }
+    env.srv.shutdown().await;
+}
+
+async fn setname_survives_network_update() {
+    let env = setup(db_store()).await;
+    let mut uc = accept_upstream(&env).await;
+    let nick = register_upstream_caps(&mut uc, "setname").await;
+    let mut dc = connect_downstream(&env.srv);
+    register_downstream_caps(&mut dc, Some(&env.network), "setname").await;
+    dc.roundtrip().await;
+    dc.send(msg!("SETNAME", "New real name"));
+    let m = read_until(&mut uc, "SETNAME").await;
+    assert_eq!(m.params, ["New real name"]);
+    uc.send(msg!("SETNAME", "New real name").with_prefix(Prefix::full(nick, "u", "h")));
+    let m = read_until(&mut dc, "SETNAME").await;
+    assert_eq!(m.params, ["New real name"]);
+    dc.send(msg!(
+        "BOUNCER",
+        "CHANGENETWORK",
+        env.network.id.to_string(),
+        "name=renamed"
+    ));
+    read_until(&mut dc, "BOUNCER").await;
+    let user_id = env.srv.db.get_user(TEST_USERNAME).unwrap().unwrap().id;
+    let networks = env.srv.db.list_networks(user_id).unwrap();
+    assert_eq!(networks[0].name, "renamed");
+    assert_eq!(networks[0].realname, "New real name");
+    // The reconnect uses the snapshot, not just the persisted row.
+    let mut next = accept_upstream(&env).await;
+    next.expect("CAP").await;
+    next.expect("NICK").await;
+    assert_eq!(next.expect("USER").await.params[3], "New real name");
     env.srv.shutdown().await;
 }

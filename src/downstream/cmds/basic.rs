@@ -95,9 +95,13 @@ pub(super) fn handle_setname(u: &mut User, i: usize, msg: &Message) -> Result<()
                 .upstream()
                 .is_some_and(|uc| uc.caps.is_enabled("setname"));
             if setname {
-                // Upstream will reply with a SETNAME message on success
-                send_upstream_labeled(u, i, ni, msg!("SETNAME", realname.clone()));
-                u.srv.db.store_network(u.record.id, &mut record).map(|_| ())
+                u.srv.db.store_network(u.record.id, &mut record).map(|_| {
+                    // Keep subsequent updates and reconnects from restoring
+                    // the old preference. Upstream confirms the visible name.
+                    u.networks[ni].record = record;
+                    u.networks[ni].sync_snapshot();
+                    send_upstream_labeled(u, i, ni, msg!("SETNAME", realname.clone()));
+                })
             } else {
                 // This will disconnect then re-connect the upstream
                 // connection
