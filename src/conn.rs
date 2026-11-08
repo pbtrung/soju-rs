@@ -412,7 +412,13 @@ impl Conn {
     pub fn close(&self) {
         if let Some(v) = &self.view {
             self.close_view(v, true);
-        } else if !self.shared.closed.swap(true, Ordering::SeqCst) {
+        } else {
+            self.close_shared();
+        }
+    }
+
+    fn close_shared(&self) {
+        if !self.shared.closed.swap(true, Ordering::SeqCst) {
             self.shared.cancel.cancel();
         }
     }
@@ -458,7 +464,9 @@ impl Conn {
                 self.shared.logger,
                 "closing connection: too many messages waiting to be sent"
             );
-            self.close();
+            // The budget belongs to the physical connection. Closing a view
+            // would queue an ERROR on the same full queue and recurse.
+            self.close_shared();
             return;
         }
         self.shared.queued.fetch_add(1, Ordering::Relaxed);
@@ -693,6 +701,26 @@ mod tests {
         let (msg, permit) = rb.read_message_limited().await.unwrap().unwrap();
         assert_eq!(msg.command, "PING");
         assert!(permit.is_none());
+    }
+
+    #[tokio::test]
+    async fn full_queue_closes_physical_connection_from_view() {
+        for notify in [false, true] {
+            let (a, _b) = tokio::io::duplex(4096);
+            let (c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+            let v = c.view("soju.im/network", "1", || {});
+            // No yield: the writer cannot drain any of this exact budget.
+            let text = "x".repeat(MAX_QUEUED_BYTES - QUEUED_LINE_OVERHEAD - "PRIVMSG #a ".len());
+            c.send_message(crate::msg!("PRIVMSG", "#a", text));
+            assert_eq!(c.queued_bytes(), MAX_QUEUED_BYTES);
+            if notify {
+                v.close();
+            } else {
+                v.send_message(crate::msg!("PING", "x"));
+            }
+            assert!(c.is_closed() && v.is_closed());
+            assert!(r.read_message().await.unwrap().is_none());
+        }
     }
 
     #[tokio::test]
