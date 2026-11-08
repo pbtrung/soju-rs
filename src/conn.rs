@@ -172,14 +172,16 @@ fn parse_line(line: &str) -> Result<Option<Message>> {
 }
 
 impl Reader {
-    async fn read_raw(&mut self) -> Result<Option<Message>> {
+    async fn read_raw(&mut self, pending: &mut Vec<u8>) -> Result<Option<Message>> {
         match self {
             Reader::Lines(r) => loop {
-                let mut buf = Vec::new();
-                let n = read_line_limited(r, &mut buf).await?;
+                // Keep bytes across cancelled reads: read_line_limited has
+                // already consumed them from the buffered stream.
+                let n = read_line_limited(r, pending).await?;
                 if n == 0 {
                     return Ok(None);
                 }
+                let buf = std::mem::take(pending);
                 if !buf.ends_with(b"\n") {
                     // EOF in the middle of a line
                     return Ok(None);
@@ -377,6 +379,7 @@ impl Conn {
             reader,
             input: Arc::new(Semaphore::new(MAX_INPUT_IN_FLIGHT)),
             keepalive_input: Arc::new(Semaphore::new(MAX_KEEPALIVE_IN_FLIGHT)),
+            line_buf: Vec::new(),
             pending: None,
             cancel: conn.shared.cancel.clone(),
             logger,
@@ -509,6 +512,8 @@ pub struct ConnReader {
     reader: Reader,
     input: Arc<Semaphore>,
     keepalive_input: Arc<Semaphore>,
+    /// A partial stream line retained across cancellation of read_message.
+    line_buf: Vec<u8>,
     /// A message read while waiting for an input permit
     pending: Option<Message>,
     cancel: CancellationToken,
@@ -520,7 +525,7 @@ impl ConnReader {
     /// more messages (EOF or the connection was closed).
     pub async fn read_message(&mut self) -> Result<Option<Message>> {
         let res = tokio::select! {
-            res = self.reader.read_raw() => res,
+            res = self.reader.read_raw(&mut self.line_buf) => res,
             _ = self.cancel.cancelled() => return Ok(None),
         };
         if let Ok(Some(msg)) = &res {
@@ -708,6 +713,40 @@ mod tests {
         let (msg, permit) = rb.read_message_limited().await.unwrap().unwrap();
         assert_eq!(msg.command, "PING");
         assert!(permit.is_some());
+    }
+
+    #[tokio::test]
+    async fn cancelled_read_preserves_partial_line_and_length_limit() {
+        for oversized in [false, true] {
+            let (a, mut b) = tokio::io::duplex(1 << 16);
+            let (_c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+            b.write_all(b"PRIVMSG #a :hel").await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), r.read_message_limited())
+                    .await
+                    .is_err()
+            );
+            if oversized {
+                b.write_all(&vec![b'x'; MAX_LINE_LENGTH]).await.unwrap();
+                b.write_all(b"\r\n").await.unwrap();
+                assert!(
+                    r.read_message_limited()
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("line too long")
+                );
+            } else {
+                b.write_all(b"lo\r\nPING next\r\n").await.unwrap();
+                let (m, _permit) = r.read_message_limited().await.unwrap().unwrap();
+                assert_eq!(m.command, "PRIVMSG");
+                assert_eq!(m.params, ["#a", "hello"]);
+                assert_eq!(
+                    r.read_message_limited().await.unwrap().unwrap().0.command,
+                    "PING"
+                );
+            }
+        }
     }
 
     #[tokio::test]
