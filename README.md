@@ -29,9 +29,12 @@ library and the mimalloc allocator are built from source):
     cargo build --release
 
 The `soju` and `sojuctl` binaries are written to `target/release/`. Release
-archives for Linux (x86_64 and aarch64) are built in Docker with
-`scripts/build-release.sh`: glibc builds on Arch Linux, static musl builds on
-Alpine edge, both from freshly pulled and upgraded images.
+archives for Linux x86_64 are built locally with `scripts/build-release.sh`
+for GNU and static musl. Install both Rust targets, a native C compiler and
+`musl-gcc`, plus CMake, Make and Perl. On Arch Linux, `rust`, `rust-musl`
+and `musl` supply the Rust targets and C compilers (with `gcc` for GNU).
+A local musl compiler wrapper can be selected with
+`CC_x86_64_unknown_linux_musl=/path/to/musl-gcc`.
 
 ## Differences from upstream soju
 

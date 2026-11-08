@@ -1,56 +1,48 @@
 #!/bin/bash
-# Builds release archives for all supported targets into dist/: glibc
-# targets in an Arch Linux image (Dockerfile.release-gnu), musl targets in
-# an Alpine edge image (Dockerfile.release-musl). Both images are rebuilt
-# from freshly pulled bases, upgrading all packages before building.
+# Build x86_64 GNU and static musl archives with local toolchains.
+# Requires cargo, both Rust targets, a native C compiler, musl-gcc, cmake,
+# make, perl, tar and sha256sum. No container runtime is used.
 #
 # Usage: scripts/build-release.sh [version]
+# Override CC_x86_64_unknown_linux_musl for a local musl compiler wrapper.
+# CARGO_TARGET_DIR and MUSL_TARGET_DIR optionally select build directories.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-version="${1:-v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
+package_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+version="${1:-v${package_version}}"
+if [[ $# -gt 1 || "$version" != "v${package_version}" ]]; then
+	printf 'Version must match Cargo.toml: v%s\n' "$package_version" >&2
+	exit 1
+fi
 
-# image:target
-targets=(
-	"gnu:x86_64-unknown-linux-gnu"
-	"gnu:aarch64-unknown-linux-gnu"
-	"musl:x86_64-unknown-linux-musl"
-	"musl:aarch64-unknown-linux-musl"
-)
+export CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-musl-gcc}"
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER:-$CC_x86_64_unknown_linux_musl}"
+if ! command -v "$CC_x86_64_unknown_linux_musl" >/dev/null; then
+	printf 'Missing musl C compiler: %s (install musl or set CC_x86_64_unknown_linux_musl)\n' "$CC_x86_64_unknown_linux_musl" >&2
+	exit 1
+fi
 
-for flavor in gnu musl; do
-	docker build --pull --no-cache -f "Dockerfile.release-$flavor" -t "soju-rs-release-$flavor" .
+targets=(x86_64-unknown-linux-gnu x86_64-unknown-linux-musl)
+build_dirs=("${CARGO_TARGET_DIR:-target}" "${MUSL_TARGET_DIR:-${CARGO_TARGET_DIR:-target}}")
+for i in "${!targets[@]}"; do
+	cargo build --locked --release --bins --target "${targets[$i]}" --target-dir "${build_dirs[$i]}"
 done
 
 mkdir -p dist
-rm -f dist/*.tar.gz dist/SHA256SUMS
-
-for spec in "${targets[@]}"; do
-	flavor="${spec%%:*}"
-	target="${spec#*:}"
-	docker run --rm \
-		-u "$(id -u):$(id -g)" \
-		-e CARGO_HOME=/src/target/cargo-home \
-		-e HOME=/tmp \
-		-v "$PWD:/src" \
-		"soju-rs-release-$flavor" \
-		bash -euo pipefail -c '
-			mkdir -p "$CARGO_HOME"
-			cargo zigbuild --locked --release --target "$1"
-		' bash "$target"
-done
-
-for spec in "${targets[@]}"; do
-	target="${spec#*:}"
+staging="$(mktemp -d dist/.release.XXXXXX)"
+trap 'rm -rf "$staging"' EXIT
+archives=()
+for i in "${!targets[@]}"; do
+	target="${targets[$i]}"
 	name="soju-rs-${version}-${target}"
-	staging="dist/$name"
-	rm -rf "$staging"
-	mkdir -p "$staging"
-	cp "target/$target/release/soju" "target/$target/release/sojuctl" "$staging/"
-	cp -r LICENSE README.md config.in doc "$staging/"
-	tar -C dist -czf "dist/$name.tar.gz" "$name"
-	rm -rf "$staging"
+	mkdir -p "$staging/$name"
+	cp "${build_dirs[$i]}/$target/release/soju" "${build_dirs[$i]}/$target/release/sojuctl" "$staging/$name/"
+	cp -r LICENSE README.md config.in doc "$staging/$name/"
+	tar -C "$staging" -czf "dist/$name.tar.gz" "$name"
+	archives+=("$name.tar.gz")
 done
 
-(cd dist && sha256sum ./*.tar.gz | sed 's# \./# #' > SHA256SUMS)
-ls -l dist
+# Hash only this release's two archives, even if dist contains older builds.
+(cd dist && sha256sum "${archives[@]}" > SHA256SUMS)
+ls -lh "${archives[@]/#/dist/}" dist/SHA256SUMS
