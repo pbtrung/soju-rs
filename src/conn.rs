@@ -30,6 +30,10 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// larger LINELEN.
 pub const MAX_LINE_LENGTH: usize = 32768;
 
+/// Reuse ordinary lines' storage without retaining a large IRCv3 line on
+/// every connection for the rest of its lifetime.
+const MAX_RETAINED_LINE_BUFFER: usize = 1024;
+
 /// Maximum size of the messages queued on a connection and not written yet.
 /// A peer which doesn't read fast enough is disconnected once it's reached,
 /// instead of letting the queue grow without bounds.
@@ -181,14 +185,21 @@ impl Reader {
                 if n == 0 {
                     return Ok(None);
                 }
-                let buf = std::mem::take(pending);
-                if !buf.ends_with(b"\n") {
+                if !pending.ends_with(b"\n") {
                     // EOF in the middle of a line
+                    pending.clear();
                     return Ok(None);
                 }
-                let line = String::from_utf8_lossy(&buf);
+                let line = String::from_utf8_lossy(pending);
+                let parsed = parse_line(&line);
+                // Parsing owns the message fields. Clear even on error, so
+                // a subsequent read cannot replay the failed line.
+                pending.clear();
+                if pending.capacity() > MAX_RETAINED_LINE_BUFFER {
+                    *pending = Vec::new();
+                }
                 // It's valid for a message to be empty, ignore these
-                if let Some(msg) = parse_line(&line)? {
+                if let Some(msg) = parsed? {
                     return Ok(Some(msg));
                 }
             },
@@ -653,6 +664,53 @@ mod tests {
             String::from_utf8(wire).unwrap(),
             format!("{msg}\r\nPING x\r\n")
         );
+    }
+
+    #[tokio::test]
+    async fn stream_lines_preserve_message_boundaries() {
+        let (a, mut b) = tokio::io::duplex(1 << 16);
+        let (_c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        let large = "x".repeat(4096);
+        b.write_all(b"\r\n@time=2024-01-01T00:00:00Z :peer!u@h PRIVMSG #a :hello\r\n")
+            .await
+            .unwrap();
+        b.write_all(format!("PRIVMSG #a :{large}\r\n").as_bytes())
+            .await
+            .unwrap();
+        b.write_all(b"\nPRIVMSG #a :invalid \xff\r\nPING next\r\nPRIVMSG #a :unfinished")
+            .await
+            .unwrap();
+        b.shutdown().await.unwrap();
+
+        let first = r.read_message().await.unwrap().unwrap();
+        assert_eq!(first.command, "PRIVMSG");
+        assert_eq!(first.params, ["#a", "hello"]);
+        assert_eq!(first.prefix_name(), "peer");
+        assert_eq!(first.tags.get("time"), Some("2024-01-01T00:00:00Z"));
+        let second = r.read_message().await.unwrap().unwrap();
+        assert_eq!(second.params, ["#a", large.as_str()]);
+        let third = r.read_message().await.unwrap().unwrap();
+        assert_eq!(third.params, ["#a", "invalid \u{fffd}"]);
+        let fourth = r.read_message().await.unwrap().unwrap();
+        assert_eq!(fourth.command, "PING");
+        assert_eq!(fourth.params, ["next"]);
+        // Reusing the input storage must not change previously parsed messages.
+        assert_eq!(first.params, ["#a", "hello"]);
+        assert!(r.read_message().await.unwrap().is_none());
+        assert!(r.read_message().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_parse_error_does_not_replay_failed_line() {
+        let (a, mut b) = tokio::io::duplex(4096);
+        let (_c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
+        b.write_all(b"@tag-without-command\r\nPING next\r\n")
+            .await
+            .unwrap();
+        assert!(r.read_message().await.is_err());
+        let next = r.read_message().await.unwrap().unwrap();
+        assert_eq!(next.command, "PING");
+        assert_eq!(next.params, ["next"]);
     }
 
     #[tokio::test]
