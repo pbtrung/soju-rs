@@ -1027,3 +1027,90 @@ fn sparse_fts_preserves_updates_and_event_history_ordering() {
     )
     .unwrap();
 }
+
+#[test]
+fn invalid_message_batch_rolls_back_rows_targets_and_id_reservations() {
+    let db = db();
+    let mut user = User::new("atomic");
+    db.store_user(&mut user).unwrap();
+    let mut network = Network::new("irc.example.org");
+    db.store_network(user.id, &mut network).unwrap();
+    let first = msg!("PRIVMSG", "#a", "valid").with_tag("time", "2024-01-01T00:00:00.000Z");
+    let invalid = msg!("PRIVMSG", "#a", "invalid").with_tag("time", "not-a-time");
+    assert!(
+        db.store_messages(network.id, "#a", &[first.clone(), invalid])
+            .is_err()
+    );
+    assert_eq!(db.get_message_target(network.id, "#a").unwrap().id, 0);
+    assert_eq!(db.get_message_last_id(network.id, "#a").unwrap(), 0);
+    let ids = db.store_messages(network.id, "#a", &[first]).unwrap();
+    assert_eq!(ids, [1]);
+}
+
+#[test]
+fn message_id_exhaustion_is_atomic() {
+    let db = db();
+    let mut user = User::new("ids");
+    db.store_user(&mut user).unwrap();
+    let mut network = Network::new("irc.example.org");
+    db.store_network(user.id, &mut network).unwrap();
+    db.conn()
+        .execute(
+            "INSERT INTO MessageIdHighWater(id,last_id) VALUES(0,?)",
+            [i64::MAX - 1],
+        )
+        .unwrap();
+    let message = msg!("PRIVMSG", "#a", "last").with_tag("time", "2024-01-01T00:00:00.000Z");
+    assert_eq!(
+        db.store_messages(network.id, "#a", std::slice::from_ref(&message))
+            .unwrap(),
+        [i64::MAX]
+    );
+    assert!(db.store_messages(network.id, "#b", &[message]).is_err());
+    assert_eq!(db.get_message_target(network.id, "#b").unwrap().id, 0);
+    assert_eq!(db.get_message_last_id(network.id, "#a").unwrap(), i64::MAX);
+    let high: i64 = db
+        .conn()
+        .query_row("SELECT last_id FROM MessageIdHighWater", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(high, i64::MAX);
+}
+
+#[test]
+fn expiry_rejects_zero_chunks_and_honors_preexisting_cancellation() {
+    let db = db();
+    assert!(
+        db.expire_messages(Utc::now(), 0, Duration::ZERO, &|| false)
+            .is_err()
+    );
+    assert_eq!(
+        db.expire_messages(Utc::now(), 1, Duration::ZERO, &|| true)
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn repeated_migration_after_another_initializer_is_a_noop() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    Database::run_migrations(&mut connection).unwrap();
+    connection
+        .execute(
+            "INSERT INTO User(username,created_at) VALUES('alice','')",
+            [],
+        )
+        .unwrap();
+    Database::run_migrations(&mut connection).unwrap();
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM User WHERE username='alice'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}

@@ -12,7 +12,11 @@ use crate::msg;
 /// each message fits in the maximum message length. Channels with a key
 /// are put first.
 pub fn generate_join(channels: &[String], keys: &[String]) -> Vec<Message> {
-    let mut pairs: Vec<(&String, &String)> = channels.iter().zip(keys.iter()).collect();
+    let mut pairs: Vec<(&str, &str)> = channels
+        .iter()
+        .enumerate()
+        .map(|(i, channel)| (channel.as_str(), keys.get(i).map_or("", String::as_str)))
+        .collect();
     pairs.sort_by(|(ca, ka), (cb, kb)| {
         let (ha, hb) = (!ka.is_empty(), !kb.is_empty());
         if ha != hb {
@@ -191,6 +195,25 @@ mod tests {
         }
         let total: usize = msgs.iter().map(|m| m.params[0].split(',').count()).sum();
         assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn joins_without_a_key_for_every_channel() {
+        let channels = vec!["#b".to_owned(), "#a".to_owned(), "#c".to_owned()];
+        for keys in [vec![], vec!["secret".to_owned()]] {
+            let messages = generate_join(&channels, &keys);
+            let joined: Vec<_> = messages
+                .iter()
+                .flat_map(|m| m.params[0].split(','))
+                .collect();
+            assert_eq!(joined.len(), 3);
+            for channel in &channels {
+                assert!(joined.contains(&channel.as_str()));
+            }
+            if !keys.is_empty() {
+                assert_eq!(messages[0].params, ["#b,#a,#c", "secret"]);
+            }
+        }
     }
 
     #[test]

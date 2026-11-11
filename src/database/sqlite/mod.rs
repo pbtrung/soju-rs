@@ -110,14 +110,16 @@ impl Database {
         // recommended by SQLite, disable foreign key enforcement while
         // altering the schema (this can't be changed inside a transaction).
         conn.pragma_update(None, "foreign_keys", false)?;
-        let res = Self::run_migrations(&mut conn, version);
+        let res = Self::run_migrations(&mut conn);
         conn.pragma_update(None, "foreign_keys", true)?;
         res
     }
 
-    fn run_migrations(conn: &mut Connection, version: i64) -> Result<()> {
+    fn run_migrations(conn: &mut Connection) -> Result<()> {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if version > SCHEMA_VERSION {
+        // BEGIN may have waited for another process to finish the upgrade.
+        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if !(0..=SCHEMA_VERSION).contains(&version) {
             bail!("unsupported database schema version {version}");
         }
         if version == SCHEMA_VERSION {

@@ -153,14 +153,15 @@ impl Database {
         .execute(named_params! {":network": network_id, ":target": name})?;
         // Message IDs are delivery receipt cursors, never reused after
         // deletion. The clustered Message table can't seek max(id): reserve
-        // them, like the background writer does.
-        let count = msgs.len() as i64;
+        // them transactionally before inserting rows.
+        let count = i64::try_from(msgs.len())?;
         let end: i64 = tx.query_row(
             "INSERT INTO MessageIdHighWater(id, last_id)
-            VALUES (0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) + :count)
+            SELECT 0, coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) + :count
+            WHERE coalesce((SELECT last_id FROM MessageIdHighWater WHERE id = 0), 0) <= :maximum
             ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
             RETURNING last_id",
-            named_params! {":count": count},
+            named_params! {":count": count, ":maximum": i64::MAX - count},
             |r| r.get(0),
         )?;
         let mut stmt = tx.prepare_cached(
@@ -169,7 +170,7 @@ impl Database {
             FROM MessageTarget WHERE network = :network AND target = :target",
         )?;
         let mut ids = Vec::with_capacity(msgs.len());
-        for (msg, id) in msgs.iter().zip(end - count + 1..) {
+        for (msg, id) in msgs.iter().zip(end - count + 1..=end) {
             let (time, text) = message_time_text(msg)?;
             stmt.execute(named_params! {
                 ":id": id,
