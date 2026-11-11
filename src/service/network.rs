@@ -110,7 +110,8 @@ fn update_network_from_flags(p: &Parsed, network: &mut db::Network) -> Result<()
             for command in cmds {
                 if let Err(e) = Message::parse(command) {
                     bail!(
-                        "flag -connect-command must be a valid raw irc command string: {command:?}: {e}"
+                        "flag -connect-command must be a valid raw irc command string: \
+                            {command:?}: {e}"
                     );
                 }
             }

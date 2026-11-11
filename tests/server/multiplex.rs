@@ -41,7 +41,8 @@ pub(super) async fn multiplex() {
     register_downstream_caps(
         &mut dc,
         None,
-        "batch cap-notify message-tags soju.im/bouncer-networks soju.im/bouncer-networks-notify soju.im/multiplex",
+        "batch cap-notify message-tags soju.im/bouncer-networks soju.im/bouncer-networks-notify \
+            soju.im/multiplex",
     )
     .await;
     let net = env.network.id.to_string();

@@ -152,7 +152,8 @@ impl FlagSet {
             match kind {
                 Kind::BoolValue if parse_go_bool(&value).is_none() => {
                     return Err(FlagError::Other(format!(
-                        "invalid value {value:?} for flag -{name}: strconv.ParseBool: parsing {value:?}: invalid syntax"
+                        "invalid value {value:?} for flag -{name}: strconv.ParseBool: parsing \
+                            {value:?}: invalid syntax"
                     )));
                 }
                 Kind::Int if value.parse::<i64>().is_err() => {
@@ -162,7 +163,8 @@ impl FlagSet {
                 }
                 Kind::Atoi if value.parse::<i64>().is_err() => {
                     return Err(FlagError::Other(format!(
-                        "invalid value {value:?} for flag -{name}: strconv.Atoi: parsing {value:?}: invalid syntax"
+                        "invalid value {value:?} for flag -{name}: strconv.Atoi: parsing \
+                            {value:?}: invalid syntax"
                     )));
                 }
                 _ => {}
@@ -262,7 +264,8 @@ mod tests {
         assert_eq!(err(&["---x"]), "bad flag syntax: ---x");
         assert_eq!(
             err(&["-enabled", "maybe"]),
-            "invalid value \"maybe\" for flag -enabled: strconv.ParseBool: parsing \"maybe\": invalid syntax"
+            "invalid value \"maybe\" for flag -enabled: strconv.ParseBool: parsing \"maybe\": \
+                invalid syntax"
         );
         assert_eq!(
             err(&["-bits", "x"]),

@@ -116,7 +116,8 @@ impl Authenticator {
             if let Some(p) = plain {
                 if out.plain.is_some() {
                     bail!(
-                        "failed to load authenticators: multiple plain authentication methods specified"
+                        "failed to load authenticators: multiple plain authentication methods \
+                            specified"
                     );
                 }
                 out.plain = Some(p);
@@ -124,7 +125,8 @@ impl Authenticator {
             if let Some(b) = bearer {
                 if out.oauth_bearer.is_some() {
                     bail!(
-                        "failed to load authenticators: multiple OAuth authentication methods specified"
+                        "failed to load authenticators: multiple OAuth authentication methods \
+                            specified"
                     );
                 }
                 out.oauth_bearer = Some(b);

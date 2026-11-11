@@ -136,9 +136,15 @@ impl Database {
                     .map_err(|e| anyhow!("failed to execute migration #{i}: {e}"))?;
             }
             if version < 32 {
-                tx.execute_batch("DROP TRIGGER MessageFTSInsert; DROP TRIGGER MessageFTSDelete; DROP TRIGGER MessageFTSUpdate; DROP TABLE MessageFTS;")?;
+                tx.execute_batch(
+                    "DROP TRIGGER MessageFTSInsert; DROP TRIGGER MessageFTSDelete; \
+                    DROP TRIGGER MessageFTSUpdate; DROP TABLE MessageFTS;",
+                )?;
                 tx.execute_batch(FTS_SCHEMA)?;
-                tx.execute_batch("INSERT INTO MessageFTS(rowid, text) SELECT id, text FROM Message WHERE text IS NOT NULL;")?;
+                tx.execute_batch(
+                    "INSERT INTO MessageFTS(rowid, text) SELECT id, text FROM Message \
+                    WHERE text IS NOT NULL;",
+                )?;
             }
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)

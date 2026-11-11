@@ -295,7 +295,8 @@ pub(super) fn handle_device_cert_delete(
         if cert.fingerprint.starts_with(&h) {
             if found.is_some() {
                 bail!(
-                    "multiple device certificates match this fingerprint prefix; pass the full fingerprint"
+                    "multiple device certificates match this fingerprint prefix; pass the full \
+                        fingerprint"
                 );
             }
             found = Some(cert);

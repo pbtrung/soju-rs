@@ -68,7 +68,8 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     if mechanism == "EXTERNAL" && !uc.supports_sasl("EXTERNAL") {
         debugf!(
             uc.logger,
-            "client certificate configured but the upstream doesn't advertise SASL EXTERNAL, delaying joining channels"
+            "client certificate configured but the upstream doesn't advertise SASL EXTERNAL, \
+                delaying joining channels"
         );
         delay = true;
     }

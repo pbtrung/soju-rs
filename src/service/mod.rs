@@ -221,7 +221,9 @@ fn commands() -> &'static [Command] {
                 vec![
                     Command::leaf(
                         "create",
-                        "-addr <addr> [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit] [-connect-command command]...",
+                        "-addr <addr> [-name name] [-username username] [-pass pass] [-realname \
+                            realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] \
+                            [-enabled enabled] [-ignore-limit] [-connect-command command]...",
                         "add a new network",
                         handle_network_create,
                     ),
@@ -231,15 +233,33 @@ fn commands() -> &'static [Command] {
                         "show a list of saved networks and their current status",
                         handle_network_status,
                     ),
-                    Command::leaf("info", "[name]", "show the configuration of a network", handle_network_info),
+                    Command::leaf(
+                        "info",
+                        "[name]",
+                        "show the configuration of a network",
+                        handle_network_info,
+                    ),
                     Command::leaf(
                         "update",
-                        "[name] [-addr addr] [-name name] [-username username] [-pass pass] [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away auto-away] [-enabled enabled] [-ignore-limit] [-connect-command command]...",
+                        "[name] [-addr addr] [-name name] [-username username] [-pass pass] \
+                            [-realname realname] [-certfp fingerprint] [-nick nick] [-auto-away \
+                            auto-away] [-enabled enabled] [-ignore-limit] [-connect-command \
+                            command]...",
                         "update a network",
                         handle_network_update,
                     ),
-                    Command::leaf("delete", "<name>", "delete a network", handle_network_delete),
-                    Command::leaf("quote", "[name] <command>", "send a raw line to a network", handle_network_quote),
+                    Command::leaf(
+                        "delete",
+                        "<name>",
+                        "delete a network",
+                        handle_network_delete,
+                    ),
+                    Command::leaf(
+                        "quote",
+                        "[name] <command>",
+                        "send a raw line to a network",
+                        handle_network_quote,
+                    ),
                 ],
             ),
             Command::group(
@@ -262,7 +282,12 @@ fn commands() -> &'static [Command] {
             Command::group(
                 "sasl",
                 vec![
-                    Command::leaf("status", "[-network name]", "show SASL status", handle_sasl_status),
+                    Command::leaf(
+                        "status",
+                        "[-network name]",
+                        "show SASL status",
+                        handle_sasl_status,
+                    ),
                     Command::leaf(
                         "set-plain",
                         "[-network name] <username> <password>",
@@ -280,12 +305,20 @@ fn commands() -> &'static [Command] {
             Command::group(
                 "user",
                 vec![
-                    Command::leaf("status", "[username]", "show a list of users and their current status", handle_user_status)
-                        .admin()
-                        .global(),
+                    Command::leaf(
+                        "status",
+                        "[username]",
+                        "show a list of users and their current \
+                        status",
+                        handle_user_status,
+                    )
+                    .admin()
+                    .global(),
                     Command::leaf(
                         "create",
-                        "-username <username> -password <password> [-disable-password] [-admin] [-nick <nick>] [-realname <realname>] [-enabled=false] [-max-networks <max-networks>]",
+                        "-username <username> -password <password> [-disable-password] [-admin] \
+                            [-nick <nick>] [-realname <realname>] [-enabled=false] [-max-networks \
+                            <max-networks>]",
                         "create a new soju user",
                         handle_user_create,
                     )
@@ -293,15 +326,28 @@ fn commands() -> &'static [Command] {
                     .global(),
                     Command::leaf(
                         "update",
-                        "[username] [-password <password>] [-disable-password] [-admin true|false] [-nick <nick>] [-realname <realname>] [-enabled true|false] [-max-networks <max-networks>]",
+                        "[username] [-password <password>] [-disable-password] [-admin true|false] \
+                            [-nick <nick>] [-realname <realname>] [-enabled true|false] \
+                            [-max-networks <max-networks>]",
                         "update a user",
                         handle_user_update,
                     )
                     .global(),
-                    Command::leaf("delete", "<username> [confirmation token]", "delete a user", handle_user_delete).global(),
-                    Command::leaf("run", "<username> <command>", "run a command as another user", handle_user_run)
-                        .admin()
-                        .global(),
+                    Command::leaf(
+                        "delete",
+                        "<username> [confirmation token]",
+                        "delete a user",
+                        handle_user_delete,
+                    )
+                    .global(),
+                    Command::leaf(
+                        "run",
+                        "<username> <command>",
+                        "run a command as another user",
+                        handle_user_run,
+                    )
+                    .admin()
+                    .global(),
                 ],
             )
             .global(),
@@ -316,30 +362,51 @@ fn commands() -> &'static [Command] {
                     ),
                     Command::leaf(
                         "create",
-                        "<name> [-detached true|false] [-relay-detached default|none|highlight|message] [-reattach-on default|none|highlight|message] [-detach-after <duration>] [-detach-on default|none|highlight|message]",
+                        "<name> [-detached true|false] [-relay-detached \
+                            default|none|highlight|message] [-reattach-on \
+                            default|none|highlight|message] [-detach-after <duration>] [-detach-on \
+                            default|none|highlight|message]",
                         "create a channel",
                         handle_channel_create,
                     ),
                     Command::leaf(
                         "update",
-                        "<name> [-detached true|false] [-relay-detached default|none|highlight|message] [-reattach-on default|none|highlight|message] [-detach-after <duration>] [-detach-on default|none|highlight|message]",
+                        "<name> [-detached true|false] [-relay-detached \
+                            default|none|highlight|message] [-reattach-on \
+                            default|none|highlight|message] [-detach-after <duration>] [-detach-on \
+                            default|none|highlight|message]",
                         "update a channel",
                         handle_channel_update,
                     ),
-                    Command::leaf("delete", "<name>", "delete a channel", handle_channel_delete),
+                    Command::leaf(
+                        "delete",
+                        "<name>",
+                        "delete a channel",
+                        handle_channel_delete,
+                    ),
                 ],
             ),
             Command::group(
                 "device-certificate",
                 vec![
-                    Command::leaf("status", "", "show a list of device certificates", handle_device_cert_status),
+                    Command::leaf(
+                        "status",
+                        "",
+                        "show a list of device certificates",
+                        handle_device_cert_status,
+                    ),
                     Command::leaf(
                         "create",
                         "-fingerprint <fingerprint> -label <label>",
                         "create a new device certificate",
                         handle_device_cert_create,
                     ),
-                    Command::leaf("delete", "<fingerprint>", "delete a device certificate", handle_device_cert_delete),
+                    Command::leaf(
+                        "delete",
+                        "<fingerprint>",
+                        "delete a device certificate",
+                        handle_device_cert_delete,
+                    ),
                 ],
             ),
             Command::group(

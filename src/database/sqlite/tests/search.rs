@@ -40,31 +40,42 @@ fn message_text_index_query_plans() {
         // The SQL of list_message_last_per_target and list_message_rows
         for (query, index) in [
             (
-                "SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+                "SELECT target, (SELECT time FROM Message INDEXED BY MessageTextIndex WHERE \
+                    target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1) \
+                    latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
                 "MessageTextIndex",
             ),
             (
-                "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest DESC LIMIT 10",
+                "SELECT target, (SELECT time FROM Message WHERE target=MessageTarget.id ORDER BY \
+                    time DESC LIMIT 1) latest FROM MessageTarget WHERE network=1 ORDER BY latest \
+                    DESC LIMIT 10",
                 "PRIMARY KEY",
             ),
             (
-                "SELECT m.raw FROM Message AS m INDEXED BY MessageTextIndex WHERE m.target=(SELECT id FROM MessageTarget WHERE network=1 AND target='#channel1') AND m.text IS NOT NULL ORDER BY time DESC, id DESC LIMIT 5",
+                "SELECT m.raw FROM Message AS m INDEXED BY MessageTextIndex WHERE m.target=(SELECT \
+                    id FROM MessageTarget WHERE network=1 AND target='#channel1') AND m.text IS \
+                    NOT NULL ORDER BY time DESC, id DESC LIMIT 5",
                 "MessageTextIndex",
             ),
             (
-                "SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM MessageTarget WHERE network=1 AND target='#channel1') ORDER BY time DESC, id DESC LIMIT 5",
+                "SELECT m.raw FROM Message AS m WHERE m.target=(SELECT id FROM MessageTarget WHERE \
+                    network=1 AND target='#channel1') ORDER BY time DESC, id DESC LIMIT 5",
                 "PRIMARY KEY",
             ),
             (
-                "SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC LIMIT 1",
+                "SELECT id FROM Message WHERE target=1 AND text IS NOT NULL ORDER BY id DESC LIMIT \
+                    1",
                 "MessageTextIdIndex",
             ),
             (
-                "SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN (SELECT time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) AND m.text IS NOT NULL ORDER BY time ASC, id ASC LIMIT 5",
+                "SELECT m.id FROM Message AS m WHERE m.target=1 AND (m.time, m.id) IN (SELECT \
+                    time, id FROM Message WHERE target=1 AND text IS NOT NULL AND id > 1000) AND \
+                    m.text IS NOT NULL ORDER BY time ASC, id ASC LIMIT 5",
                 "MessageTextIdIndex",
             ),
             (
-                "SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m ON m.target = t.id WHERE m.time < '2024' LIMIT 10",
+                "SELECT m.target, m.time, m.id FROM MessageTarget t CROSS JOIN Message m ON \
+                    m.target = t.id WHERE m.time < '2024' LIMIT 10",
                 "PRIMARY KEY (target=? AND time<?)",
             ),
         ] {

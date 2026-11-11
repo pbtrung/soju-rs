@@ -159,7 +159,8 @@ mod tests {
     #[test]
     fn basic() {
         let b = parse(
-            "# comment\nlisten ircs://\n\ntls \"cert file.pem\" key.pem\nblock a {\n  child x\n}\nempty {\n}\n",
+            "# comment\nlisten ircs://\n\ntls \"cert file.pem\" key.pem\nblock a {\n  child \
+                x\n}\nempty {\n}\n",
         )
         .unwrap();
         assert_eq!(b.len(), 4);

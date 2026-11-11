@@ -360,7 +360,8 @@ impl Server {
                 return Ok(u);
             }
             bail!(
-                "user {username:?} exists in the DB but hasn't been loaded by the bouncer -- a restart may help"
+                "user {username:?} exists in the DB but hasn't been loaded by the bouncer -- a \
+                    restart may help"
             );
         }
         if !self.config().basic.enable_users_on_auth {
@@ -377,7 +378,8 @@ impl Server {
             // Another connection created it meanwhile
             Err(_) if let Some(u) = self.get_user(username) => Ok(u),
             Err(e) => Err(anyhow!(
-                "failed to automatically create user {username:?} after successful authentication: {e}"
+                "failed to automatically create user {username:?} after successful authentication: \
+                    {e}"
             )),
         }
     }

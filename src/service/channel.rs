@@ -45,7 +45,8 @@ pub(super) fn handle_channel_status(
                 status.push_str(", detached");
             }
             ctx.print(format!(
-                "{name} [{status}]: relay-detached: {}, reattach-on: {}, detach-after: {}, detach-on: {}",
+                "{name} [{status}]: relay-detached: {}, reattach-on: {}, detach-after: {}, \
+                    detach-on: {}",
                 filter_name(ch.relay_detached),
                 filter_name(ch.reattach_on),
                 format_go_duration(ch.detach_after),

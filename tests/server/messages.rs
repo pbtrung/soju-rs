@@ -7,7 +7,8 @@ pub(super) async fn multiline() {
     let mut uc = accept_upstream(&env).await;
     let nick = register_upstream_caps(
         &mut uc,
-        "batch echo-message labeled-response message-tags server-time draft/multiline=max-bytes=4096,max-lines=4",
+        "batch echo-message labeled-response message-tags server-time \
+            draft/multiline=max-bytes=4096,max-lines=4",
     )
     .await;
 

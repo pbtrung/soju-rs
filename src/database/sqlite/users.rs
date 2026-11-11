@@ -99,7 +99,9 @@ impl Database {
             SET admin = :admin, nick = :nick, realname = :realname,
                 enabled = :enabled, downstream_interacted_at = :downstream_interacted_at,
                 max_networks = :max_networks
-            WHERE username = :username AND (admin IS NOT :admin OR nick IS NOT :nick OR realname IS NOT :realname OR enabled IS NOT :enabled OR downstream_interacted_at IS NOT :downstream_interacted_at OR max_networks IS NOT :max_networks)",
+            WHERE username = :username AND (admin IS NOT :admin OR nick IS NOT :nick OR realname \
+                IS NOT :realname OR enabled IS NOT :enabled OR downstream_interacted_at IS NOT \
+                :downstream_interacted_at OR max_networks IS NOT :max_networks)",
             named_params! {
                 ":username": user.username,
                 ":admin": user.admin,
@@ -117,7 +119,8 @@ impl Database {
     /// password, unless the password was changed meanwhile.
     pub fn upgrade_user_password(&self, id: i64, old: &str, new: &str) -> Result<()> {
         self.conn().execute(
-            "UPDATE User SET password = :new WHERE id = :id AND password = :old AND (password IS NOT :new)",
+            "UPDATE User SET password = :new WHERE id = :id AND password = :old AND (password IS \
+                NOT :new)",
             named_params! {":id": id, ":old": old, ":new": new},
         )?;
         Ok(())
@@ -125,7 +128,8 @@ impl Database {
 
     pub fn set_user_downstream_interacted_at(&self, id: i64, t: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
-            "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND downstream_interacted_at IS NOT ?1",
+            "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND \
+                downstream_interacted_at IS NOT ?1",
             params![xirc::format_server_time(t), id],
         )?;
         Ok(())
@@ -151,7 +155,10 @@ impl Database {
                     realname = :realname, enabled = :enabled,
                     downstream_interacted_at = :downstream_interacted_at,
                     max_networks = :max_networks
-                WHERE username = :username AND (password IS NOT :password OR admin IS NOT :admin OR nick IS NOT :nick OR realname IS NOT :realname OR enabled IS NOT :enabled OR downstream_interacted_at IS NOT :downstream_interacted_at OR max_networks IS NOT :max_networks)",
+                WHERE username = :username AND (password IS NOT :password OR admin IS NOT :admin \
+                    OR nick IS NOT :nick OR realname IS NOT :realname OR enabled IS NOT :enabled \
+                    OR downstream_interacted_at IS NOT :downstream_interacted_at OR max_networks \
+                    IS NOT :max_networks)",
                 fields,
             )?;
         } else {
@@ -315,8 +322,10 @@ impl Database {
         let res = if cert.id != 0 {
             conn.execute(
                 "UPDATE DeviceCertificate
-                SET label = :label, fingerprint = :fingerprint, last_used = :last_used, last_ip = :last_ip
-                WHERE id = :id AND (label IS NOT :label OR fingerprint IS NOT :fingerprint OR last_used IS NOT :last_used OR last_ip IS NOT :last_ip)",
+                SET label = :label, fingerprint = :fingerprint, last_used = :last_used, last_ip = \
+                    :last_ip
+                WHERE id = :id AND (label IS NOT :label OR fingerprint IS NOT :fingerprint OR \
+                    last_used IS NOT :last_used OR last_ip IS NOT :last_ip)",
                 named_params! {
                     ":label": cert.label,
                     ":fingerprint": cert.fingerprint,

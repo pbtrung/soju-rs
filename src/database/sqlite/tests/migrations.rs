@@ -43,7 +43,8 @@ fn migrations() {
     conn.execute_batch(SQLITE_V0_SCHEMA).unwrap();
     conn.execute_batch(
         "INSERT INTO User(username, password) VALUES ('alice', NULL);
-        INSERT INTO Network(name, user, addr, nick) VALUES ('net', 'alice', 'irc.example.org', 'alice');
+        INSERT INTO Network(name, user, addr, nick) VALUES ('net', 'alice', 'irc.example.org', \
+            'alice');
         INSERT INTO Channel(network, name) VALUES (1, '#soju');",
     )
     .unwrap();

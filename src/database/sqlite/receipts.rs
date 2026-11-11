@@ -20,8 +20,18 @@ fn changes(
     client: &str,
     receipts: &[DeliveryReceipt],
 ) -> Result<(Vec<Change>, Vec<i64>)> {
-    let saved=conn.prepare("SELECT id,target,internal_msgid FROM DeliveryReceipt WHERE network=? AND client IS ? ORDER BY id")?
-        .query_map(params![network,null_string(client)],|r|Ok((r.get::<_,i64>(0)?,lossy_string(r,1)?,lossy_string(r,2)?)))?
+    let saved = conn
+        .prepare(
+            "SELECT id,target,internal_msgid FROM DeliveryReceipt WHERE network=? \
+        AND client IS ? ORDER BY id",
+        )?
+        .query_map(params![network, null_string(client)], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                lossy_string(r, 1)?,
+                lossy_string(r, 2)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut existing = HashMap::new();
     let mut changes = Vec::new();
@@ -65,7 +75,17 @@ fn execute_changes(
                 )?;
             }
             Change::Insert(i) => {
-                conn.execute("INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) VALUES(?,?,?,?,?)",params![if ids[i]==0{None}else{Some(ids[i])},network,receipts[i].target,null_string(client),receipts[i].internal_msg_id])?;
+                conn.execute(
+                    "INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) \
+                    VALUES(?,?,?,?,?)",
+                    params![
+                        if ids[i] == 0 { None } else { Some(ids[i]) },
+                        network,
+                        receipts[i].target,
+                        null_string(client),
+                        receipts[i].internal_msg_id
+                    ],
+                )?;
                 if ids[i] == 0 {
                     ids[i] = conn.last_insert_rowid();
                 }
@@ -153,7 +173,8 @@ impl Database {
         let conn = self.conn();
         let res = conn
             .query_row(
-                "SELECT id, timestamp FROM ReadReceipt WHERE network = :network AND target = :target",
+                "SELECT id, timestamp FROM ReadReceipt WHERE network = :network AND target = \
+                    :target",
                 named_params! {":network": network_id, ":target": name},
                 |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
             )
@@ -173,7 +194,8 @@ impl Database {
         let ts = time_to_sql(receipt.timestamp);
         if receipt.id != 0 {
             conn.execute(
-                "UPDATE ReadReceipt SET timestamp = :timestamp WHERE id = :id AND (timestamp IS NOT :timestamp)",
+                "UPDATE ReadReceipt SET timestamp = :timestamp WHERE id = :id AND (timestamp IS \
+                    NOT :timestamp)",
                 named_params! {":timestamp": ts, ":id": receipt.id},
             )?;
         } else {

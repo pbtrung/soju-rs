@@ -405,7 +405,8 @@ pub fn parse(s: &str) -> Result<Server> {
         let d = d[0];
         srv.basic.max_user_networks = s.parse().map_err(|_| {
             anyhow!(
-                "line {}, directive {:?}, parameter 1: invalid int parameter: strconv.ParseInt: parsing {:?}: invalid syntax",
+                "line {}, directive {:?}, parameter 1: invalid int parameter: strconv.ParseInt: \
+                    parsing {:?}: invalid syntax",
                 d.lineno,
                 d.name,
                 s
@@ -448,7 +449,8 @@ pub fn parse(s: &str) -> Result<Server> {
         srv.basic.chat_history_limit = match s.parse() {
             Ok(n) if (MIN_CHAT_HISTORY_LIMIT..=MAX_CHAT_HISTORY_LIMIT).contains(&n) => n,
             _ => bail!(
-                "directive chathistory-limit: must be an integer between {MIN_CHAT_HISTORY_LIMIT} and {MAX_CHAT_HISTORY_LIMIT}"
+                "directive chathistory-limit: must be an integer between {MIN_CHAT_HISTORY_LIMIT} \
+                    and {MAX_CHAT_HISTORY_LIMIT}"
             ),
         };
     }

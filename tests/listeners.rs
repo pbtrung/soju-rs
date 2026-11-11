@@ -25,7 +25,17 @@ async fn websocket_handshake_validates_keys_before_upgrading() {
         ("dGhlIHNhbXBsZSBub25jZQ==", "101"),
     ] {
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-        stream.write_all(format!("GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n").as_bytes()).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: \
+            Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: \
+            {key}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
         let mut reader = BufReader::new(stream);
         let mut status = String::new();
         tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut status))

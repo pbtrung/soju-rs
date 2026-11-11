@@ -536,7 +536,8 @@ pub fn upstream_for_command(u: &User, dc_idx: usize, cmd: &str) -> Result<usize>
     let Some(ni) = dc_network(u, dc_idx) else {
         return Err(unknown_irc_error(
             cmd,
-            "Cannot interact with channels and users on the bouncer connection. Did you mean to use a specific network?",
+            "Cannot interact with channels and users on the bouncer connection. Did you mean to \
+                use a specific network?",
         ));
     };
     if u.networks[ni].upstream().is_none() {

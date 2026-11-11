@@ -127,7 +127,8 @@ impl User {
             bcrypt::verify(password, &self.password).map_err(|e| anyhow!("wrong password: {e}"))?;
         if !ok {
             bail!(
-                "wrong password: crypto/bcrypt: hashedPassword is not the hash of the given password"
+                "wrong password: crypto/bcrypt: hashedPassword is not the hash of the given \
+                    password"
             );
         }
         let cost = bcrypt_cost(&self.password)?;

@@ -22,7 +22,8 @@ impl Database {
         Ok(conn
             .query_row(
                 "SELECT id FROM Message
-                WHERE target = (SELECT id FROM MessageTarget WHERE network = :network AND target = :target)
+                WHERE target = (SELECT id FROM MessageTarget WHERE network = :network AND target = \
+                    :target)
                 AND text IS NOT NULL ORDER BY id DESC LIMIT 1",
                 named_params! {":network": network_id, ":target": name},
                 |r| r.get(0),
@@ -41,7 +42,8 @@ impl Database {
         };
         if let Some((id, pinned, muted, blocked)) = conn
             .query_row(
-                "SELECT id, pinned, muted, blocked FROM MessageTarget WHERE network = :network AND target = :target",
+                "SELECT id, pinned, muted, blocked FROM MessageTarget WHERE network = :network AND \
+                    target = :target",
                 named_params! {":network": network_id, ":target": target},
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -78,7 +80,9 @@ impl Database {
         let conn = self.conn();
         if mt.id != 0 {
             conn.execute(
-                "UPDATE MessageTarget SET pinned = :pinned, muted = :muted, blocked = :blocked WHERE id = :id AND (pinned IS NOT :pinned OR muted IS NOT :muted OR blocked IS NOT :blocked)",
+                "UPDATE MessageTarget SET pinned = :pinned, muted = :muted, blocked = :blocked \
+                    WHERE id = :id AND (pinned IS NOT :pinned OR muted IS NOT :muted OR blocked IS \
+                    NOT :blocked)",
                 named_params! {
                     ":pinned": mt.pinned,
                     ":muted": mt.muted,
@@ -194,7 +198,8 @@ impl Database {
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
         // Without statistics, SQLite may choose the primary key and scan events.
-        let text = "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1";
+        let text = "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE \
+            target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1";
         let (inner, latest_text) = if options.events {
             // Messages are clustered by target and time: one seek. Unread
             // state only counts text messages.
