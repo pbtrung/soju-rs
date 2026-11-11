@@ -22,6 +22,7 @@ path = "src/bin/sojuctl.rs"
 
 [[bench]]
 name = "reader"
+path = "src/bench/reader.rs"
 harness = false
 test = false
 
