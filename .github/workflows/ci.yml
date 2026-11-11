@@ -23,26 +23,27 @@ jobs:
   test:
     name: Test ${{ matrix.target }}
     runs-on: ubuntu-latest
+    container: archlinux:latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
+        include:
+          - target: x86_64-unknown-linux-gnu
+            packages: go python nodejs npm chromium
+          - target: x86_64-unknown-linux-musl
+            packages: musl rust-musl
     env:
       TARGET: ${{ matrix.target }}
       COMPAT_WORK: /tmp/soju-compat
 
     steps:
-      - name: Install native build tools and Rust target
+      - name: Install Arch Linux test toolchain
+        env:
+          PACKAGES: ${{ matrix.packages }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake perl musl-tools pkg-config binutils
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add "$TARGET"
+          read -r -a packages <<< "$PACKAGES"
+          pacman -Syu --noconfirm --needed rust gcc cmake make perl git "${packages[@]}"
           rustc --version --verbose
 
       - uses: actions/checkout@v7
@@ -58,14 +59,11 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: tests/compat/setup.sh
 
-      - name: Install Chromium for compatibility tests
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        working-directory: /tmp/soju-compat/gamja
-        run: npx playwright install --with-deps chromium
-
       - name: Run compatibility tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         working-directory: tests/compat
+        env:
+          CHROMIUM_EXECUTABLE: /usr/bin/chromium
         run: |
           export RSBIN="$GITHUB_WORKSPACE/target/$TARGET/debug"
           export RS_BIN="$RSBIN"
@@ -90,20 +88,16 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
+    container: archlinux:latest
     timeout-minutes: 40
     outputs:
       tag: ${{ steps.package.outputs.tag }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
 
     steps:
-      - name: Install native release toolchains
+      - name: Install Arch Linux release toolchains
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake perl musl-tools pkg-config binutils
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add x86_64-unknown-linux-gnu x86_64-unknown-linux-musl
+          pacman -Syu --noconfirm --needed rust musl rust-musl gcc cmake make perl git
           rustc --version --verbose
 
       - uses: actions/checkout@v7
@@ -145,6 +139,7 @@ jobs:
     if: inputs.publish
     needs: build
     runs-on: ubuntu-latest
+    container: archlinux:latest
     timeout-minutes: 10
     permissions:
       contents: write
@@ -152,6 +147,9 @@ jobs:
       group: release-${{ needs.build.outputs.tag }}
 
     steps:
+      - name: Install Arch Linux publishing tools
+        run: pacman -Syu --noconfirm --needed git github-cli
+
       - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8

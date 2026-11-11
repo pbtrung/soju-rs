@@ -22,8 +22,8 @@ bouncer's directory, e.g. `EXTRA_CONFIG="motd %D%/motd.txt" ./run-diff.sh`.
 
 Playwright uses its installed Chromium by default. Set
 `CHROMIUM_EXECUTABLE=/usr/bin/chromium` when using a system browser instead.
-GitHub Actions installs the browser and runs all checks directly on its
-Ubuntu runner.
+GitHub Actions uses `archlinux:latest`, installs Arch's `chromium` package
+and selects `/usr/bin/chromium` through this variable.
 
 The differential harness (`diffharness.py`) runs each scenario against both
 bouncers, each connected to its own ergo instance, and compares the

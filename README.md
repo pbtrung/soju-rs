@@ -124,8 +124,9 @@ Behaviour changes:
 `cargo test` runs unit tests and the integration tests ported from upstream,
 the latter on both the multi-threaded and the current-thread runtime (soju-rs
 uses the current-thread one on machines with a single CPU). GitHub Actions
-runs the Cargo suite for GNU and musl on native Ubuntu runners when manually
-triggered with **Run workflow**. It also runs the following compatibility checks:
+runs the Cargo suite for GNU and musl in the latest Arch Linux image when
+manually triggered with **Run workflow**. It also runs the following
+compatibility checks:
 
 - end-to-end tests using the latest default-branch commit of
   [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju
