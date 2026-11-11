@@ -1,5 +1,5 @@
 //! In-memory IRC reader benchmark, without sockets, TLS, storage or logging.
-//! Run with: cargo run --release --example bench-reader
+//! Run with: cargo bench --bench reader
 //! Compare the same executable/workload before and after a reader change.
 
 use std::hint::black_box;
@@ -69,6 +69,12 @@ fn main() {
         .unwrap();
     rt.block_on(async {
         for (payload, messages) in [(32, 65536), (256, 65536), (4096, 8192)] {
+            // Cargo also executes custom benchmarks in `test --all-targets`.
+            // Verify each workload in debug builds; measure optimized builds.
+            if cfg!(debug_assertions) {
+                sample(payload, 128).await;
+                continue;
+            }
             sample(payload, 1024).await;
             let mut samples = Vec::new();
             for _ in 0..7 {

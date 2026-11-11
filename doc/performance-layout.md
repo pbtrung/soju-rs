@@ -36,7 +36,7 @@ heap memory, and can change with compiler, target or dependencies:
 Reproduce with:
 
 ```sh
-cargo run --release --example bench-reader -- --layout
+cargo bench --bench reader -- --layout
 ```
 
 ## Repository findings
@@ -76,7 +76,7 @@ every connection's idle memory footprint.
 ## Reader benchmark
 
 ```sh
-cargo run --release --example bench-reader
+cargo bench --bench reader
 ```
 
 The benchmark uses the production reader, the server's mimalloc allocator,

@@ -20,6 +20,11 @@ path = "src/bin/soju.rs"
 name = "sojuctl"
 path = "src/bin/sojuctl.rs"
 
+[[bench]]
+name = "reader"
+harness = false
+test = false
+
 [dependencies]
 aes-gcm = "0.11.1"
 anyhow = "1.0.104"
