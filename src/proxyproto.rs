@@ -119,11 +119,11 @@ async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
             bail!("proxyproto: unexpected EOF in v1 header");
         }
         line.push(b[0]);
-        if line.ends_with(b"\r\n") {
-            break;
-        }
         if line.len() > V1_MAX_LEN {
             bail!("proxyproto: v1 header too long");
+        }
+        if line.ends_with(b"\r\n") {
+            break;
         }
     }
     let line = std::str::from_utf8(&line[..line.len() - 2])?;
@@ -135,6 +135,10 @@ async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     }
     let src_ip: IpAddr = parts[2].parse()?;
     let dst_ip: IpAddr = parts[3].parse()?;
+    let ipv4 = parts[1] == "TCP4";
+    if src_ip.is_ipv4() != ipv4 || dst_ip.is_ipv4() != ipv4 {
+        bail!("proxyproto: v1 address family mismatch");
+    }
     let src_port: u16 = parts[4].parse()?;
     let dst_port: u16 = parts[5].parse()?;
     Ok(Header {
@@ -160,7 +164,17 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     stream.read_exact(&mut data).await?;
 
     let mut header = Header::default();
-    let local = ver_cmd & 0x0f == 0;
+    match ver_cmd & 0x0f {
+        // LOCAL carries opaque data, never connection identity or SSL TLVs.
+        0 => return Ok(header),
+        1 => {}
+        _ => bail!("proxyproto: unsupported v2 command"),
+    }
+    // This parser is used for stream listeners. UNSPEC has no addresses;
+    // all other supported families must declare the STREAM transport.
+    if fam != 0 && !matches!(fam, 0x11 | 0x21 | 0x31) {
+        bail!("proxyproto: unsupported v2 family or transport");
+    }
     let (addr_len, addrs) = match fam >> 4 {
         1 if data.len() >= 12 => {
             let src = Ipv4Addr::new(data[0], data[1], data[2], data[3]);
@@ -192,7 +206,7 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
         0 => (0, None),
         _ => bail!("proxyproto: invalid v2 address block"),
     };
-    if !local && let Some((src, dst)) = addrs {
+    if let Some((src, dst)) = addrs {
         header.source = Some(src);
         header.destination = Some(dst);
     }
@@ -257,6 +271,65 @@ mod tests {
         assert_eq!(rest, b"NICK a\r\n");
         let (h, _) = parse(b"PROXY UNKNOWN\r\n").await;
         assert_eq!(h.unwrap().source, None);
+    }
+
+    fn v2_input(command: u8, family: u8, body: &[u8]) -> Vec<u8> {
+        let mut input = V2_SIGNATURE.to_vec();
+        input.extend_from_slice(&[0x20 | command, family]);
+        input.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        input.extend_from_slice(body);
+        input
+    }
+
+    #[tokio::test]
+    async fn local_payload_is_opaque_and_never_supplies_identity() {
+        // LOCAL payloads, including their family and TLVs, must be ignored.
+        let mut body = vec![0; 12];
+        body.extend_from_slice(&[
+            PP2_TYPE_SSL,
+            0,
+            9,
+            1,
+            0,
+            0,
+            0,
+            0,
+            PP2_SUBTYPE_SSL_CLIENT_CERT,
+            0,
+            1,
+            42,
+        ]);
+        for (family, body) in [(0x11, body.as_slice()), (0xff, &[0xff][..])] {
+            let mut input = v2_input(0, family, body);
+            input.extend_from_slice(b"PING next\r\n");
+            let (header, rest) = parse(&input).await;
+            assert_eq!(header, Some(Header::default()));
+            assert_eq!(rest, b"PING next\r\n");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_proxy_families_and_commands() {
+        for input in [
+            v2_input(2, 0x11, &[0; 12]),
+            v2_input(1, 0x12, &[0; 12]), // Datagram on a stream listener
+            v2_input(1, 0x10, &[0; 12]),
+            v2_input(1, 0x11, &[0; 11]),
+            b"PROXY TCP4 ::1 ::1 1234 6667\r\n".to_vec(),
+            b"PROXY TCP6 127.0.0.1 127.0.0.1 1234 6667\r\n".to_vec(),
+        ] {
+            assert!(read_header(input.as_slice()).await.is_err(), "{input:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn v1_length_includes_terminator() {
+        let mut input = b"PROXY UNKNOWN ".to_vec();
+        input.resize(V1_MAX_LEN - 1, b'x');
+        input.extend_from_slice(b"\r\n");
+        assert!(read_header(input.as_slice()).await.is_err());
+        input.remove(V1_MAX_LEN - 2);
+        assert!(read_header(input.as_slice()).await.is_ok());
     }
 
     #[tokio::test]

@@ -41,7 +41,7 @@ impl DownstreamSasl {
         if self.kind == SaslServerKind::OAuthBearer
             && let Some(fail) = &self.oauth_fail
         {
-            if response.is_none_or(|r| r.len() != 1 && r.first() != Some(&0x01)) {
+            if response.is_none_or(|r| r != [0x01]) {
                 bail!("sasl: invalid response");
             }
             bail!("{fail}");
@@ -198,6 +198,13 @@ impl DownstreamConn {
             }
             Some(sasl) => {
                 let chunk = if param == "+" { "" } else { param.as_str() };
+                if chunk.len() > xirc::MAX_SASL_LENGTH {
+                    return Err(irc_error(msg!(
+                        ERR_SASLTOOLONG,
+                        nick,
+                        "AUTHENTICATE chunk too long"
+                    )));
+                }
                 if sasl.pending_resp.len() + chunk.len() > 10 * 1024 {
                     return Err(irc_error(msg!(ERR_SASLFAIL, nick, "Response too long")));
                 }
@@ -244,6 +251,30 @@ impl DownstreamConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_failure_acknowledgement_is_exactly_one_control_byte() {
+        for response in [&b"\x01"[..], b"x", b"\x01x", b"", b"xx"] {
+            let mut sasl = DownstreamSasl {
+                kind: SaslServerKind::OAuthBearer,
+                mechanism: "OAUTHBEARER".to_owned(),
+                done: true,
+                oauth_fail: Some("original failure".to_owned()),
+                plain: None,
+                oauth_bearer: None,
+                pending_resp: String::new(),
+            };
+            let error = sasl.next(Some(response)).unwrap_err().to_string();
+            assert_eq!(
+                error,
+                if response == b"\x01" {
+                    "original failure"
+                } else {
+                    "sasl: invalid response"
+                }
+            );
+        }
+    }
 
     #[test]
     fn sasl_mechanisms() {

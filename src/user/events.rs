@@ -234,7 +234,8 @@ impl User {
                 if self.downstreams[i].conn.is_closed() {
                     logf!(
                         self.downstreams[i].logger,
-                        "ignoring message on closed connection: {msg}"
+                        "ignoring message on closed connection: {}",
+                        crate::ircutil::redact_for_log(&msg)
                     );
                     return;
                 }

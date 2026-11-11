@@ -64,7 +64,11 @@ impl User {
             return;
         }
         if uc.conn.is_closed() {
-            logf!(uc.logger, "ignoring message on closed connection: {msg}");
+            logf!(
+                uc.logger,
+                "ignoring message on closed connection: {}",
+                crate::ircutil::redact_for_log(&msg)
+            );
             return;
         }
         if let Some(buf) = &mut uc.delayed_messages {
@@ -102,7 +106,7 @@ impl User {
                         m.tags.clear();
                         let text = format!(
                             "failed to register: failed to handle message {:?}: {e}",
-                            m.to_string()
+                            crate::ircutil::redact_for_log(&m)
                         );
                         upstream::OutcomeError {
                             event: text.clone(),
@@ -118,7 +122,7 @@ impl User {
             logf!(
                 uc.logger,
                 "failed to handle message {:?}: {e}",
-                msg.to_string()
+                crate::ircutil::redact_for_log(&msg)
             );
             return;
         }

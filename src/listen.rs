@@ -235,7 +235,14 @@ async fn bind(addr: &Address) -> Result<BoundListener> {
             if let Ok(md) = std::fs::symlink_metadata(path) {
                 use std::os::unix::fs::FileTypeExt;
                 if md.file_type().is_socket() {
-                    let _ = std::fs::remove_file(path);
+                    match tokio::net::UnixStream::connect(path).await {
+                        Ok(_) => bail!("Unix socket {path:?} is already in use"),
+                        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                            std::fs::remove_file(path)?;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
             Ok(BoundListener::Unix(tokio::net::UnixListener::bind(path)?))
@@ -407,7 +414,9 @@ async fn handle_accepted(
         if h.source.is_some() {
             remote = h.source;
         }
-        peer_cert = h.client_cert.clone();
+        if let Some(cert) = &h.client_cert {
+            peer_cert = Some(cert.clone());
+        }
     }
     let io: BoxIo = Box::new(io);
 
@@ -693,6 +702,17 @@ fn handle_websocket(
         );
     };
 
+    if BASE64
+        .decode(&key)
+        .ok()
+        .is_none_or(|decoded| decoded.len() != 16)
+    {
+        return response(
+            StatusCode::BAD_REQUEST,
+            "WebSocket protocol violation: invalid Sec-WebSocket-Key\n",
+        );
+    }
+
     let cfg = srv.config();
     if let Err(e) = authenticate_origin(&req, &cfg.basic.http_origins) {
         logf!(srv.logger, "failed to serve HTTP connection: {e}");
@@ -795,6 +815,30 @@ fn websocket_config() -> WebSocketConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_binding_preserves_live_sockets_and_regular_files() {
+        let path = std::env::temp_dir().join(format!(
+            "soju-listener-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let address = Address::Unix(path.to_str().unwrap().to_owned());
+        let original = tokio::net::UnixListener::bind(&path).unwrap();
+        assert!(bind(&address).await.is_err());
+        // The original socket remains reachable and has not been replaced.
+        tokio::net::UnixStream::connect(&path).await.unwrap();
+        drop(original);
+        // A stale socket left after the listener closes can be reclaimed.
+        let replacement = bind(&address).await.unwrap();
+        drop(replacement);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "keep").unwrap();
+        assert!(bind(&address).await.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep");
+        std::fs::remove_file(&path).unwrap();
+    }
 
     #[test]
     fn uris() {

@@ -58,55 +58,42 @@ impl Identd {
     /// Handles one ident client connection. remote_host is the client's IP.
     pub async fn handle<S: AsyncRead + AsyncWrite + Unpin>(&self, stream: S, remote_host: &str) {
         let mut r = BufReader::new(stream);
-        loop {
-            let mut line = String::new();
-            let res = tokio::time::timeout(IDENTD_TIMEOUT, async {
-                // We only need to read lines with two port numbers
-                let mut limited = (&mut r).take(512);
-                limited.read_line(&mut line).await
-            })
-            .await;
-            match res {
-                Ok(Ok(n)) if n > 0 => {}
-                _ => break,
-            }
-            let l = line.trim_end_matches(['\r', '\n']).to_owned();
-
-            let reply = match parse_ident_query(&l) {
-                None => {
-                    let _ = r
-                        .get_mut()
-                        .write_all(format!("{l} : ERROR : INVALID-PORT\r\n").as_bytes())
-                        .await;
-                    break;
-                }
-                Some((local_port, remote_port)) => {
-                    let k = IdentKey {
-                        remote_host: remote_host.to_owned(),
-                        remote_port,
-                        local_port,
-                    };
-                    self.entries.read().unwrap().get(&k).cloned()
-                }
-            };
-            let Some(ident) = reply else {
-                let _ = r
-                    .get_mut()
-                    .write_all(format!("{l} : ERROR : NO-USER\r\n").as_bytes())
-                    .await;
-                break;
-            };
-            // The "OTHER" operating system may be rejected by IRC servers,
-            // because it may be used when the ident string isn't stable. Use
-            // "UNKNOWN" from RFC 1340 instead.
-            if r.get_mut()
-                .write_all(format!("{l} : USERID : UNKNOWN : {ident}\r\n").as_bytes())
-                .await
-                .is_err()
-            {
-                break;
-            }
+        while let Ok(Ok(true)) =
+            tokio::time::timeout(IDENTD_TIMEOUT, self.handle_query(&mut r, remote_host)).await
+        {
         }
+    }
+
+    async fn handle_query<S: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        r: &mut BufReader<S>,
+        remote_host: &str,
+    ) -> std::io::Result<bool> {
+        let mut line = String::new();
+        // Bound both memory use and the time spent reading AND writing a query.
+        (&mut *r).take(512).read_line(&mut line).await?;
+        if !line.ends_with('\n') {
+            return Ok(false);
+        }
+        let query = line.trim_end_matches(['\r', '\n']);
+        let (reply, keep_open) = match parse_ident_query(query) {
+            None => (format!("{query} : ERROR : INVALID-PORT\r\n"), false),
+            Some((local_port, remote_port)) => {
+                let key = IdentKey {
+                    remote_host: remote_host.to_owned(),
+                    remote_port,
+                    local_port,
+                };
+                let ident = self.entries.read().unwrap().get(&key).cloned();
+                match ident {
+                    // UNKNOWN is from RFC 1340; IRC servers may reject OTHER.
+                    Some(ident) => (format!("{query} : USERID : UNKNOWN : {ident}\r\n"), true),
+                    None => (format!("{query} : ERROR : NO-USER\r\n"), false),
+                }
+            }
+        };
+        r.get_mut().write_all(reply.as_bytes()).await?;
+        Ok(keep_open)
     }
 }
 
@@ -123,6 +110,37 @@ fn parse_ident_query(l: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_reply_times_out() {
+        let identd = Identd::new();
+        identd.store("10.0.0.1:2", "10.0.0.2:1", "user");
+        let (a, mut b) = tokio::io::duplex(16);
+        let task = tokio::spawn(async move { identd.handle(a, "10.0.0.1").await });
+        b.write_all(b"1,2\r\n").await.unwrap();
+        // The complete reply exceeds the pipe capacity. The peer never reads.
+        tokio::time::timeout(IDENTD_TIMEOUT + Duration::from_secs(1), task)
+            .await
+            .expect("stalled ident writer was retained indefinitely")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_query_is_not_processed() {
+        let identd = Identd::new();
+        identd.store("10.0.0.1:2", "10.0.0.2:1", "user");
+        let (a, mut b) = tokio::io::duplex(1024);
+        let task = tokio::spawn(async move { identd.handle(a, "10.0.0.1").await });
+        // A syntactically valid prefix at the size cap is still not a line.
+        let mut query = b"1,2".to_vec();
+        query.resize(512, b' ');
+        query.extend_from_slice(b"5,6\r\n");
+        b.write_all(&query).await.unwrap();
+        let mut reply = Vec::new();
+        b.read_to_end(&mut reply).await.unwrap();
+        assert!(reply.is_empty());
+        task.await.unwrap();
+    }
 
     #[tokio::test]
     async fn query() {

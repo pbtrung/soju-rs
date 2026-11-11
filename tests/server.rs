@@ -43,6 +43,7 @@ test_on_both_runtimes!(
     cap_req_removal,
     labeled_response_ack,
     sasl_errors,
+    sasl_chunk_boundaries,
     disabled_admin_impersonation,
     setname_survives_network_update,
     chat_history_params,
@@ -642,6 +643,36 @@ async fn sasl_errors() {
     }
     let m = dc.expect("ERROR").await;
     assert_eq!(m.params[0], "Too many authentication failures");
+    env.srv.shutdown().await;
+}
+
+async fn sasl_chunk_boundaries() {
+    use base64::Engine;
+    let username = "u".repeat(300);
+    let env = setup_with(db_store(), |_, user| user.username = username.clone()).await;
+    let mut dc = connect_downstream(&env.srv);
+    dc.send(msg!("CAP", "LS", "302"));
+    read_cap_ls(&mut dc).await;
+    dc.send(msg!("CAP", "REQ", "sasl"));
+    dc.expect("CAP").await;
+    dc.send(msg!("AUTHENTICATE", "PLAIN"));
+    dc.expect("AUTHENTICATE").await;
+    dc.send(msg!("AUTHENTICATE", "A".repeat(404)));
+    dc.expect("905").await;
+
+    // A valid exchange after a rejected chunk proves the state was reset.
+    // A long username makes the base64 cross the 400-byte boundary.
+    dc.send(msg!("AUTHENTICATE", "PLAIN"));
+    dc.expect("AUTHENTICATE").await;
+    let creds = format!("\0{username}\0{TEST_PASSWORD}");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(creds);
+    assert!(encoded.len() > 400);
+    dc.send(msg!("AUTHENTICATE", &encoded[..400]));
+    // CAP LIST is independent and proves the first chunk didn't end SASL.
+    dc.send(msg!("CAP", "LIST"));
+    dc.expect("CAP").await;
+    dc.send(msg!("AUTHENTICATE", &encoded[400..]));
+    read_until(&mut dc, "903").await;
     env.srv.shutdown().await;
 }
 

@@ -120,6 +120,13 @@ fn format_line(msg: &Message) -> String {
     line
 }
 
+fn redact_line_for_log(line: &str) -> String {
+    match Message::parse(line) {
+        Ok(msg) => crate::ircutil::redact_for_log(&msg),
+        Err(_) => "<invalid message>".to_owned(),
+    }
+}
+
 impl Writer {
     /// Writes a line formatted by format_line. With flush unset, it may
     /// stay buffered until the next flushed write.
@@ -219,6 +226,9 @@ impl Reader {
                     }
                     _ => continue,
                 };
+                if text.len() > MAX_LINE_LENGTH {
+                    return Err(anyhow!("line too long"));
+                }
                 match parse_line(&text)? {
                     Some(msg) => return Ok(Some(msg)),
                     None => return Err(anyhow!("irc: cannot parse zero-length message")),
@@ -364,7 +374,7 @@ impl Conn {
                         _ = cancel.cancelled() => break,
                     }
                 }
-                debugf!(c.shared.logger, "sent: {line}");
+                debugf!(c.shared.logger, "sent: {}", redact_line_for_log(&line));
                 // Batch lines in a write when more are ready, e.g. backlog.
                 // Rate limited lines are sent as soon as allowed.
                 let flush = limited || rx.is_empty();
@@ -540,7 +550,11 @@ impl ConnReader {
             _ = self.cancel.cancelled() => return Ok(None),
         };
         if let Ok(Some(msg)) = &res {
-            debugf!(self.logger, "received: {msg}");
+            debugf!(
+                self.logger,
+                "received: {}",
+                crate::ircutil::redact_for_log(msg)
+            );
         }
         res
     }
@@ -731,6 +745,55 @@ mod tests {
             WsMessage::Text(t) => assert_eq!(t.as_str(), msg.to_string()),
             m => panic!("unexpected frame: {m:?}"),
         }
+    }
+
+    #[test]
+    fn outgoing_credentials_are_redacted() {
+        for msg in [
+            crate::msg!("PASS", "secret"),
+            crate::msg!("AUTHENTICATE", "encoded-secret"),
+            crate::msg!("BOUNCERSERV", "user create -password secret"),
+            crate::msg!("PRIVMSG", "NickServ", "IDENTIFY secret"),
+        ] {
+            let logged = redact_line_for_log(&format_line(&msg));
+            assert!(!logged.contains("secret"));
+            assert!(logged.contains("<redacted>"));
+        }
+        assert_eq!(redact_line_for_log("PING alive"), "PING alive");
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_oversized_frames_without_listener_configuration() {
+        let (a, b) = tokio::io::duplex(1 << 17);
+        let server = WebSocketStream::from_raw_socket(
+            Box::new(a) as BoxIo,
+            tokio_tungstenite::tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+        let mut client = WebSocketStream::from_raw_socket(
+            Box::new(b) as BoxIo,
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        let (conn, mut reader) = Conn::new_websocket(server, Logger::new(false));
+        client
+            .send(WsMessage::text(format!(
+                "PRIVMSG #a :{}",
+                "x".repeat(MAX_LINE_LENGTH)
+            )))
+            .await
+            .unwrap();
+        assert!(
+            reader
+                .read_message()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("line too long")
+        );
+        conn.close();
     }
 
     #[tokio::test]
