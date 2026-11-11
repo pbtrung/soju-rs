@@ -1,0 +1,86 @@
+
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CC_x86_64_unknown_linux_musl: musl-gcc
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: cc
+
+jobs:
+  test:
+    name: Test ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 40
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            packages: go python nodejs npm chromium
+          - target: x86_64-unknown-linux-musl
+            packages: musl rust-musl
+
+    env:
+      TARGET: ${{ matrix.target }}
+      COMPAT_WORK: /tmp/soju-compat
+
+    steps:
+      - name: Install Arch Linux test toolchain
+        env:
+          PACKAGES: ${{ matrix.packages }}
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          pacman -Syu --noconfirm --needed \
+            rust gcc cmake make perl git "${packages[@]}"
+          rustc --version --verbose
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run Rust tests
+        run: |
+          cargo test --locked --all-targets --target "$TARGET"
+          cargo test --locked --doc --target "$TARGET"
+
+      - name: Prepare compatibility tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: tests/compat/setup.sh
+
+      - name: Run compatibility tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: tests/compat
+        env:
+          CHROMIUM_EXECUTABLE: /usr/bin/chromium
+        run: |
+          export RSBIN="$GITHUB_WORKSPACE/target/$TARGET/debug"
+          export RS_BIN="$RSBIN"
+          ./env-up.sh
+          python3 ircv3spec.py 16670 16667
+          python3 plumbing.py rs
+          ./run-gamja.sh rs go
+
+      - name: Upload compatibility diagnostics
+        if: failure() && matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v7
+        with:
+          name: compatibility-diagnostics
+          path: |
+            /tmp/soju-compat/gamja-*.txt
+            /tmp/soju-compat/env/*/*.log
+            /tmp/soju-compat/gamja/test-results-*
+          if-no-files-found: ignore
