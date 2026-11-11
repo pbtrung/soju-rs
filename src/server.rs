@@ -4,32 +4,30 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::Utc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::Authenticator;
-use crate::config::{self, MsgStoreDriver};
-use crate::conn::{Conn, ConnReader};
+use crate::config;
 use crate::database::{self as db, Database};
 use crate::identd::Identd;
-use crate::irc::{Prefix, numerics::*};
+use crate::irc::Prefix;
+use crate::logf;
 use crate::logger::Logger;
 use crate::metrics::Metrics;
 use crate::user::{Event, User, UserHandle};
 use crate::webpush;
-use crate::{logf, msg, xirc};
+
+mod admin;
+mod configuration;
+mod maintenance;
+
+pub use configuration::load_server_config;
 
 pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Message expiry deletes this many messages at a time, pausing for
-/// EXPIRY_CHUNK_PAUSE in between, so that users waiting on the database
-/// aren't blocked for the whole deletion.
-const EXPIRY_CHUNK_SIZE: usize = 2000;
-const EXPIRY_CHUNK_PAUSE: Duration = Duration::from_millis(10);
 
 /// Runs synchronous code that may block on SQLite calls (e.g. a user's
 /// event handlers). On a multi-threaded runtime, the runtime moves its
@@ -206,24 +204,6 @@ impl Server {
             }
         });
         Ok(())
-    }
-
-    /// Deletes expired messages and vacuums local SQLite, before start:
-    /// rewriting the whole database holds it for a while, and no user must
-    /// wait on it, nor the only runtime thread on a single CPU.
-    pub async fn startup_maintenance(self: &Arc<Self>) {
-        self.run_message_expiry(true).await;
-    }
-
-    async fn run_message_expiry(self: &Arc<Self>, vacuum: bool) {
-        // Deleting and vacuuming can take a while: keep it off the async
-        // runtime's workers
-        let s = self.clone();
-        match tokio::task::spawn_blocking(move || s.delete_expired_messages(vacuum)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => logf!(self.logger, "failed to delete expired messages: {e}"),
-            Err(e) => logf!(self.logger, "failed to delete expired messages: {e}"),
-        }
     }
 
     fn load_web_push_config(&self) -> Result<()> {
@@ -404,386 +384,7 @@ impl Server {
     pub fn render_metrics(&self) -> String {
         self.metrics.render(self.users.lock().unwrap().len())
     }
-
-    async fn disable_inactive_users(&self) -> Result<()> {
-        let delay = self.config().basic.disable_inactive_users_delay;
-        if delay.is_zero() {
-            return Ok(());
-        }
-        let limit = Utc::now() - chrono::Duration::from_std(delay)?;
-        let usernames = db::run(&self.db, move |db| db.list_inactive_usernames(limit))
-            .await
-            .map_err(|e| anyhow!("failed to list inactive users: {e}"))?;
-        if usernames.is_empty() {
-            return Ok(());
-        }
-
-        // Filter out users with active downstream connections
-        let users: Vec<(String, UserHandle)> = {
-            let map = self.users.lock().unwrap();
-            usernames
-                .into_iter()
-                .filter_map(|name| {
-                    // TODO: disable the user in the DB if it isn't running
-                    let h = map.get(&name)?;
-                    if h.num_downstream_conns.load(Ordering::SeqCst) > 0 {
-                        return None;
-                    }
-                    Some((name, h.clone()))
-                })
-                .collect()
-        };
-        if users.is_empty() {
-            return Ok(());
-        }
-
-        logf!(self.logger, "found {} inactive users", users.len());
-        for (name, h) in users {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let sent = h.send(Event::UserUpdate {
-                password: None,
-                admin: None,
-                enabled: Some(false),
-                max_networks: None,
-                done: tx,
-            });
-            if !sent {
-                // The user stopped meanwhile, e.g. it was deleted
-                continue;
-            }
-            match tokio::time::timeout(Duration::from_secs(60), rx).await {
-                Ok(Ok(Ok(()))) => logf!(self.logger, "disabled inactive user {name:?}"),
-                Ok(Ok(Err(e))) => bail!(e),
-                _ => bail!("context deadline exceeded"),
-            }
-        }
-        Ok(())
-    }
-
-    /// Deletes expired messages, and vacuums local SQLite if asked: on
-    /// startup, before users start, and when message-expiry changes, which
-    /// may leave at least 25% of the database free. Otherwise, the space freed each
-    /// day is reused by the next day's messages, and rewriting the database
-    /// would hold it meanwhile.
-    pub(crate) fn delete_expired_messages(&self, vacuum: bool) -> Result<()> {
-        let cfg = self.config();
-        let expiry = cfg.basic.message_expiry;
-        if expiry.is_zero() {
-            return Ok(());
-        }
-        let before = Utc::now() - chrono::Duration::from_std(expiry)?;
-        let before_str = xirc::format_server_time(before);
-        logf!(
-            self.logger,
-            "soju-rs v{}: running message expiry",
-            crate::VERSION
-        );
-        match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db => {
-                let n = self
-                    .db
-                    .expire_messages(before, EXPIRY_CHUNK_SIZE, EXPIRY_CHUNK_PAUSE, &|| {
-                        self.stop.is_cancelled()
-                    })
-                    .map_err(|e| anyhow!("failed to delete expired messages from db: {e:#}"))?;
-                logf!(
-                    self.logger,
-                    "deleted {n} expired messages older than {before_str} from db"
-                );
-                if n > 0 {
-                    let start = Instant::now();
-                    self.db
-                        .optimize()
-                        .map_err(|e| anyhow!("failed to optimize db: {e}"))?;
-                    logf!(
-                        self.logger,
-                        "optimized db in {:.1}s",
-                        start.elapsed().as_secs_f64()
-                    );
-                }
-                if vacuum {
-                    let free = self
-                        .db
-                        .free_page_ratio()
-                        .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
-                    if free >= 0.25 {
-                        let start = Instant::now();
-                        self.db
-                            .vacuum()
-                            .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
-                        logf!(
-                            self.logger,
-                            "vacuumed db in {:.1}s ({:.0}% of it was free)",
-                            start.elapsed().as_secs_f64(),
-                            free * 100.0
-                        );
-                    }
-                }
-                {
-                    self.db
-                        .shrink_memory()
-                        .map_err(|e| anyhow!("failed to shrink db memory: {e}"))?;
-                }
-            }
-            MsgStoreDriver::Memory => {}
-        }
-        Ok(())
-    }
-
-    /// Serves an administrative connection (sojuctl).
-    pub async fn serve_admin(self: Arc<Self>, conn: Conn, mut reader: ConnReader, logger: Logger) {
-        let prefix = self.prefix();
-        if self.is_shutting_down() {
-            conn.send_message(msg!("ERROR", "Server is shutting down"));
-            conn.shutdown();
-            return;
-        }
-        loop {
-            let msg = match reader.read_message().await {
-                Ok(Some(m)) => m,
-                Ok(None) => break,
-                Err(e) => {
-                    logf!(logger, "failed to read IRC command: {e}");
-                    break;
-                }
-            };
-            match msg.command.as_str() {
-                "CAP" | "NICK" | "USER" | "PASS" => {
-                    // Ensure regular IRC clients cannot connect. This is
-                    // important to e.g. prevent unprivileged soju users from
-                    // connecting to the admin socket.
-                    conn.send_message(msg!("ERROR", "This is not a regular IRC server"));
-                    break;
-                }
-                "BOUNCERSERV" => {
-                    if msg.params.is_empty() {
-                        conn.send_message(msg!(
-                            ERR_NEEDMOREPARAMS,
-                            "*",
-                            msg.command.clone(),
-                            "Not enough parameters"
-                        ));
-                        continue;
-                    }
-                    let text = msg.params[0].clone();
-                    let srv = self.clone();
-                    let (res, prints, deferred) = tokio::task::spawn_blocking(move || {
-                        let rt = tokio::runtime::Handle::current();
-                        let _guard = rt.enter();
-                        let mut ctx = crate::service::ServiceContext::for_user(srv, true, false);
-                        let res = crate::service::handle_global_service_command(&mut ctx, &text);
-                        (res, ctx.take_prints(), ctx.take_deferred())
-                    })
-                    .await
-                    .unwrap_or_else(|e| (Err(anyhow!("internal error: {e}")), Vec::new(), None));
-                    for line in prints {
-                        conn.send_message(msg!("PRIVMSG", "*", line).with_prefix(prefix.clone()));
-                    }
-                    let res = match (res, deferred) {
-                        (Ok(()), Some(deferred)) => {
-                            let (conn, prefix) = (conn.clone(), prefix.clone());
-                            let print = Box::new(move |line| {
-                                conn.send_message(
-                                    msg!("PRIVMSG", "*", line).with_prefix(prefix.clone()),
-                                );
-                            });
-                            deferred(print).await
-                        }
-                        (res, _) => res,
-                    };
-                    match res {
-                        Err(e) => conn.send_message(
-                            msg!("FAIL", msg.command.clone(), e.to_string())
-                                .with_prefix(prefix.clone()),
-                        ),
-                        Ok(()) => conn.send_message(
-                            msg!(msg.command.clone(), "OK").with_prefix(prefix.clone()),
-                        ),
-                    }
-                }
-                _ => conn.send_message(
-                    msg!(
-                        ERR_UNKNOWNCOMMAND,
-                        "*",
-                        msg.command.clone(),
-                        "Unknown command"
-                    )
-                    .with_prefix(prefix.clone()),
-                ),
-            }
-        }
-        conn.shutdown();
-    }
-}
-
-/// Builds the run-time configuration from the config file.
-pub async fn load_server_config(raw: &config::Server) -> Result<ServerConfig> {
-    // A hostname without a dot can confuse clients
-    if !raw.basic.hostname.contains('.') {
-        eprintln!(
-            "{} warning: hostname {:?} is not a fully qualified domain name",
-            chrono::Local::now().format("%Y/%m/%d %H:%M:%S"),
-            raw.basic.hostname
-        );
-    }
-
-    let mut motd = String::new();
-    if !raw.motd_path.is_empty() {
-        motd = std::fs::read_to_string(&raw.motd_path)
-            .map_err(|e| anyhow!("failed to load MOTD: {e}"))?;
-        if let Some(m) = motd.strip_suffix('\n') {
-            motd = m.to_owned();
-        }
-    }
-
-    let (mut icon_url, mut icon_path) = (String::new(), String::new());
-    if raw.icon.contains("://") {
-        let u = db::parse_url(&raw.icon).map_err(|e| anyhow!("invalid icon URL: {e}"))?;
-        if u.scheme != "https" {
-            bail!("unsupported icon URL scheme: {}", u.scheme);
-        }
-        icon_url = raw.icon.clone();
-    } else if !raw.icon.is_empty() {
-        std::fs::metadata(&raw.icon).map_err(|e| anyhow!("failed to load icon: {e}"))?;
-        icon_path = raw.icon.clone();
-    }
-
-    let auth = Authenticator::from_config(&raw.auth).await?;
-
-    Ok(ServerConfig {
-        basic: raw.basic.clone(),
-        icon_path,
-        icon_url,
-        motd,
-        auth,
-    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vacuum_requires_25_percent_free_and_maintenance_request() {
-        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
-        let mut cfg = ServerConfig::default();
-        cfg.basic.message_expiry = Duration::from_secs(86400);
-        srv.set_config(cfg);
-        let mut user = db::User::new("vacuum");
-        srv.db.store_user(&mut user).unwrap();
-        let mut net = db::Network::new("irc.example.org");
-        srv.db.store_network(user.id, &mut net).unwrap();
-        let text = "x".repeat(1000);
-        let now = Utc::now();
-        for (count, time) in [(300, now - chrono::Duration::days(3)), (3700, now)] {
-            let messages: Vec<_> = (0..count)
-                .map(|_| {
-                    msg!("PRIVMSG", "#a", text.clone())
-                        .with_tag("time", xirc::format_server_time(time))
-                })
-                .collect();
-            srv.db.store_messages(net.id, "#a", &messages).unwrap();
-        }
-        // Daily expiry frees some pages but does not rewrite the file.
-        srv.delete_expired_messages(false).unwrap();
-        let low = srv.db.free_page_ratio().unwrap();
-        assert!(low > 0.0 && low < 0.25, "{low}");
-        // Startup/reload maintenance must preserve free pages below 25%.
-        srv.delete_expired_messages(true).unwrap();
-        assert_eq!(srv.db.free_page_ratio().unwrap(), low);
-
-        srv.db
-            .delete_messages_before(now + chrono::Duration::days(1), usize::MAX)
-            .unwrap();
-        let high = srv.db.free_page_ratio().unwrap();
-        assert!(high >= 0.25, "{high}");
-        // Even a mostly empty file is not vacuumed during daily expiry.
-        srv.delete_expired_messages(false).unwrap();
-        assert_eq!(srv.db.free_page_ratio().unwrap(), high);
-        srv.delete_expired_messages(true).unwrap();
-        assert_eq!(srv.db.free_page_ratio().unwrap(), 0.0);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn create_user_on_auth_concurrently() {
-        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
-        let mut cfg = ServerConfig::default();
-        cfg.basic.enable_users_on_auth = true;
-        srv.set_config(cfg);
-        srv.start().unwrap();
-        // e.g. a client connecting to several networks on first login
-        let results =
-            futures_util::future::join_all((0..8).map(|_| srv.get_or_create_user("alice"))).await;
-        for res in results {
-            res.unwrap();
-        }
-        assert_eq!(srv.db.list_users().unwrap().len(), 1);
-        srv.shutdown().await;
-    }
-
-    #[test]
-    fn msg_store_not_reloaded() {
-        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
-        srv.set_config(ServerConfig::default());
-        let mut cfg = ServerConfig::default();
-        cfg.basic.msg_store.driver = MsgStoreDriver::Memory;
-        cfg.basic.title = "reloaded".to_owned();
-        srv.reload_config(cfg);
-        let cfg = srv.config();
-        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
-        assert_eq!(cfg.basic.title, "reloaded");
-    }
-
-    /// A reload changing message-expiry applies it right away, and a user
-    /// listed by start() and created meanwhile runs once.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn expiry_reload_and_duplicate_users() {
-        let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
-        srv.set_config(ServerConfig::default());
-        let mut user = db::User::new("alice");
-        srv.db.store_user(&mut user).unwrap();
-        let mut net = db::Network::new("irc.example.org");
-        srv.db.store_network(user.id, &mut net).unwrap();
-        let mut old = msg!("PRIVMSG", "#a", "old");
-        old.tags.set(
-            "time",
-            xirc::format_server_time(Utc::now() - chrono::Duration::days(3)),
-        );
-        srv.db.store_messages(net.id, "#a", &[old]).unwrap();
-
-        srv.start().unwrap();
-        {
-            let mut map = srv.users.lock().unwrap();
-            let first = map.get("alice").unwrap().tx.clone();
-            let again = srv.add_user_locked(&mut map, user.clone());
-            assert!(again.tx.same_channel(&first));
-            assert_eq!(map.len(), 1);
-        }
-
-        let mut cfg = ServerConfig::default();
-        cfg.basic.message_expiry = Duration::from_secs(86400);
-        srv.reload_config(cfg);
-        let opts = db::MessageOptions {
-            limit: 10,
-            ..Default::default()
-        };
-        for _ in 0..100 {
-            if srv
-                .db
-                .list_messages(net.id, "#a", &opts)
-                .unwrap()
-                .is_empty()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(
-            srv.db
-                .list_messages(net.id, "#a", &opts)
-                .unwrap()
-                .is_empty()
-        );
-        srv.shutdown().await;
-    }
-}
+mod tests;
