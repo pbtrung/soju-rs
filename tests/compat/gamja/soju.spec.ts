@@ -85,6 +85,11 @@ class Bot {
 const tabs = (page: Page) => page.getByRole("tablist", { name: "Buffer list" });
 const composer = (page: Page) => page.getByRole("textbox", { name: /Type a/ });
 
+async function openBufferActions(page: Page) {
+	await page.getByRole("button", { name: "More actions" }).click();
+	return page.getByRole("menu", { name: "Buffer actions" });
+}
+
 async function login(page: Page, nick = "alice", password = "secret") {
 	await page.goto("/?" + new URLSearchParams({ server: SOJU_WS }).toString());
 	await page.getByLabel("Nickname").fill(nick);
@@ -196,7 +201,7 @@ test("loads history, keeps read markers in sync and searches", async ({ browser 
 	await expect(tab2.locator("xpath=..")).not.toHaveClass(/unread/, { timeout: 10000 });
 
 	// Search
-	await page.getByRole("button", { name: "Search" }).click();
+	await (await openBufferActions(page)).getByRole("menuitem", { name: "Search", exact: true }).click();
 	const dialog = page.getByRole("dialog", { name: /Search/ });
 	await dialog.getByRole("searchbox").fill("brown");
 	await dialog.getByRole("searchbox").press("Enter");
@@ -215,10 +220,11 @@ test("pins, mutes and detaches channels", async ({ page }) => {
 	await join(page, "ergo2", "#aaa");
 	await tabs(page).getByRole("tab", { name: "#gamja" }).click();
 	const names = async () => (await tabs(page).getByRole("tab").allInnerTexts()).filter((n) => n.startsWith("#"));
-	await page.getByRole("button", { name: "Pin" }).click();
-	await expect(page.getByRole("button", { name: "Unpin" })).toBeVisible();
+	await (await openBufferActions(page)).getByRole("menuitem", { name: "Pin", exact: true }).click();
+	const actions = await openBufferActions(page);
+	await expect(actions.getByRole("menuitem", { name: "Unpin", exact: true })).toBeVisible();
 	await expect.poll(names).toEqual(["#gamja", "#aaa"]);
-	await page.getByRole("button", { name: "Mute" }).click();
+	await actions.getByRole("menuitem", { name: "Mute", exact: true }).click();
 	await expect(tabs(page).getByRole("tab", { name: "#gamja" }).locator("xpath=..")).toHaveClass(/muted/);
 
 	// The pin and mute state is stored by the bouncer
@@ -232,7 +238,7 @@ test("pins, mutes and detaches channels", async ({ page }) => {
 
 	// Detach
 	await tabs(page).getByRole("tab", { name: "#aaa" }).click();
-	await page.getByRole("button", { name: "Detach" }).click();
+	await (await openBufferActions(page)).getByRole("menuitem", { name: "Detach", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Join", exact: true })).toBeVisible();
 	await expect(tabs(page).getByRole("tab", { name: "BouncerServ" })).toHaveCount(0);
 });

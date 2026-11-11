@@ -77,6 +77,17 @@ class Client:
     def expect(self, command, timeout=5):
         return self.wait(lambda m, l: m["command"] == command, timeout, desc=command)
 
+    def expect_cap_ls(self):
+        """Read every CAP LS reply and return the target nick and capabilities."""
+        caps = []
+        while True:
+            reply = self.wait(lambda m, l: m["command"] == "CAP" and m["params"][1] == "LS",
+                              desc="CAP LS")
+            nick, _, *continuation, values = reply["params"]
+            caps.extend(values.split())
+            if not continuation:
+                return nick, caps
+
     def drain(self, timeout=0.5):
         """Reads all lines until quiet for `timeout`."""
         out = []
@@ -112,15 +123,9 @@ class Client:
         self.send(f"NICK {nick}")
         self.send(f"USER {user} 0 * :{nick}")
         if caps is not None:
-            # CAP LS 302 replies may span several lines, all but the last
-            # marked with "*"
-            offered = set()
-            while True:
-                ls = self.expect("CAP")
-                offered |= {c.split("=")[0] for c in ls["params"][-1].split()}
-                if ls["params"][-2] != "*":
-                    break
-            caps = [c for c in caps if c in offered]
+            _, offered = self.expect_cap_ls()
+            names = {c.partition("=")[0] for c in offered}
+            caps = [c for c in caps if c in names]
             if caps:
                 self.send("CAP REQ :" + " ".join(caps))
                 ack = self.wait(lambda m, l: m["command"] == "CAP" and m["params"][1] in ("ACK", "NAK"))

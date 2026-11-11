@@ -136,9 +136,6 @@ runs the Cargo suite for GNU and musl on Arch Linux for pull requests and
 pushes to `main`. It also runs the real libSQL query-cost check and the
 following compatibility checks:
 
-- differential tests running the same client sessions against upstream Go
-  soju and soju-rs (both connected to [ergo]) and comparing normalized
-  transcripts
 - end-to-end tests using the latest default-branch commit of
   [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju
 - IRCv3 specification checks (CAP 302, SASL 3.2, labeled-response, batch,
@@ -146,6 +143,11 @@ following compatibility checks:
   bouncer-networks)
 - listener checks for TLS, client certificates, PROXY protocol, identd and
   Prometheus
+
+The [compatibility tools](tests/compat/README.md) also include a manual
+transcript comparison against upstream Go soju, with both bouncers connected
+to [ergo]. The comparison reports differences from Rust-specific features
+such as multiplexing and multiline support.
 
 ## License
 

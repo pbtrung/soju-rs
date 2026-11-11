@@ -116,15 +116,17 @@ def run():
     # Client certificate: not offered as SASL EXTERNAL without a cert
     nc = TLSClient(PORT_TLS)
     nc.send("CAP LS 302")
-    ls = nc.expect("CAP")
-    check("no EXTERNAL without cert", "sasl=PLAIN" in ls["params"][-1] and "EXTERNAL" not in ls["params"][-1], ls)
-    check("client-cert cap", "soju.im/client-cert" in ls["params"][-1])
+    _, caps = nc.expect_cap_ls()
+    check("no EXTERNAL without cert", "sasl=PLAIN" in caps, caps)
+    check("client-cert cap", "soju.im/client-cert" in caps)
     nc.close()
 
     cc = TLSClient(PORT_TLS, cert=f"{CERTS}/client-cert.pem", key=f"{CERTS}/client-key.pem")
     cc.send("CAP LS 302")
-    ls = cc.expect("CAP")
-    check("EXTERNAL offered with cert", "EXTERNAL" in ls["params"][-1], ls)
+    _, caps = cc.expect_cap_ls()
+    check("EXTERNAL offered with cert", any(
+        cap.startswith("sasl=") and "EXTERNAL" in cap[5:].split(",") for cap in caps
+    ), caps)
     cc.send("PASS secret")
     cc.send("NICK alice")
     cc.send("USER alice 0 * :x")
