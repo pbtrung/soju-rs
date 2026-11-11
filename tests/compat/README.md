@@ -11,13 +11,19 @@ ports make the tests fail.
     ./run-diff.sh [scenario...]           # differential tests, report in work/difflatest.txt
     ./env-up.sh && python3 ircv3spec.py 16670 16667   # IRCv3 spec checks
     ./env-up.sh && python3 plumbing.py rs             # TLS, client certs, PROXY, identd, ...
-    ./run-gamja.sh rs go       # gamja end-to-end tests (needs Node.js and Chromium)
+    (cd work/gamja && npx playwright install --with-deps chromium)
+    ./run-gamja.sh rs go       # gamja end-to-end tests (needs Node.js)
 
 `setup.sh` takes `SOJU_REF` (upstream soju git ref) and `GAMJA_SRC` (local
 gamja checkout). A fresh setup defaults to the latest commit on the default
 branch of [pbtrung/gamja](https://github.com/pbtrung/gamja). `EXTRA_CONFIG`
 adds lines to both bouncers' configuration, with `%D%` replaced by each
 bouncer's directory, e.g. `EXTRA_CONFIG="motd %D%/motd.txt" ./run-diff.sh`.
+
+Playwright uses its installed Chromium by default. Set
+`CHROMIUM_EXECUTABLE=/usr/bin/chromium` when using a system browser instead.
+GitHub Actions installs the browser and runs all checks directly on its
+Ubuntu runner.
 
 The differential harness (`diffharness.py`) runs each scenario against both
 bouncers, each connected to its own ergo instance, and compares the

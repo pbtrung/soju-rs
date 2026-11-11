@@ -40,8 +40,8 @@ With these tools installed, run:
     ./scripts/build-release.sh
 
 This writes the two x86_64 archives and `SHA256SUMS` to `dist/`. It uses
-the installed toolchains directly, verifies both musl executables are fully
-static, and requires neither Docker nor rustup. Set `DIST_DIR` to choose a
+the installed native toolchains directly and verifies both musl executables
+are fully static. Set `DIST_DIR` to choose a
 different archive directory.
 
 To build on GitHub, open **Actions → CI and release → Run workflow** and
@@ -124,8 +124,8 @@ Behaviour changes:
 `cargo test` runs unit tests and the integration tests ported from upstream,
 the latter on both the multi-threaded and the current-thread runtime (soju-rs
 uses the current-thread one on machines with a single CPU). GitHub Actions
-runs the Cargo suite for GNU and musl on Arch Linux when manually triggered
-with **Run workflow**. It also runs the following compatibility checks:
+runs the Cargo suite for GNU and musl on native Ubuntu runners when manually
+triggered with **Run workflow**. It also runs the following compatibility checks:
 
 - end-to-end tests using the latest default-branch commit of
   [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju
