@@ -35,11 +35,15 @@ jobs:
     steps:
       - name: Install Arch Linux release toolchains
         run: |
+          set -euo pipefail
+
           pacman -Syu --noconfirm --needed \
             rust musl rust-musl gcc cmake make perl git
+
           rustc --version --verbose
 
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -50,9 +54,12 @@ jobs:
 
           tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 
+          echo "Building release $tag"
+
           ./scripts/build-release.sh "$tag"
 
           cd dist
+
           sha256sum --check SHA256SUMS
 
           staging=$(mktemp -d)
@@ -63,6 +70,8 @@ jobs:
             x86_64-unknown-linux-musl
           do
             name="soju-rs-$tag-$target"
+
+            echo "Verifying $name"
 
             tar -xzf "$name.tar.gz" -C "$staging"
 
@@ -106,14 +115,18 @@ jobs:
     steps:
       - name: Install Arch Linux publishing tools
         run: |
+          set -euo pipefail
+
           pacman -Syu --noconfirm --needed \
             git github-cli ca-certificates
 
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - name: Download release archives
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: dist
@@ -126,18 +139,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Verify downloaded release assets
+          # Verify downloaded archives
           (cd dist && sha256sum --check SHA256SUMS)
 
-          # Ensure tag exists and points to this commit.
-          # Uses GitHub API, not the local git remote.
           ref="refs/tags/$TAG"
 
-          existing_sha=$(gh api \
-            "repos/$GH_REPO/git/ref/tags/$TAG" \
-            --jq '.object.sha' 2>/dev/null) || existing_sha=""
+          # Check tag using GitHub API, not git origin
+          tag_json=""
+          if tag_json=$(gh api \
+            "repos/$GH_REPO/git/ref/tags/$TAG" 2>/dev/null); then
 
-          if [[ -z "$existing_sha" ]]; then
+            existing_sha=$(jq -r '.object.sha' <<< "$tag_json")
+            existing_type=$(jq -r '.object.type' <<< "$tag_json")
+
+            # Dereference annotated tags when necessary
+            if [[ "$existing_type" == "tag" ]]; then
+              existing_sha=$(gh api \
+                "repos/$GH_REPO/git/tags/$existing_sha" \
+                --jq '.object.sha')
+            fi
+
+            if [[ "$existing_sha" != "$GITHUB_SHA" ]]; then
+              echo "ERROR: $TAG points to another commit" >&2
+              echo "Expected: $GITHUB_SHA" >&2
+              echo "Existing: $existing_sha" >&2
+              exit 1
+            fi
+
+            echo "Tag $TAG already exists at $GITHUB_SHA"
+
+          else
             echo "Creating tag $TAG at $GITHUB_SHA"
 
             gh api \
@@ -145,24 +176,15 @@ jobs:
               "repos/$GH_REPO/git/refs" \
               -f ref="$ref" \
               -f sha="$GITHUB_SHA"
-
-          elif [[ "$existing_sha" != "$GITHUB_SHA" ]]; then
-            echo "ERROR: $TAG points to another commit" >&2
-            echo "Expected: $GITHUB_SHA" >&2
-            echo "Existing: $existing_sha" >&2
-            exit 1
-
-          else
-            echo "Tag $TAG already exists at $GITHUB_SHA"
           fi
 
-          # Do not overwrite an existing release
+          # Prevent accidental release overwrite
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "ERROR: Release $TAG already exists" >&2
             exit 1
           fi
 
-          # Publish release assets
+          # Publish release
           gh release create "$TAG" \
             --verify-tag \
             --title "$TAG" \
