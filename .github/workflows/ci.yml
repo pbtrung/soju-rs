@@ -1,9 +1,6 @@
 name: CI and release
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
     inputs:
       publish:
