@@ -125,3 +125,31 @@ async fn expiry_reload_and_duplicate_users() {
     );
     srv.shutdown().await;
 }
+
+#[tokio::test]
+async fn user_creation_is_rejected_after_shutdown() {
+    let server = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+    server.start().unwrap();
+    server.shutdown().await;
+    assert!(server.create_user(db::User::new("late")).is_err());
+    assert!(server.db.get_user("late").unwrap().is_none());
+    assert!(server.get_user("late").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_creation_cannot_escape_the_shutdown_snapshot() {
+    for _ in 0..16 {
+        let server = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+        server.start().unwrap();
+        let creator = server.clone();
+        let creation =
+            tokio::task::spawn_blocking(move || creator.create_user(db::User::new("racing")));
+        server.shutdown().await;
+        if let Ok(handle) = creation.await.unwrap() {
+            tokio::time::timeout(Duration::from_secs(2), handle.done.cancelled())
+                .await
+                .expect("a new user was left running after server shutdown");
+        }
+        assert!(server.user_records().is_empty());
+    }
+}

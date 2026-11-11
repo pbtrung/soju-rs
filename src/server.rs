@@ -298,13 +298,22 @@ impl Server {
     /// Creates a user in the database and starts it.
     pub fn create_user(self: &Arc<Self>, mut record: db::User) -> Result<UserHandle> {
         let _creating = self.user_creation.lock().unwrap();
+        if self.is_shutting_down() {
+            bail!("server is shutting down");
+        }
         if self.users.lock().unwrap().contains_key(&record.username) {
             bail!("user {:?} already exists", record.username);
         }
         self.db
             .store_user(&mut record)
             .map_err(|e| anyhow!("could not create user in db: {e}"))?;
-        Ok(self.add_user_locked(&mut self.users.lock().unwrap(), record))
+        let mut users = self.users.lock().unwrap();
+        // The database write may have overlapped shutdown. Hold the same lock
+        // used by its snapshot: either this handle is included or none starts.
+        if self.is_shutting_down() {
+            bail!("server is shutting down");
+        }
+        Ok(self.add_user_locked(&mut users, record))
     }
 
     pub fn get_user(&self, name: &str) -> Option<UserHandle> {
