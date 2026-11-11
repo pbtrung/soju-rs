@@ -37,7 +37,7 @@ pub struct Network {
     pub record_snapshot: Arc<Mutex<db::Network>>,
     /// The pinned, muted or blocked targets, by stored (case-mapped) name.
     /// The user's event loop is their only writer: incoming messages check
-    /// them without a database query (a round trip with Turso).
+    /// them without a database query.
     pub message_targets: HashMap<String, db::MessageTarget>,
     /// Mentions to store, by conversation, see upstream::record_mention
     pub pending_mentions: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,

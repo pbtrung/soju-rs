@@ -192,15 +192,8 @@ impl Database {
         network_id: i64,
         options: &MessageOptions,
     ) -> Result<Vec<MessageTargetLast>> {
-        let remote = self.conn().is_remote();
-        let text = if remote {
-            // Turso tenants have no text time index: step over events
-            "SELECT time FROM Message WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
-        } else {
-            // Without statistics, SQLite prefers the primary key, reading
-            // every event between text messages
-            "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1"
-        };
+        // Without statistics, SQLite may choose the primary key and scan events.
+        let text = "SELECT time FROM Message INDEXED BY MessageTextIndex WHERE target=MessageTarget.id AND text IS NOT NULL ORDER BY time DESC LIMIT 1";
         let (inner, latest_text) = if options.events {
             // Messages are clustered by target and time: one seek. Unread
             // state only counts text messages.
@@ -290,19 +283,6 @@ impl Database {
         name: &str,
         options: &MessageOptions,
     ) -> Result<Vec<Message>> {
-        Ok(self
-            .list_message_rows(network_id, name, options)?
-            .into_iter()
-            .map(|r| r.message)
-            .collect())
-    }
-
-    pub(crate) fn list_message_rows(
-        &self,
-        network_id: i64,
-        name: &str,
-        options: &MessageOptions,
-    ) -> Result<Vec<crate::database::MessageRow>> {
         let after = time_to_sql(options.after_time);
         let before = time_to_sql(options.before_time);
         let text = quote_fts_query(&options.text);
@@ -312,10 +292,9 @@ impl Database {
             return Ok(Vec::new());
         }
         let conn = self.conn();
-        let remote = conn.is_remote();
         let target = "(SELECT id FROM MessageTarget WHERE network = :network AND target = :target)";
         let text_only = !options.events || !options.text.is_empty();
-        let mut query = String::from("SELECT m.id AS id, m.time AS time, m.raw AS raw FROM ");
+        let mut query = String::from("SELECT m.raw FROM ");
         if !options.text.is_empty() {
             // Seek each search result by ID, rather than scanning the
             // target's history for them
@@ -325,10 +304,9 @@ impl Database {
             );
         } else {
             query.push_str("Message AS m ");
-            if !remote && text_only && options.after_id == 0 {
+            if text_only && options.after_id == 0 {
                 // Without statistics, SQLite prefers the primary key,
-                // reading every event between text messages. Turso tenants
-                // have no text time index.
+                // reading every event between text messages.
                 query.push_str("INDEXED BY MessageTextIndex ");
             }
         }
@@ -380,17 +358,11 @@ impl Database {
         binds.push((":limit", &limit));
 
         let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(binds.as_slice(), |r| {
-            Ok((r.get(0)?, lossy_string(r, 1)?, lossy_string(r, 2)?))
-        })?;
+        let rows = stmt.query_map(binds.as_slice(), |r| lossy_string(r, 0))?;
         let mut l = Vec::new();
         for row in rows {
-            let (id, time, raw) = row?;
-            l.push(crate::database::MessageRow {
-                id,
-                time,
-                message: Message::parse(&raw)?,
-            });
+            let raw = row?;
+            l.push(Message::parse(&raw)?);
         }
         if options.take_last {
             l.reverse();

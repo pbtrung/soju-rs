@@ -4,8 +4,8 @@ use anyhow::Result;
 use rusqlite::{OptionalExtension, TransactionBehavior, named_params, params};
 
 use super::{Database, lossy_string, null_string, time_from_sql, time_to_sql};
-use crate::database::connection::{Connection, statement};
 use crate::database::{DeliveryReceipt, ReadReceipt};
+use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 
 enum Change {
@@ -107,35 +107,7 @@ impl Database {
             return self.replace_duplicate_delivery_receipts(network_id, client, receipts);
         }
         let mut conn = self.conn();
-        let ids = if conn.is_remote() {
-            // This connection's mutex serializes receipt writers in the one
-            // bouncer instance supported per controller. Background message
-            // writers never mutate receipts. Commit only the resulting delta.
-            let (changes, mut ids) = changes(&conn, network_id, client, receipts)?;
-            let mut statements = Vec::new();
-            for change in &changes {
-                statements.push(match *change {
-                    Change::Delete(id)=>statement("DELETE FROM DeliveryReceipt WHERE id=?",[id])?,
-                    Change::Update(id,i)=>statement("UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?",params![receipts[i].internal_msg_id,id])?,
-                    Change::Insert(i)=>{
-                        ids[i]=super::new_row_id(&conn).unwrap();
-                        statement("INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) VALUES(?,?,?,?,?)",params![ids[i],network_id,receipts[i].target,null_string(client),receipts[i].internal_msg_id])?
-                    },
-                });
-            }
-            if !statements.is_empty()
-                && let Err(error) = conn.atomic_batch(statements)
-            {
-                if !error.to_string().contains("HTTP body budget") {
-                    return Err(error.into());
-                }
-                // The size check rejected the body before any HTTP send.
-                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                execute_changes(&tx, network_id, client, receipts, &changes, &mut ids)?;
-                tx.commit()?;
-            }
-            ids
-        } else {
+        let ids = {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let (changes, mut ids) = changes(&tx, network_id, client, receipts)?;
             execute_changes(&tx, network_id, client, receipts, &changes, &mut ids)?;

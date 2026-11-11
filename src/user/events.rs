@@ -16,7 +16,7 @@ const STARTUP_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60
 
 impl User {
     pub async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Event>) {
-        // A transient database error (e.g. a Turso timeout) must not leave
+        // A transient database error must not leave
         // the user unavailable, nor drop one of their networks, until
         // restart: retry until everything is loaded. Events wait meanwhile,
         // except a stop.
@@ -30,21 +30,7 @@ impl User {
                 self.record.id,
                 self.has_persistent_msg_store(),
             );
-            let loaded = if self.srv.db.is_remote() {
-                let (user, prepared) = tokio::task::spawn_blocking(move || {
-                    let prepared = self.msg_store.prepare();
-                    (self, prepared)
-                })
-                .await
-                .expect("message store initialization task failed");
-                self = user;
-                match prepared {
-                    Ok(()) => load.await,
-                    Err(e) => Err(e.context("failed to prepare Turso message buffers")),
-                }
-            } else {
-                load.await
-            };
+            let loaded = load.await;
             match loaded {
                 Ok(networks) => break networks,
                 Err(e) => logf!(self.logger, "failed to load, retrying in {delay:?}: {e:#}"),
@@ -75,90 +61,20 @@ impl User {
             self.start_network(i);
         }
 
-        let mut flush_tick = tokio::time::interval(std::time::Duration::from_millis(100));
-        flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // These retain the input permits, so storage backpressure reaches
-        // socket readers while PING/PONG and read-only commands stay live.
-        // Events received while loading come first.
-        let mut deferred = early;
         loop {
-            let capacity = self.msg_store.has_capacity();
-            let ev = if capacity && !deferred.is_empty() {
-                deferred.pop_front().unwrap()
-            } else {
-                tokio::select! {
-                    ev = rx.recv() => match ev { Some(ev) => ev, None => break },
-                    _ = flush_tick.tick(), if self.srv.db.is_remote() => {
-                        self.msg_store.set_batch_limit(self.srv.config().basic.chat_history_limit);
-                        if let Err(e) = self.msg_store.poll() {
-                            logf!(self.logger, "Turso message batch failed; retaining it for retry: {e}");
-                        }
-                        continue;
-                    }
-                }
+            let ev = match early.pop_front() {
+                Some(ev) => ev,
+                None => match rx.recv().await {
+                    Some(ev) => ev,
+                    None => break,
+                },
             };
-            let bypass = match &ev {
-                Event::UpstreamMessage { msg, .. } => {
-                    matches!(msg.command.as_str(), "PING" | "PONG")
-                }
-                Event::DownstreamMessage { msg, .. } => {
-                    !matches!(
-                        msg.command.as_str(),
-                        "PRIVMSG" | "NOTICE" | "TAGMSG" | "BATCH"
-                    ) || msg.param(0).eq_ignore_ascii_case("BouncerServ")
-                }
-                Event::UpstreamConnected { .. }
-                | Event::UpstreamClosed { .. }
-                | Event::UpstreamConnectionError { .. } => false,
-                _ => true,
-            };
-            // Keep each connection's input in order: e.g. a client's PART or
-            // QUIT must not overtake its deferred PRIVMSG.
-            let keepalive = matches!(&ev,
-                Event::UpstreamMessage { msg, .. } | Event::DownstreamMessage { msg, .. }
-                    if matches!(msg.command.as_str(), "PING" | "PONG"));
-            let queued_source = !keepalive
-                && event_source(&ev)
-                    .is_some_and(|s| deferred.iter().any(|d| event_source(d) == Some(s)));
-            if !capacity && (!bypass || queued_source) {
-                deferred.push_back(ev);
-                continue;
-            }
-            if self.srv.db.is_remote() {
-                // Events held for storage backpressure precede STOP in the
-                // input stream. Finish them before draining the store rather
-                // than silently dropping already-read lines on shutdown.
-                let before_stop = if matches!(ev, Event::Stop) {
-                    std::mem::take(&mut deferred)
-                } else {
-                    std::collections::VecDeque::new()
-                };
-                // Cloud I/O must not stop the current-thread runtime's network
-                // and timer tasks. The blocking pool retains the Tokio context
-                // used by handlers to spawn upstream and deferred tasks.
-                self = tokio::task::spawn_blocking(move || {
-                    for queued in before_stop {
-                        self.handle_event(queued);
-                    }
-                    self.handle_event(ev);
-                    self
-                })
-                .await
-                .expect("user storage task failed");
-            } else {
-                crate::server::blocking(|| self.handle_event(ev));
-            }
+            crate::server::blocking(|| self.handle_event(ev));
             if self.stopped {
                 break;
             }
         }
-        if self.srv.db.is_remote() {
-            tokio::task::spawn_blocking(move || self.close_msg_store())
-                .await
-                .expect("message store shutdown task failed");
-        } else {
-            self.close_msg_store();
-        }
+        self.close_msg_store();
     }
 
     /// Loads the user's networks with their channels, flagged targets and
@@ -545,18 +461,5 @@ impl User {
         if !self.downstreams[i].impersonating {
             self.bump_downstream_interaction_time();
         }
-    }
-}
-
-/// Identifies the connection an event was read from: (upstream, ID).
-fn event_source(ev: &Event) -> Option<(bool, u64)> {
-    match ev {
-        Event::UpstreamMessage { conn_id, .. } | Event::UpstreamClosed { conn_id, .. } => {
-            Some((true, *conn_id))
-        }
-        Event::DownstreamMessage { dc_id, .. } | Event::DownstreamDisconnected { dc_id, .. } => {
-            Some((false, *dc_id))
-        }
-        _ => None,
     }
 }

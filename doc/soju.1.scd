@@ -159,13 +159,6 @@ The following directives are supported:
 
 	- _db_ stores messages in the database. A full-text search index is used to
 	  speed up search queries.
-	- _turso_ uses Turso Cloud for all bouncer storage, with a controller
-	  account directory and a separate database per user. Omit the _db_
-	  directive and configure the _turso-_ directives below. Databases and
-	  schemas are provisioned automatically before accepting connections.
-	  User databases reference a single TursoOwner record; login users and
-	  certificates are stored only in the controller. Schema upgrades may
-	  rebuild indexes in resumable chunks before opening the listeners.
 	- _memory_ stores messages in memory. For each channel/user, only the
 	  latest 4K messages are kept in memory, older messages are discarded. This
 	  driver is very basic and doesn't support features such as the
@@ -174,28 +167,6 @@ The following directives are supported:
 	Upstream soju's _fs_ driver (ZNC-format log files) isn't supported.
 
 	(_log_ is a deprecated alias for this directive.)
-
-*turso-organization* <slug>
-	Turso organization owning the databases. Required with _message-store turso_.
-
-*turso-group* <name>
-	Existing Turso group in which databases are created. Required with
-	_message-store turso_.
-
-*turso-controller* <name>
-	Controller database name. Defaults to _soju-controller_. Each user database
-	gets a random name encoding 128 random bits using only lowercase letters
-	and digits. Run one soju instance per controller.
-
-*turso-group-token* <token>
-	Full-access SQL token for the configured group. Required with
-	_message-store turso_. The token is used for controller and user SQL access.
-
-*turso-api-token* <token>
-	Platform API token with read, database-create and database-delete access
-	to the configured group. Required for automatic provisioning; a group SQL
-	token cannot create databases through the Platform API. All Turso settings
-	require a restart to change. See _doc/turso.md_ for setup and recovery.
 
 *http-origin* <patterns...>
 	List of allowed HTTP origins for WebSocket listeners. The parameters are
@@ -262,14 +233,6 @@ The following directives are supported:
 	while sending history to clients, at the cost of more round-trips.
 	Default: 1000.
 
-	With _message-store turso_, this also sets the per-user background message
-	batch target. Partial batches flush after one second. HTTP requests are
-	split below a 512 KiB encoded-body budget, and further on hosted size or
-	processing limits. Live messages and pending history remain available
-	while commits run. Full buffers apply input backpressure. Pending lines
-	are in memory until committed and may be lost on a crash; graceful
-	shutdown drains them. See _doc/turso.md_ for retry and durability details.
-
 *message-expiry* <duration>
 	Automatically delete messages older than the specified duration.
 
@@ -286,12 +249,6 @@ The following directives are supported:
 	database file, temporarily needing about its size again in free disk
 	space. During a reload's vacuum, all database access waits, so clients
 	and upstream connections may stall for the duration.
-
-	With _message-store turso_, startup and daily expiry delete messages from
-	each user database in turn and optimize the FTS index of those that
-	deleted messages; a failing database does not stop the others. They never
-	run VACUUM, WAL checkpoints or other local file maintenance. The hosted
-	SQL interface does not accept those operations.
 
 	By default, messages are kept indefinitely.
 

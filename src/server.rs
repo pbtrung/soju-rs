@@ -362,7 +362,7 @@ impl Server {
             let name = username.to_owned();
             let loaded = tokio::task::spawn_blocking(move || {
                 // A concurrent creator may have committed its DB row while
-                // still provisioning the tenant or registering the handle.
+                // still registering the running handle.
                 let _creating = srv.user_creation.lock().unwrap();
                 srv.get_user(&name)
             })
@@ -402,28 +402,7 @@ impl Server {
     }
 
     pub fn render_metrics(&self) -> String {
-        let mut metrics = self.metrics.render(self.users.lock().unwrap().len());
-        if let Some((read, written)) = self.db.observed_turso_usage() {
-            use std::fmt::Write;
-            for (name, value, help) in [
-                (
-                    "soju_turso_rows_read_total",
-                    read,
-                    "Rows read reported by received Turso SQL responses",
-                ),
-                (
-                    "soju_turso_rows_written_total",
-                    written,
-                    "Rows written reported by received Turso SQL responses",
-                ),
-            ] {
-                let _ = writeln!(
-                    metrics,
-                    "# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}"
-                );
-            }
-        }
-        metrics
+        self.metrics.render(self.users.lock().unwrap().len())
     }
 
     async fn disable_inactive_users(&self) -> Result<()> {
@@ -485,7 +464,7 @@ impl Server {
     /// startup, before users start, and when message-expiry changes, which
     /// may leave at least 25% of the database free. Otherwise, the space freed each
     /// day is reused by the next day's messages, and rewriting the database
-    /// would hold it meanwhile. Turso never receives file maintenance SQL.
+    /// would hold it meanwhile.
     pub(crate) fn delete_expired_messages(&self, vacuum: bool) -> Result<()> {
         let cfg = self.config();
         let expiry = cfg.basic.message_expiry;
@@ -500,8 +479,7 @@ impl Server {
             crate::VERSION
         );
         match cfg.basic.msg_store.driver {
-            MsgStoreDriver::Db | MsgStoreDriver::Turso => {
-                let local_sqlite = cfg.basic.msg_store.driver == MsgStoreDriver::Db;
+            MsgStoreDriver::Db => {
                 let n = self
                     .db
                     .expire_messages(before, EXPIRY_CHUNK_SIZE, EXPIRY_CHUNK_PAUSE, &|| {
@@ -512,8 +490,7 @@ impl Server {
                     self.logger,
                     "deleted {n} expired messages older than {before_str} from db"
                 );
-                // Turso tenants merge their own search index while expiring
-                if local_sqlite && n > 0 {
+                if n > 0 {
                     let start = Instant::now();
                     self.db
                         .optimize()
@@ -524,7 +501,7 @@ impl Server {
                         start.elapsed().as_secs_f64()
                     );
                 }
-                if local_sqlite && vacuum {
+                if vacuum {
                     let free = self
                         .db
                         .free_page_ratio()
@@ -542,7 +519,7 @@ impl Server {
                         );
                     }
                 }
-                if local_sqlite {
+                {
                     self.db
                         .shrink_memory()
                         .map_err(|e| anyhow!("failed to shrink db memory: {e}"))?;

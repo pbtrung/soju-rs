@@ -777,8 +777,8 @@ fn target_unread_and_mentions() {
     db.store_network(u.id, &mut n).unwrap();
     let t = |s: &str| xirc::parse_server_time(s).unwrap();
     let at = |s: &str| msg!("PRIVMSG", "#a", "hi").with_tag("time", s);
-    // A mention may be recorded before its message is stored (Turso
-    // stores messages in the background): it doesn't create the target
+    // A mention may be recorded before its message is stored.
+    // Recording it does not create the target.
     db.store_message_target_highlight(n.id, "bob", t("2024-01-01T00:00:03.000Z"))
         .unwrap();
     db.store_messages(n.id, "#a", &[at("2024-01-01T00:00:01.000Z")])

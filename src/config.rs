@@ -54,28 +54,6 @@ fn parse_duration(s: &str) -> Result<Duration> {
 pub enum MsgStoreDriver {
     Memory,
     Db,
-    Turso,
-}
-
-/// Turso SQL and provisioning credentials are separate: SQL group tokens
-/// cannot create databases through the Platform API.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Turso {
-    pub organization: String,
-    pub group: String,
-    pub controller: String,
-    pub group_token: String,
-    pub api_token: String,
-}
-
-impl std::fmt::Debug for Turso {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Turso")
-            .field("organization", &self.organization)
-            .field("group", &self.group)
-            .field("controller", &self.controller)
-            .finish_non_exhaustive()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,7 +117,6 @@ pub struct Server {
     pub motd_path: String,
     pub db: Db,
     pub auth: Vec<Auth>,
-    pub turso: Option<Turso>,
     /// Set if the config contains a file-upload directive (unsupported).
     pub file_upload: bool,
 }
@@ -186,7 +163,6 @@ impl Server {
                 driver: AuthDriver::Internal,
                 source: String::new(),
             }],
-            turso: None,
             file_upload: false,
         }
     }
@@ -289,11 +265,6 @@ const KNOWN_DIRECTIVES: &[&str] = &[
     "chathistory-limit",
     "enable-user-on-auth",
     "client-cert-auth",
-    "turso-organization",
-    "turso-group",
-    "turso-controller",
-    "turso-group-token",
-    "turso-api-token",
 ];
 
 pub fn parse(s: &str) -> Result<Server> {
@@ -349,7 +320,6 @@ pub fn parse(s: &str) -> Result<Server> {
         let driver = match driver.as_str() {
             "memory" => MsgStoreDriver::Memory,
             "db" => MsgStoreDriver::Db,
-            "turso" => MsgStoreDriver::Turso,
             "fs" => bail!("directive message-store: driver \"fs\" is not supported"),
             _ => bail!("directive message-store: unknown driver {driver:?}"),
         };
@@ -363,46 +333,6 @@ pub fn parse(s: &str) -> Result<Server> {
             _ => {}
         }
         srv.basic.msg_store = MsgStore { driver, source };
-    }
-
-    if srv.basic.msg_store.driver == MsgStoreDriver::Turso {
-        if !get("db").is_empty() {
-            bail!("message-store turso manages its own databases; remove the db directive");
-        }
-        let required = |name: &str| -> Result<String> {
-            single_string(&get(name))?
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow!("message-store turso requires {name}"))
-        };
-        let turso = Turso {
-            organization: required("turso-organization")?,
-            group: required("turso-group")?,
-            controller: single_string(&get("turso-controller"))?
-                .unwrap_or_else(|| "soju-controller".to_owned()),
-            group_token: required("turso-group-token")?,
-            api_token: required("turso-api-token")?,
-        };
-        for (name, value) in [
-            ("turso-organization", &turso.organization),
-            ("turso-group", &turso.group),
-            ("turso-controller", &turso.controller),
-        ] {
-            if value.is_empty()
-                || value.len() > 63
-                || !value
-                    .bytes()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-            {
-                bail!("{name} must contain 1 to 63 lowercase letters, digits or hyphens");
-            }
-        }
-        srv.turso = Some(turso);
-    } else if KNOWN_DIRECTIVES
-        .iter()
-        .filter(|name| name.starts_with("turso-"))
-        .any(|name| !get(name).is_empty())
-    {
-        bail!("turso directives require message-store turso");
     }
 
     let auth_dirs = get("auth");

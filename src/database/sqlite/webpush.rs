@@ -119,12 +119,11 @@ impl Database {
         } else {
             conn.execute(
                 "INSERT INTO
-                WebPushSubscription(id, created_at, updated_at, user, network, endpoint,
+                WebPushSubscription(created_at, updated_at, user, network, endpoint,
                     key_auth, key_p256dh, key_vapid)
-                VALUES (:id, :now, :now, :user, :network, :endpoint, :key_auth,
+                VALUES (:now, :now, :user, :network, :endpoint, :key_auth,
                     :key_p256dh, :key_vapid)",
                 named_params! {
-                    ":id": super::new_row_id(&conn),
                     ":now": now,
                     ":user": user_id,
                     ":network": null_id(network_id),

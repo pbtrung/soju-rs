@@ -214,20 +214,13 @@ pub const MIGRATIONS: &[&str] = &[
         ANALYZE MessageTextIndex;
     "#,
     include_str!("query_indexes.sql"),
-    // Turso tenants then rebuild Message without a rowid, see
-    // sqlite::turso::rebuild_turso_messages. Local databases keep their
-    // upstream-compatible table.
     r#"
         CREATE TABLE IF NOT EXISTS MessageIdHighWater (
             id INTEGER PRIMARY KEY CHECK (id = 0),
             last_id INTEGER NOT NULL
         );
     "#,
-    // Local databases get the clustered layout of Turso tenants (which
-    // skip this migration, see LOCAL_MESSAGE_CLUSTER) plus a text-only time
-    // index. IDs are kept, so the search index and receipts stay valid; the
-    // reservation row takes over from max(id), which the new table can't
-    // seek. Dropping Message drops its indexes and search triggers.
+    // Cluster messages by target and time, preserving IDs and receipt cursors.
     r#"
         INSERT INTO MessageIdHighWater(id, last_id)
             SELECT 0, id FROM Message WHERE true ORDER BY id DESC LIMIT 1
@@ -271,9 +264,7 @@ pub const MIGRATIONS: &[&str] = &[
 
 /// The time of the latest message mentioning the user in each conversation:
 /// with the read marker, it tells clients which conversations have mentions
-/// without loading them. Keyed by name rather than MessageTarget ID: Turso's
-/// background writer creates targets with IDs it picks, which a target
-/// created meanwhile for a mention would make it reference wrongly.
+/// without loading them. Keyed by network and target name.
 pub const TARGET_HIGHLIGHT: &str = "
     CREATE TABLE TargetHighlight (
         network INTEGER NOT NULL,
@@ -283,7 +274,3 @@ pub const TARGET_HIGHLIGHT: &str = "
         FOREIGN KEY(network) REFERENCES Network(id)
     ) WITHOUT ROWID;
 ";
-
-/// The migration clustering the local Message table. Turso tenants skip it:
-/// sqlite::turso::rebuild_turso_messages clusters them in resumable chunks.
-pub const LOCAL_MESSAGE_CLUSTER: usize = 33;

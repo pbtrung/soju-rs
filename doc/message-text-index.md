@@ -8,13 +8,8 @@ ANALYZE;
 In v0.99.22 (schema 32), `MessageTextIndex` remains in use and the old full
 `MessageIndex` is replaced by `MessageEventIndex WHERE text IS NULL`. Event
 playback merges the disjoint indexes. The measurements below document the
-earlier change; see [the current optimization audit](turso-query-optimization.md).
-Commands using ANALYZE below are for local SQLite, not Turso Cloud.
-From v0.99.23 (schema 33), Turso user databases no longer have these indexes:
-their `Message` table is clustered by `(target, time, id)`, see
-[Turso Cloud storage](turso.md#message-table-layout). Local SQLite kept them
-until v0.99.24 (schema 34), which clusters it the same way and keeps only
-`MessageTextIndex`, see [section 7](#7-schema-34-clustered-local-messages).
+earlier change. Since v0.99.24 (schema 34), local SQLite clusters messages
+by target and time and keeps `MessageTextIndex`, see [section 7](#7-schema-34-clustered-local-messages).
 
 Checked against soju-rs commit `dbb2c7c` (2026-10-24).
 
@@ -244,8 +239,7 @@ the cost of caveat C2: rows were stored in arrival order, every channel
 interleaved, so the 100 rows of a `LATEST 100` sat on up to 100 different
 pages, and a connect read that for every target.
 
-v0.99.24 gives local databases the layout Turso user databases got in
-v0.99.23: `Message` is a `WITHOUT ROWID` table with primary key
+Since v0.99.24, `Message` is a `WITHOUT ROWID` table with primary key
 `(target, time, id)`, so a target's history is stored in order, on
 consecutive pages. Its indexes:
 
@@ -253,8 +247,7 @@ consecutive pages. Its indexes:
   delivery cursors, backlog for clients without CHATHISTORY, and search
   results by ID;
 - `MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL`:
-  text-only history and target lists. Turso tenants don't have it (an
-  index entry is a billed row write); locally it keeps text-only history,
+  text-only history and target lists. It keeps text-only history,
   e.g. gamja's, from reading every interleaved event row.
 
 `MessageEventIndex` and `Message_target_index` are gone: event playback,

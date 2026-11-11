@@ -107,7 +107,7 @@ CREATE TABLE WebPushSubscription (
 
 CREATE INDEX WebPushSubscription_user_network_index ON WebPushSubscription(user, network);
 
--- Clustered by history order, like Turso user databases: a target's
+-- Clustered by history order: a target's
 -- recent messages share pages, and an event costs one row write. Text rows
 -- also have an ID index for search results and delivery cursors, and a
 -- time index for text-only history, which would otherwise read every
