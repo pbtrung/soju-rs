@@ -189,7 +189,8 @@ fn real_engine_query_cost() {
     drop(migrated);
     conn.pragma_update(None, "foreign_keys", false).unwrap();
     conn.execute_batch(
-        "DROP TABLE IF EXISTS MessageFTS;DROP TABLE IF EXISTS Message;DROP TABLE IF EXISTS MessageTarget;
+        "DROP TABLE IF EXISTS MessageFTS;DROP TABLE IF EXISTS Message;DROP TABLE IF EXISTS TargetHighlight;
+        DROP TABLE IF EXISTS MessageTarget;
         DROP TABLE IF EXISTS Channel;DROP TABLE IF EXISTS DeviceCertificate;DROP TABLE IF EXISTS WebPushSubscription;
         DROP TABLE IF EXISTS DeliveryReceipt;DROP TABLE IF EXISTS ReadReceipt;DROP TABLE IF EXISTS Network;
         DROP TABLE IF EXISTS WebPushConfig;DROP TABLE IF EXISTS User;DROP TABLE IF EXISTS MessageIdHighWater;
