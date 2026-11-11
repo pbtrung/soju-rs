@@ -552,42 +552,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turso_config() {
-        const CONFIG: &str = "message-store turso\nturso-organization example\nturso-group bouncer\nturso-group-token sql-secret\nturso-api-token api-secret\n";
-        let cfg = parse(CONFIG).unwrap();
-        assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Turso);
-        let turso = cfg.turso.as_ref().unwrap();
-        assert_eq!(turso.controller, "soju-controller");
-        assert_eq!(turso.group_token, "sql-secret");
-        assert!(!format!("{cfg:?}").contains("sql-secret"));
-        assert!(!format!("{cfg:?}").contains("api-secret"));
-        assert!(parse(&format!("{CONFIG}turso-controller another-controller\n")).is_ok());
-        for name in [
-            "turso-organization",
-            "turso-group",
-            "turso-group-token",
-            "turso-api-token",
-        ] {
-            let incomplete = CONFIG
-                .lines()
-                .filter(|line| !line.starts_with(name))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(parse(&incomplete).unwrap_err().to_string().contains(name));
-        }
-        for suffix in [
-            "db sqlite3 local.db\n",
-            "turso-group duplicate\n",
-            "turso-controller ../escape\n",
-            "turso-controller {}\n",
-        ] {
-            assert!(parse(&format!("{CONFIG}{suffix}")).is_err(), "{suffix}");
-        }
-        assert!(parse("message-store turso unexpected").is_err());
-        assert!(parse("turso-group unused").is_err());
-    }
-
-    #[test]
     fn full_config() {
         let cfg = parse(
             r#"

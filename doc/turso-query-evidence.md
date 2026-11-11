@@ -6,7 +6,8 @@ These are real local libSQL rows_read/rows_written response counters.
 They are not mock counters or a claim about a particular hosted engine.
 Only synthetic data in a disposable container was used.
 
-Reproduce with `python3 scripts/bench-query-cost.py`.
+These historical measurements predate removal of the Turso/libSQL test
+suite and benchmark tooling; they are retained as a record of that run.
 
 | Case | Rows read | Rows written |
 | --- | ---: | ---: |

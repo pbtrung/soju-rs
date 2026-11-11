@@ -1,5 +1,8 @@
 # Turso pre-release audit
 
+The Turso/libSQL tests, fixtures and benchmark tooling described below have
+since been removed. Test counts and coverage claims are historical.
+
 Audited the Turso implementation introduced by `d478f60`, including its
 configuration, controller directory, user routing, Hrana transport, command
 bootstrap, expiry and documentation. The v0.99.20 follow-up also audits
@@ -134,7 +137,7 @@ against a pinned, disposable localhost engine and asserts the improvements.
 v0.99.22 validation: formatting and strict Clippy passed; all 198 ordinary
 tests passed (161 library, 3 sojuctl, 34 bouncer integration), plus the
 separately invoked real-engine benchmark. Its ignored test is driven by
-`python3 scripts/bench-query-cost.py`.
+the benchmark runner available at that release.
 
 ## Clustered messages and audit follow-up (v0.99.23)
 

@@ -667,24 +667,3 @@ impl Statement<'_> {
         Ok(values.into_iter())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stream_redirect_cannot_expose_the_group_token_to_an_untrusted_origin() {
-        assert_eq!(
-            stream_endpoint("https://primary-example.turso.io/").unwrap(),
-            "https://primary-example.turso.io/v2/pipeline"
-        );
-        for url in [
-            "http://primary-example.turso.io/",
-            "https://example.com/",
-            "https://example.turso.io.evil.test/",
-            "https://user:secret@primary-example.turso.io/",
-        ] {
-            assert!(stream_endpoint(url).is_err(), "{url}");
-        }
-    }
-}

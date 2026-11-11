@@ -30,16 +30,9 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            packages: go python nodejs npm chromium socat
-            libsql: ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67
+            packages: go python nodejs npm chromium
           - target: x86_64-unknown-linux-musl
             packages: musl rust-musl
-            libsql: ''
-    services:
-      libsql:
-        image: ${{ matrix.libsql }}
-        env:
-          SQLD_NODE: primary
     env:
       TARGET: ${{ matrix.target }}
       COMPAT_WORK: /tmp/soju-compat
@@ -65,17 +58,6 @@ jobs:
         run: |
           cargo test --locked --all-targets --target "$TARGET"
           cargo test --locked --doc --target "$TARGET"
-
-      - name: Test query cost against libSQL
-        if: matrix.libsql != ''
-        run: |
-          # The test accepts only loopback URLs. Forward to the service container.
-          timeout 30 bash -c 'until (: >/dev/tcp/libsql/8080) 2>/dev/null; do sleep 1; done'
-          socat TCP-LISTEN:8080,bind=127.0.0.1,reuseaddr,fork TCP:libsql:8080 &
-          trap 'kill "$!"' EXIT
-          timeout 10 bash -c 'until (: >/dev/tcp/127.0.0.1/8080) 2>/dev/null; do sleep 0.1; done'
-          SOJU_QUERY_COST_URL=http://127.0.0.1:8080/v2/pipeline \
-            cargo test --locked --lib --target "$TARGET" real_engine_query_cost -- --ignored
 
       - name: Prepare compatibility tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'

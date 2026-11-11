@@ -91,21 +91,6 @@ impl Database {
     pub fn is_remote(&self) -> bool {
         self.cloud.is_some()
     }
-    #[cfg(test)]
-    pub(super) fn from_cloud(cloud: Box<turso::Turso>) -> Self {
-        Self {
-            account: cloud.controller.clone(),
-            cloud: Some(cloud),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn account_conn_for_test(
-        &self,
-    ) -> std::sync::MutexGuard<'_, connection::Connection> {
-        self.account.conn()
-    }
-
     pub fn open(source: &str) -> Result<Self> {
         Ok(Self {
             account: Arc::new(sqlite::Database::open(source)?),

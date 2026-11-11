@@ -113,16 +113,10 @@ from 100 targets. VM steps are not billable-row measurements.
 ## Final changes and evidence
 
 The complete production-writer and receipt measurements are in
-[turso-query-evidence.md](turso-query-evidence.md). Reproduce them with:
-
-```sh
-python3 scripts/bench-query-cost.py --output doc/turso-query-evidence.md
-```
-
-This starts a disposable localhost libSQL container with a pinned image and
-runs an ignored Rust integration test using the actual Connection,
-MessageWriter and receipt/expiry methods. No cloud credentials are needed.
-The baseline insert SQL and schema are frozen fixtures from commit bc12089.
+[turso-query-evidence.md](turso-query-evidence.md). The Turso/libSQL tests,
+benchmark runner and frozen fixtures have since been removed; the report
+is historical evidence.
+The baseline insert SQL and schema came from commit bc12089.
 Cold target resolution is included. Identical retries must write zero rows;
 insert/read/write and expiry improvements are asserted by the benchmark.
 The script also records native SQLite plans for the major query families.

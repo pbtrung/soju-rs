@@ -133,8 +133,7 @@ Behaviour changes:
 the latter on both the multi-threaded and the current-thread runtime (soju-rs
 uses the current-thread one on machines with a single CPU). GitHub Actions
 runs the Cargo suite for GNU and musl on Arch Linux when manually triggered
-with **Run workflow**. It also runs the real libSQL query-cost check and the
-following compatibility checks:
+with **Run workflow**. It also runs the following compatibility checks:
 
 - end-to-end tests using the latest default-branch commit of
   [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju

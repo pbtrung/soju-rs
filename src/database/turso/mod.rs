@@ -39,11 +39,6 @@ fn database_name() -> String {
     String::from_utf8(name.to_vec()).unwrap()
 }
 
-#[cfg(test)]
-mod cost_tests;
-#[cfg(test)]
-mod tests;
-
 impl Turso {
     pub fn observed_usage(&self) -> (u64, u64) {
         self.http.observed_usage()

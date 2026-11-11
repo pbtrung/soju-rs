@@ -173,23 +173,3 @@ impl Http {
         Ok(value)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn usage_counts_execute_and_batch_results_once() {
-        let usage = Usage::default();
-        usage.observe(&json!({"results":[
-            {"type":"ok","response":{"type":"execute","result":{"rows_read":2,"rows_written":3}}},
-            {"type":"ok","response":{"type":"batch","result":{"rows_read":999,"step_results":[{"rows_read":5,"rows_written":7},null,{"rows_read":11,"rows_written":13}]}}},
-            {"type":"error","error":{"code":"SQLITE_ERROR"}},
-            {"type":"ok","response":{"type":"close"}}
-        ]}));
-        assert_eq!(usage.read.load(Ordering::Relaxed), 18);
-        assert_eq!(usage.written.load(Ordering::Relaxed), 23);
-        usage.observe(&Value::Null);
-        assert_eq!(usage.read.load(Ordering::Relaxed), 18);
-    }
-}

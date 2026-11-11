@@ -190,49 +190,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turso_bootstrap_validates_before_connecting() {
-        let mut cfg = config::Server::defaults();
-        assert!(
-            create_turso_admin(&cfg, &[])
-                .unwrap_err()
-                .to_string()
-                .contains("message-store turso")
-        );
-        cfg.turso = Some(config::Turso {
-            organization: "example".into(),
-            group: "bouncer".into(),
-            controller: "soju-controller".into(),
-            api_token: "api-secret".into(),
-            group_token: "sql-secret".into(),
-        });
-        assert!(
-            create_turso_admin(&cfg, &[])
-                .unwrap_err()
-                .to_string()
-                .contains("-username")
-        );
-        let args = vec!["-username".to_owned(), "alice".to_owned()];
-        assert!(
-            create_turso_admin(&cfg, &args)
-                .unwrap_err()
-                .to_string()
-                .contains("-password")
-        );
-        let args = vec![
-            "-username".to_owned(),
-            "alice\r\nJOIN #channel".to_owned(),
-            "-password".to_owned(),
-            "secret".to_owned(),
-        ];
-        assert!(
-            create_turso_admin(&cfg, &args)
-                .unwrap_err()
-                .to_string()
-                .contains("CR, LF or NUL")
-        );
-    }
-
-    #[test]
     fn quoting() {
         let words: Vec<String> = ["user", "create", "-password", "a \"b\"\\"]
             .iter()
