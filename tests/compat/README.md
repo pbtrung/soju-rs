@@ -14,9 +14,10 @@ ports make the tests fail.
     ./run-gamja.sh rs go       # gamja end-to-end tests (needs Node.js and Chromium)
 
 `setup.sh` takes `SOJU_REF` (upstream soju git ref) and `GAMJA_SRC` (local
-gamja checkout, defaults to cloning upstream). `EXTRA_CONFIG` adds lines to
-both bouncers' configuration, `%D%` being replaced by each bouncer's
-directory, e.g. `EXTRA_CONFIG="motd %D%/motd.txt" ./run-diff.sh`.
+gamja checkout). A fresh setup defaults to the latest commit on the default
+branch of [pbtrung/gamja](https://github.com/pbtrung/gamja). `EXTRA_CONFIG`
+adds lines to both bouncers' configuration, with `%D%` replaced by each
+bouncer's directory, e.g. `EXTRA_CONFIG="motd %D%/motd.txt" ./run-diff.sh`.
 
 The differential harness (`diffharness.py`) runs each scenario against both
 bouncers, each connected to its own ergo instance, and compares the

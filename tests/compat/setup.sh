@@ -3,7 +3,7 @@
 # ./work): builds upstream Go soju and the ergo IRC server from source,
 # generates TLS certificates and the ergo configuration template.
 #
-# Requires git, go, openssl and python3.
+# Requires git, go, openssl, python3, Node.js and npm.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -48,14 +48,15 @@ j = s.index("enabled: true", i)
 s = s[:j] + "enabled: false" + s[j + len("enabled: true"):]
 open(f"{S}/env/ergo/ircd.yaml", "w").write(s)
 PY
-# gamja, for the end-to-end tests: a local checkout (GAMJA_SRC) or upstream
+# gamja, for the end-to-end tests: a local checkout or the pbtrung fork
 if [ ! -d "$S/gamja/node_modules" ]; then
 	rm -rf "$S/gamja"
 	if [ -n "${GAMJA_SRC:-}" ]; then
 		mkdir -p "$S/gamja"
 		(cd "$GAMJA_SRC" && git ls-files -z | xargs -0 -I{} cp --parents {} "$S/gamja/")
 	else
-		git clone -q --depth 1 https://codeberg.org/emersion/gamja.git "$S/gamja"
+		git clone -q --depth 1 https://github.com/pbtrung/gamja.git "$S/gamja"
+		git -C "$S/gamja" log -1 --format='gamja %H %s'
 	fi
 	(cd "$S/gamja" && npm install --no-audit --no-fund >/dev/null && npx vite build >/dev/null)
 fi

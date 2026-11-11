@@ -29,7 +29,7 @@ library and the mimalloc allocator are built from source):
     cargo build --release
 
 The `soju` and `sojuctl` binaries are written to `target/release/`. Release
-archives for Linux x86_64 are built locally with `scripts/build-release.sh`
+archives for Linux x86_64 can be built with `scripts/build-release.sh`
 for GNU and static musl. Install both Rust targets, a native C compiler and
 `musl-gcc`, plus CMake, Make and Perl. On Arch Linux, `rust`, `rust-musl`
 and `musl` supply the Rust targets and C compilers (with `gcc` for GNU).
@@ -44,6 +44,14 @@ This writes the two x86_64 archives and `SHA256SUMS` to `dist/`. It uses
 the installed toolchains directly, verifies both musl executables are fully
 static, and requires neither Docker nor rustup. Set `DIST_DIR` to choose a
 different archive directory.
+
+To build on GitHub, open **Actions → CI and release → Run workflow** and
+select the ref to build. After the tests pass, the run produces both x86_64
+archives and `SHA256SUMS` as a downloadable artifact. Enable **Publish the
+archives as a GitHub Release** to publish those files under the
+`v<version>` tag from `Cargo.toml`. The workflow creates the tag at the
+tested commit if needed. Bump the package version and update `Cargo.lock`
+before publishing a new release.
 
 ## Differences from upstream soju
 
@@ -123,16 +131,21 @@ Behaviour changes:
 
 `cargo test` runs unit tests and the integration tests ported from upstream,
 the latter on both the multi-threaded and the current-thread runtime (soju-rs
-uses the current-thread one on machines with a single CPU). The port was also
-checked with:
+uses the current-thread one on machines with a single CPU). GitHub Actions
+runs the Cargo suite for GNU and musl on Arch Linux for pull requests and
+pushes to `main`. It also runs the real libSQL query-cost check and the
+following compatibility checks:
 
 - differential tests running the same client sessions against upstream Go
   soju and soju-rs (both connected to [ergo]) and comparing normalized
   transcripts
-- end-to-end tests of gamja in headless Chromium against soju-rs
+- end-to-end tests using the latest default-branch commit of
+  [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju
 - IRCv3 specification checks (CAP 302, SASL 3.2, labeled-response, batch,
   echo-message, server-time, chathistory, read-marker, metadata-2,
   bouncer-networks)
+- listener checks for TLS, client certificates, PROXY protocol, identd and
+  Prometheus
 
 ## License
 
@@ -143,4 +156,5 @@ Copyright (C) 2020 The soju Contributors
 [soju]: https://soju.im
 [IRCv3]: https://ircv3.net/
 [gamja]: https://codeberg.org/emersion/gamja
+[pbtrung/gamja]: https://github.com/pbtrung/gamja
 [ergo]: https://ergo.chat
