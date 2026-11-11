@@ -52,6 +52,31 @@ archives as a GitHub Release** to publish those files under the
 tested commit if needed. Bump the package version and update `Cargo.lock`
 before publishing a new release.
 
+To publish from a clean `main` checkout without running Cargo locally:
+
+```sh
+./scripts/release-new.sh 0.99.26
+```
+
+This updates `Cargo.toml` and the local package entry in `Cargo.lock`,
+commits and pushes the version bump, then starts the publishing workflow.
+It accepts stable `MAJOR.MINOR.PATCH` versions, with an optional `v` prefix,
+and requires Python 3.11+, Git and an authenticated GitHub CLI (`gh`).
+Tests and builds run in GitHub Actions.
+
+To replace the release for the current version in `Cargo.toml`:
+
+```sh
+./scripts/release-replace.sh
+```
+
+This pushes `main`, moves the remote version tag to `HEAD` with an explicit
+lease, deletes an existing release and its assets if present, then starts a
+fresh publishing workflow. It also works when only the tag exists or when
+neither the release nor tag exists. Both scripts reject a dirty checkout,
+a branch other than `main`, or a local branch behind or diverged from the
+remote. Neither script runs Cargo.
+
 ## Differences from upstream soju
 
 Not supported:
