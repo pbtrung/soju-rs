@@ -195,3 +195,98 @@ fn repeated_migration_after_another_initializer_is_a_noop() {
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
 }
+
+#[test]
+fn file_backed_history_survives_migration_and_reopen() -> anyhow::Result<()> {
+    struct TestDirectory(std::path::PathBuf);
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let directory = TestDirectory(std::env::temp_dir().join(format!(
+        "soju-rs-migration-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    )));
+    std::fs::create_dir(&directory.0)?;
+    let path = directory.0.join("history.db");
+    let source = path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF-8 test path"))?;
+    {
+        let connection = Connection::open(&path)?;
+        connection.execute_batch(SQLITE_V0_SCHEMA)?;
+        for migration in &MIGRATIONS[1..30] {
+            connection.execute_batch(migration)?;
+        }
+        connection.execute_batch(
+            "PRAGMA user_version = 30;
+            INSERT INTO User(id, username) VALUES (1, 'alice');
+            INSERT INTO Network(id, user, addr) VALUES (1, 1, 'irc.example.org');
+            INSERT INTO MessageTarget(id, network, target) VALUES (1, 1, '#a');
+            INSERT INTO Message(id, target, raw, time, sender, text) VALUES
+                (41, 1, 'PRIVMSG #a :hello', '2024-01-01T00:00:00.000Z', '', 'hello'),
+                (42, 1, 'JOIN #a', '2024-01-01T00:00:01.000Z', '', NULL);
+            INSERT INTO DeliveryReceipt(network, target, client, internal_msgid)
+                VALUES (1, '#a', 'phone', 'cursor-before-migration');",
+        )?;
+    }
+    let options = MessageOptions {
+        limit: 10,
+        ..Default::default()
+    };
+    {
+        let database = Database::open(source)?;
+        let messages = database.list_messages(1, "#a", &options)?;
+        assert_eq!(messages, vec![msg!("PRIVMSG", "#a", "hello")]);
+        // Remove the highest stored ID after migration. Reopening must still
+        // allocate past it, rather than deriving the next ID from live rows.
+        database
+            .conn()
+            .execute("DELETE FROM Message WHERE id = 42", [])?;
+    }
+    {
+        let database = Database::open(source)?;
+        assert_eq!(database.get_message_last_id(1, "#a")?, 41);
+        assert_eq!(
+            database
+                .list_delivery_receipts(1)?
+                .first()
+                .map(|r| r.internal_msg_id.as_str()),
+            Some("cursor-before-migration")
+        );
+        assert_eq!(
+            database.store_messages(1, "#a", &[msg!("PRIVMSG", "#a", "again")])?,
+            vec![43]
+        );
+        let found = database.list_messages(
+            1,
+            "#a",
+            &MessageOptions {
+                text: "hello".to_owned(),
+                ..options
+            },
+        )?;
+        assert_eq!(found, vec![msg!("PRIVMSG", "#a", "hello")]);
+        let connection = database.conn();
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+            35
+        );
+        assert_eq!(
+            connection.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))?,
+            "ok"
+        );
+        let foreign_key_errors: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(foreign_key_errors, 0);
+        connection.execute_batch(
+            "INSERT INTO MessageFTS(MessageFTS, rank) VALUES('integrity-check', 1);",
+        )?;
+    }
+    Ok(())
+}
