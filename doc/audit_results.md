@@ -4,11 +4,12 @@
 
 Documentation maintenance: the audit and its prompt now live in `doc/`.
 Source locations below are relative to the repository root. Audit findings,
-verification results and implementation statuses remain the 2026-11-17
-snapshot; subsequent documentation cleanup does not mark code fixes complete.
+verification results describe the 2026-11-17 audit baseline. Finding and
+checklist statuses track subsequent implementation; documentation cleanup alone
+does not mark code fixes complete.
 The README's release and database descriptions have since been corrected, and
-older review records moved to `doc/archive/`. The release scripts, CI and Rust
-implementation findings still require the planned changes.
+older review records moved to `doc/archive/`. Implementation progress and
+remaining work are recorded by finding status and in §15.
 
 Audit date: 2026-11-17. Reviewed commit: `c103b74be47920e307b99efe4ff739a1614ec7a1` (`soju` 0.99.25).
 
@@ -276,7 +277,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Permanently inflated gauges after cancelled/unwinding sessions; no authentication or memory-safety impact asserted.
 - **Recommended fix:** Use an RAII decrement guard and explicitly preserve the existing upstream count scope.
 - **Verification:** Normal completion, cancellation and unwind tests where supported, all leaving the count at its initial value; STEP-003 tracks implementation.
-- **Status:** Not Started.
+- **Status:** Completed. Downstream and upstream counts now use one RAII guard; regressions cover completion, operational error, cancellation and unwind. fmt, check, default Clippy, 213 tests, reader smoke and doc tests pass. Rustdoc builds with the 13 pre-existing warnings.
 
 ## 4. Rust 1.100 and Edition 2024 Modernization
 
@@ -490,13 +491,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: `bash -n`; hermetic script test command documented in README; missing-workflow/API/dirty-checkout cases.
   - Acceptance/status: no mutation on failed preflight; valid path dispatches a real workflow; **Completed**.
 
-- [ ] **STEP-003 (P1): Make session metric accounting cancellation-safe.**
+- [x] **STEP-003 (P1): Make session metric accounting cancellation-safe.**
   - Findings: ASYNC-005. Objective: preserve observability under task cancellation/unwind.
   - Files: `src/lib.rs`, `src/upstream/connect.rs`, focused unit tests.
   - Instructions: introduce a small scope guard that increments once and decrements in Drop; align upstream count scope with the old behavior; no unrelated metrics refactor.
   - Dependencies: STEP-001. Risks: accidental double decrement or changed count definition.
   - Verification: targeted normal/cancel/unwind tests; full `cargo test --workspace --all-features --locked`.
-  - Acceptance/status: counts return to prior values after all exits; **Not Started**.
+  - Acceptance/status: counts return to prior values after all exits; **Completed**.
 
 ### Phase 2 — Rust Modernization
 
@@ -780,7 +781,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 **Verification blockers:** missing audit/deny/machete/outdated/Miri/fuzz tools; no established native sanitizer target; external compatibility environment and long-running soak not run. A current advisory scan is still required. Cached Cargo index is stale relative to the live API inventory. No approval rejection prevented an action; socket/network access used approved escalation where necessary.
 
-**Intentional execution boundary:** all implementation is deferred by [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). This is not a technical blocker and must not be misreported as failed remediation. Do not mark a finding Completed merely because it appears in this plan.
+**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3 and commit/push after each step. Later phases remain outside the current request. Mark findings Completed only after implementation and verification.
 
 ## 15. Implementation Progress Log
 
@@ -791,8 +792,8 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / research | Verified official Rust 1.100 release; queried all direct/locked crate names; read rusqlite 0.43 release notes | Candidate migrations identified, none applied |
 | 2026-11-17 / focused probes | Cancelled metric guard, dropped connection ownership, 10,000 history targets | Defects/retention reproduced; tests not added in audit-only phase |
 | 2026-11-17 / planning | Created findings, 10 phases, 29 actionable steps with dependencies/risks/checks/acceptance criteria | STEP-001 completed; STEP-002–029 not started |
-
 | 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-003 | Downstream and upstream counts now use one RAII guard; regressions cover completion, operational error, cancellation and unwind. fmt, check, default Clippy, 213 tests, reader smoke and doc tests pass. Rustdoc builds with the 13 pre-existing warnings. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

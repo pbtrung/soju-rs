@@ -19,6 +19,21 @@ pub fn inc(c: &AtomicU64) {
     c.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Counts a running operation until completion, cancellation or unwinding.
+pub(crate) async fn with_gauge<F: std::future::Future>(gauge: &AtomicI64, f: F) -> F::Output {
+    struct Guard<'a>(&'a AtomicI64);
+
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    gauge.fetch_add(1, Ordering::Relaxed);
+    let _guard = Guard(gauge);
+    f.await
+}
+
 impl Metrics {
     /// Renders all metrics. users is the current number of active users.
     pub fn render(&self, users: usize) -> String {
@@ -87,6 +102,53 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gauge_preserves_results_and_existing_count() {
+        let gauge = AtomicI64::new(3);
+        let result = with_gauge(&gauge, async {
+            assert_eq!(gauge.load(Ordering::Relaxed), 4);
+            Ok::<_, &str>(42)
+        })
+        .await;
+        assert_eq!(result, Ok(42));
+        assert_eq!(gauge.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            with_gauge(&gauge, async { Err::<(), _>("failure") }).await,
+            Err("failure")
+        );
+        assert_eq!(gauge.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn cancelling_downstream_restores_gauge() {
+        let srv = crate::server::Server::new(
+            crate::database::Database::open_in_memory().unwrap(),
+            crate::logger::Logger::new(false),
+        );
+        srv.metrics.downstreams.store(3, Ordering::Relaxed);
+        let mut future = Box::pin(crate::metrics_guard(&srv, std::future::pending::<()>()));
+        assert!(futures_util::poll!(future.as_mut()).is_pending());
+        assert_eq!(srv.metrics.downstreams.load(Ordering::Relaxed), 4);
+        drop(future);
+        assert_eq!(srv.metrics.downstreams.load(Ordering::Relaxed), 3);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[tokio::test]
+    async fn unwinding_restores_gauge() {
+        use futures_util::FutureExt;
+
+        let gauge = AtomicI64::new(3);
+        let result = std::panic::AssertUnwindSafe(with_gauge(&gauge, async {
+            assert_eq!(gauge.load(Ordering::Relaxed), 4);
+            panic!("simulated session failure");
+        }))
+        .catch_unwind()
+        .await;
+        assert!(result.is_err());
+        assert_eq!(gauge.load(Ordering::Relaxed), 3);
+    }
 
     #[test]
     fn render() {

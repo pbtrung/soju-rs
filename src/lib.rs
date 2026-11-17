@@ -29,11 +29,7 @@ pub mod xirc;
 /// The soju-rs version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Counts a downstream connection in the metrics while it's being served.
+/// Counts a downstream connection until serving ends, including cancellation.
 pub async fn metrics_guard<F: std::future::Future>(srv: &server::Server, f: F) -> F::Output {
-    use std::sync::atomic::Ordering;
-    srv.metrics.downstreams.fetch_add(1, Ordering::Relaxed);
-    let res = f.await;
-    srv.metrics.downstreams.fetch_sub(1, Ordering::Relaxed);
-    res
+    metrics::with_gauge(&srv.metrics.downstreams, f).await
 }

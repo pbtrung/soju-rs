@@ -49,9 +49,7 @@ pub async fn run_network(p: RunnerParams) {
 
         let record = p.record.lock().unwrap().clone();
         let net_id = record.id;
-        p.srv.metrics.upstreams.fetch_add(1, Ordering::Relaxed);
-        let res = run_conn(&p, &record).await;
-        p.srv.metrics.upstreams.fetch_sub(1, Ordering::Relaxed);
+        let res = metrics::with_gauge(&p.srv.metrics.upstreams, run_conn(&p, &record)).await;
 
         match res {
             Ok(()) => backoff.reset(),
