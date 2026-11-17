@@ -268,7 +268,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Surprising public API behavior and portability/invariant hazards, especially for hypothetical 32-bit targets.
 - **Recommended fix:** Use checked conversions or explicitly documented saturation where the API means unlimited; preserve intentional ZigZag bit encodings. Handle sequence exhaustion and validate nonzero/representable rate parameters. Do not claim 32-bit support without a build.
 - **Verification:** Boundary tests for zero, maximum representable values, malformed overlong BARE integers, `usize::MAX`, and explicit sequence rollover handling; GNU/musl regression tests.
-- **Status:** Not Started.
+- **Status:** Completed. Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; remaining internal indexing policy is staged for STEP-011.
 
 #### PERF-001 — Receipt client enumeration is quadratic in distinct clients
 
@@ -592,13 +592,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: fmt/check/Clippy/tests; inspect lint exception reasons. Completed with 223 tests per GNU/musl target and strict all-target Clippy on both; reader smoke/doc tests pass. External Go/gamja compatibility remains not run; in-process protocol coverage passes. Error-mapping lint review is deferred with the remaining policy rather than changing credential-safe protocol errors in this step.
   - Acceptance/status: enabled policy passes on all targets and does not suppress production errors; **Completed**.
 
-- [ ] **STEP-009 (P1): Replace numeric/indexing hazards at external boundaries.**
+- [x] **STEP-009 (P1): Replace numeric/indexing hazards at external boundaries.**
   - Findings: NUM-001, LINT-001. Objective: make decoding/query/resource arithmetic explicit.
   - Files: `src/msgstore/{bare,db,memory}.rs`, `src/database/sqlite/messages.rs`, `src/rate.rs`, parser/PROXY sites flagged by Clippy.
   - Instructions: checked ID/length/limit conversion; document unlimited-limit policy; preserve intentional ZigZag bit patterns; checked sequence/rate configuration. Use slice patterns/get/split methods instead of repeated indexing after manual checks when clearer.
   - Dependencies: STEP-008. Risks: rejecting values previously accepted by library callers; preserve on-wire valid IDs.
   - Verification: boundary regressions, Go-compatible ID vectors, parser/database tests, selected cast/index lints.
-  - Acceptance/status: no unchecked untrusted numeric conversion; each intentional cast/invariant justified; **Not Started**.
+  - Acceptance/status: no unchecked untrusted numeric conversion; each intentional cast/invariant justified; **Completed**.
 
 - [ ] **STEP-010 (P1): Propagate setup failures and model validated state.**
   - Findings: PANIC-001, LINT-001. Objective: remove meaningful panic paths, not substitute defaults.
@@ -874,6 +874,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-007 | Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-030 | Replaced chrono with Jiff 1.0.0 across timestamp APIs, persistence, elapsed intervals and local logs. Preserved millisecond TEXT/schema 35, nanosecond input, pre-epoch Unix topic rounding, history/future clocks and IDs/cursors/FTS. Documented the intentional leap-second normalization and narrower date range. Added compatibility, timezone/DST, storage and duration-overflow regressions. fmt/check/strict Clippy, 219 tests on each GNU/musl target, reader smoke/doc tests, both optimized releases/static-link/CLI checks pass. Rustdoc builds with 13 existing warnings. Fresh audit has no vulnerabilities or advisory warnings; full deny and machete pass without ignores. Registry dry run finds no compatible updates. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-008 | Enforced the core Rust compiler policy and Clippy all/panic/todo/unimplemented/dbg/must-use/future checks plus allow-attribute rejection. Resolved explicit production panic sites, handled operational results and documented narrow cancellation/cleanup/test exceptions. Failed writer enqueue now rolls back queue accounting and closes the physical connection; transport shutdown errors are preserved. Added four regressions for failed sends, close errors, unsupported pending commands and duplicate nickname retry timers. fmt/check, strict GNU/musl all-target Clippy, 223 tests per target, reader smoke and doc tests pass. Rustdoc builds with the 13 existing warnings. LINT-001 remains In Progress for STEP-009–011; no dependency, schema or workflow change. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-009 | Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; remaining internal indexing policy is staged for STEP-011. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

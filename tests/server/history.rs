@@ -204,7 +204,10 @@ async fn chat_history(msg_store: MsgStore) {
         uc.send(
             msg!("PRIVMSG", TEST_USERNAME, *text)
                 .with_prefix(Prefix::new("foo"))
-                .with_tag("time", xirc::format_server_time(at(i as i64 * 1000))),
+                .with_tag(
+                    "time",
+                    xirc::format_server_time(at(i64::try_from(i).unwrap() * 1000)),
+                ),
         );
     }
     uc.roundtrip().await;
@@ -213,7 +216,7 @@ async fn chat_history(msg_store: MsgStore) {
     register_downstream(&mut dc, &env.network).await;
     dc.roundtrip().await; // drain post-connection-registration messages
 
-    let n = texts.len() as i64;
+    let n = i64::try_from(texts.len()).unwrap();
     let ts = |ms: i64| format!("timestamp={}", xirc::format_server_time(at(ms)));
     let s = |r: std::ops::Range<usize>| texts[r].iter().map(|t| t.to_string()).collect::<Vec<_>>();
     let cases: Vec<(&str, Vec<String>, usize, Vec<String>)> = vec![

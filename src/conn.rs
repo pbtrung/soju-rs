@@ -158,9 +158,18 @@ impl Conn {
         let c = conn.clone();
         tokio::spawn(async move {
             let cancel = c.shared.cancel.clone();
-            let mut limiter = rate
+            let mut limiter = match rate
                 .as_ref()
-                .map(|(r, _)| RateLimiter::new(r.delay, r.burst));
+                .map(|(r, _)| RateLimiter::new(r.delay, r.burst))
+                .transpose()
+            {
+                Ok(limiter) => limiter,
+                Err(e) => {
+                    logf!(c.shared.logger, "invalid connection rate limit: {e}");
+                    c.close();
+                    return;
+                }
+            };
             loop {
                 let out = tokio::select! {
                     out = rx.recv() => out,

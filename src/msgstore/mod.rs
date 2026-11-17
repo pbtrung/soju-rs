@@ -108,7 +108,7 @@ impl Store {
     /// string if the message isn't stored.
     pub fn append(&mut self, network: &Network, entity: &str, msg: &Message) -> Result<String> {
         match self {
-            Store::Memory(s) => Ok(s.append(network, entity, msg)),
+            Store::Memory(s) => s.append(network, entity, msg),
             Store::Db(s) => s.append(network, entity, msg),
         }
     }
@@ -241,8 +241,11 @@ mod tests {
             memory::format_memory_msg_id(42, "#soju", 1234567),
             "AFQFI3NvanUBh61L"
         );
-        assert_eq!(db::format_db_msg_id(7, "bob", 99999), "AA4DYm9iA5-NBg");
-        assert_eq!(db::format_db_msg_id(-3, "", 0), "AAUAAwA");
+        assert_eq!(
+            db::format_db_msg_id(7, "bob", 99999).unwrap(),
+            "AA4DYm9iA5-NBg"
+        );
+        assert_eq!(db::format_db_msg_id(-3, "", 0).unwrap(), "AAUAAwA");
 
         assert_eq!(
             parse_msg_id("AFQFI3NvanUBh61L").unwrap(),
@@ -264,5 +267,13 @@ mod tests {
         assert!(db::parse_db_msg_id("AAoFI2NoYW4C0B8GEoBA").is_err());
         assert!(parse_msg_id("!!!").is_err());
         assert!(parse_msg_id("").is_err());
+    }
+    #[test]
+    fn database_ids_reject_values_outside_signed_storage_range() {
+        assert!(db::format_db_msg_id(1, "#a", -1).is_err());
+        let huge = format_msg_id(1, "#a", MSG_ID_DB, |w| w.uint(u64::MAX));
+        assert!(db::parse_db_msg_id(&huge).is_err());
+        let maximum = db::format_db_msg_id(1, "#a", i64::MAX).unwrap();
+        assert_eq!(db::parse_db_msg_id(&maximum).unwrap(), i64::MAX);
     }
 }

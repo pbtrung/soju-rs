@@ -174,7 +174,7 @@ impl UserHandle {
 pub fn user_ident(u: &db::User) -> String {
     use sha2::Digest;
     let mut b = [0u8; 64];
-    b[..8].copy_from_slice(&(u.id as u64).to_le_bytes());
+    b[..8].copy_from_slice(&u.id.to_le_bytes());
     let h = sha2::Sha256::digest(b);
     hex::encode(&h[..16])
 }
@@ -193,13 +193,16 @@ pub fn local_tcp_addr(
     else {
         return Ok(None);
     };
-    let offset = (user_id + 1) as u128;
+    let offset = u128::try_from(user_id)?
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("user ID overflow"))?;
     let ip = match net.network() {
         IpAddr::V4(v4) => {
             let v = (u32::from(v4) as u128)
                 .checked_add(offset)
                 .filter(|v| *v <= u32::MAX as u128);
-            v.map(|v| IpAddr::V4((v as u32).into()))
+            v.and_then(|v| u32::try_from(v).ok())
+                .map(|v| IpAddr::V4(v.into()))
         }
         IpAddr::V6(v6) => u128::from(v6)
             .checked_add(offset)

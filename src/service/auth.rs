@@ -56,7 +56,8 @@ pub(super) fn handle_certfp_generate(
     ctx.defer(move |mut print| async move {
         let _generating = generating;
         let (key, cert) =
-            blocking(move || crate::certfp::generate_certfp(&key_type, bits as usize)).await?;
+            blocking(move || crate::certfp::generate_certfp(&key_type, usize::try_from(bits)?))
+                .await?;
         let fingerprints = certfp_fingerprints(&cert);
         run_on_user(&tx, move |u| {
             let ni = u

@@ -134,7 +134,7 @@ fn encrypt_with(
 
     let mut record = salt.to_vec();
     record.extend_from_slice(&RECORD_SIZE.to_be_bytes());
-    record.push(local_public.len() as u8);
+    record.push(u8::try_from(local_public.len())?);
     record.extend_from_slice(&local_public);
 
     let record_length = RECORD_SIZE as usize - 16;

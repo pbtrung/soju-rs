@@ -445,7 +445,8 @@ pub(super) fn start_regain_nick_timer(u: &mut User, ni: usize) {
         Duration::from_secs(15),
         Duration::from_secs(600),
         Duration::from_secs(10),
-    );
+    )
+    .expect("constant positive backoff bounds are valid");
     let delay = backoff.next_delay();
     uc.regain_nick_backoff = Some(backoff);
     uc.schedule_regain_nick(delay, want_nick);

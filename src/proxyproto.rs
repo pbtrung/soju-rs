@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 
 const V1_SIGNATURE: &[u8] = b"PROXY ";
@@ -43,6 +43,7 @@ impl<S> Prefixed<S> {
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for Prefixed<S> {
+    #[deny(clippy::indexing_slicing, clippy::string_slice)]
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -51,7 +52,10 @@ impl<S: AsyncRead + Unpin> AsyncRead for Prefixed<S> {
         if self.pos < self.prefix.len() {
             let n = (self.prefix.len() - self.pos).min(buf.remaining());
             let pos = self.pos;
-            buf.put_slice(&self.prefix[pos..pos + n]);
+            let bytes = self.prefix.get(pos..pos + n).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid prefix position")
+            })?;
+            buf.put_slice(bytes);
             self.pos += n;
             return Poll::Ready(Ok(()));
         }
@@ -82,14 +86,15 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Prefixed<S> {
 /// never blocks waiting for data a regular client wouldn't send. The
 /// returned stream replays any consumed bytes which weren't part of a
 /// header.
+#[deny(clippy::indexing_slicing, clippy::string_slice)]
 pub async fn read_header<S: AsyncRead + Unpin>(
     mut stream: S,
 ) -> Result<(Option<Header>, Prefixed<S>)> {
     let mut buf = Vec::new();
     loop {
         let i = buf.len();
-        let v1 = i < V1_SIGNATURE.len() && buf[..] == V1_SIGNATURE[..i];
-        let v2 = i < V2_SIGNATURE.len() && buf[..] == V2_SIGNATURE[..i];
+        let v1 = i < V1_SIGNATURE.len() && V1_SIGNATURE.starts_with(&buf);
+        let v2 = i < V2_SIGNATURE.len() && V2_SIGNATURE.starts_with(&buf);
         if !v1 && !v2 {
             break;
         }
@@ -111,6 +116,7 @@ pub async fn read_header<S: AsyncRead + Unpin>(
     Ok((None, Prefixed::new(buf, stream)))
 }
 
+#[deny(clippy::indexing_slicing, clippy::string_slice)]
 async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     let mut line = V1_SIGNATURE.to_vec();
     loop {
@@ -126,21 +132,31 @@ async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
             break;
         }
     }
-    let line = std::str::from_utf8(&line[..line.len() - 2])?;
+    let line = std::str::from_utf8(
+        line.strip_suffix(b"\r\n")
+            .ok_or_else(|| anyhow!("proxyproto: unterminated v1 header"))?,
+    )?;
     let parts: Vec<&str> = line.split(' ').collect();
-    match parts.get(1) {
-        Some(&"UNKNOWN") => return Ok(Header::default()),
-        Some(&"TCP4") | Some(&"TCP6") if parts.len() == 6 => {}
-        _ => bail!("proxyproto: invalid v1 header"),
+    let [_, family, src, dst, src_port, dst_port] = parts.as_slice() else {
+        if parts.get(1) == Some(&"UNKNOWN") {
+            return Ok(Header::default());
+        }
+        bail!("proxyproto: invalid v1 header");
+    };
+    if *family == "UNKNOWN" {
+        return Ok(Header::default());
     }
-    let src_ip: IpAddr = parts[2].parse()?;
-    let dst_ip: IpAddr = parts[3].parse()?;
-    let ipv4 = parts[1] == "TCP4";
+    if !matches!(*family, "TCP4" | "TCP6") {
+        bail!("proxyproto: invalid v1 header");
+    }
+    let src_ip: IpAddr = src.parse()?;
+    let dst_ip: IpAddr = dst.parse()?;
+    let ipv4 = *family == "TCP4";
     if src_ip.is_ipv4() != ipv4 || dst_ip.is_ipv4() != ipv4 {
         bail!("proxyproto: v1 address family mismatch");
     }
-    let src_port: u16 = parts[4].parse()?;
-    let dst_port: u16 = parts[5].parse()?;
+    let src_port: u16 = src_port.parse()?;
+    let dst_port: u16 = dst_port.parse()?;
     Ok(Header {
         source: Some(SocketAddr::new(src_ip, src_port)),
         destination: Some(SocketAddr::new(dst_ip, dst_port)),
@@ -148,6 +164,7 @@ async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     })
 }
 
+#[deny(clippy::indexing_slicing, clippy::string_slice)]
 async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     let mut hdr = [0u8; 4];
     stream.read_exact(&mut hdr).await?;
@@ -177,10 +194,14 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     }
     let (addr_len, addrs) = match fam >> 4 {
         1 if data.len() >= 12 => {
-            let src = Ipv4Addr::new(data[0], data[1], data[2], data[3]);
-            let dst = Ipv4Addr::new(data[4], data[5], data[6], data[7]);
-            let sp = u16::from_be_bytes([data[8], data[9]]);
-            let dp = u16::from_be_bytes([data[10], data[11]]);
+            let [a, b, c, d, e, f, g, h, p, q, r, s]: [u8; 12] = data
+                .get(..12)
+                .ok_or_else(|| anyhow!("proxyproto: short IPv4 block"))?
+                .try_into()?;
+            let src = Ipv4Addr::new(a, b, c, d);
+            let dst = Ipv4Addr::new(e, f, g, h);
+            let sp = u16::from_be_bytes([p, q]);
+            let dp = u16::from_be_bytes([r, s]);
             (
                 12,
                 Some((
@@ -190,10 +211,20 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
             )
         }
         2 if data.len() >= 36 => {
-            let src: [u8; 16] = data[0..16].try_into().unwrap();
-            let dst: [u8; 16] = data[16..32].try_into().unwrap();
-            let sp = u16::from_be_bytes([data[32], data[33]]);
-            let dp = u16::from_be_bytes([data[34], data[35]]);
+            let src: [u8; 16] = data
+                .get(..16)
+                .ok_or_else(|| anyhow!("proxyproto: short IPv6 block"))?
+                .try_into()?;
+            let dst: [u8; 16] = data
+                .get(16..32)
+                .ok_or_else(|| anyhow!("proxyproto: short IPv6 block"))?
+                .try_into()?;
+            let [p, q, r, s]: [u8; 4] = data
+                .get(32..36)
+                .ok_or_else(|| anyhow!("proxyproto: short IPv6 ports"))?
+                .try_into()?;
+            let sp = u16::from_be_bytes([p, q]);
+            let dp = u16::from_be_bytes([r, s]);
             (
                 36,
                 Some((
@@ -211,9 +242,16 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
         header.destination = Some(dst);
     }
 
-    for (typ, value) in split_tlvs(&data[addr_len..])? {
+    for (typ, value) in split_tlvs(
+        data.get(addr_len..)
+            .ok_or_else(|| anyhow!("proxyproto: short address block"))?,
+    )? {
         if typ == PP2_TYPE_SSL && value.len() >= 5 {
-            for (sub, v) in split_tlvs(&value[5..])? {
+            for (sub, v) in split_tlvs(
+                value
+                    .get(5..)
+                    .ok_or_else(|| anyhow!("proxyproto: short SSL block"))?,
+            )? {
                 if sub == PP2_SUBTYPE_SSL_CLIENT_CERT {
                     header.client_cert = Some(v.to_vec());
                 }
@@ -223,19 +261,19 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     Ok(header)
 }
 
+#[deny(clippy::indexing_slicing, clippy::string_slice)]
 fn split_tlvs(mut b: &[u8]) -> Result<Vec<(u8, &[u8])>> {
     let mut tlvs = Vec::new();
     while !b.is_empty() {
-        if b.len() < 3 {
+        let [typ, hi, lo, rest @ ..] = b else {
             bail!("proxyproto: malformed TLV");
-        }
-        let typ = b[0];
-        let len = u16::from_be_bytes([b[1], b[2]]) as usize;
-        if b.len() < 3 + len {
-            bail!("proxyproto: malformed TLV");
-        }
-        tlvs.push((typ, &b[3..3 + len]));
-        b = &b[3 + len..];
+        };
+        let len = usize::from(u16::from_be_bytes([*hi, *lo]));
+        let (value, tail) = rest
+            .split_at_checked(len)
+            .ok_or_else(|| anyhow!("proxyproto: malformed TLV"))?;
+        tlvs.push((*typ, value));
+        b = tail;
     }
     Ok(tlvs)
 }
@@ -276,7 +314,7 @@ mod tests {
     fn v2_input(command: u8, family: u8, body: &[u8]) -> Vec<u8> {
         let mut input = V2_SIGNATURE.to_vec();
         input.extend_from_slice(&[0x20 | command, family]);
-        input.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        input.extend_from_slice(&u16::try_from(body.len()).unwrap().to_be_bytes());
         input.extend_from_slice(body);
         input
     }
@@ -337,15 +375,15 @@ mod tests {
         let cert = b"fake-der";
         let mut ssl = vec![0x01, 0, 0, 0, 0];
         ssl.push(PP2_SUBTYPE_SSL_CLIENT_CERT);
-        ssl.extend_from_slice(&(cert.len() as u16).to_be_bytes());
+        ssl.extend_from_slice(&u16::try_from(cert.len()).unwrap().to_be_bytes());
         ssl.extend_from_slice(cert);
         let mut body = vec![10, 0, 0, 1, 10, 0, 0, 2, 0x04, 0xd2, 0x1a, 0x0b];
         body.push(PP2_TYPE_SSL);
-        body.extend_from_slice(&(ssl.len() as u16).to_be_bytes());
+        body.extend_from_slice(&u16::try_from(ssl.len()).unwrap().to_be_bytes());
         body.extend_from_slice(&ssl);
         let mut input = V2_SIGNATURE.to_vec();
         input.extend_from_slice(&[0x21, 0x11]);
-        input.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        input.extend_from_slice(&u16::try_from(body.len()).unwrap().to_be_bytes());
         input.extend_from_slice(&body);
         input.extend_from_slice(b"NICK a\r\n");
         let (h, rest) = parse(&input).await;

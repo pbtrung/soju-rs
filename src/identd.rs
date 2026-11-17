@@ -104,7 +104,7 @@ fn parse_ident_query(l: &str) -> Option<(u16, u16)> {
     if local <= 0 || remote <= 0 || local > 65535 || remote > 65535 {
         return None;
     }
-    Some((local as u16, remote as u16))
+    Some((u16::try_from(local).ok()?, u16::try_from(remote).ok()?))
 }
 
 #[cfg(test)]

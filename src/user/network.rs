@@ -270,7 +270,7 @@ impl User {
         if max < 0 {
             return Ok(());
         }
-        let n = self.networks.iter().filter(|n| n.record.enabled).count() as i64;
+        let n = i64::try_from(self.networks.iter().filter(|n| n.record.enabled).count())?;
         if n >= max {
             bail!("maximum number of enabled networks reached");
         }

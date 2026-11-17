@@ -10,13 +10,16 @@ use super::{
 use crate::database::{Database, MessageOptions, Network};
 use crate::irc::Message;
 
-pub(super) fn format_db_msg_id(net_id: i64, target: &str, msg_id: i64) -> String {
-    format_msg_id(net_id, target, MSG_ID_DB, |w| w.uint(msg_id as u64))
+pub(super) fn format_db_msg_id(net_id: i64, target: &str, msg_id: i64) -> Result<String> {
+    let msg_id = u64::try_from(msg_id)?;
+    Ok(format_msg_id(net_id, target, MSG_ID_DB, |w| w.uint(msg_id)))
 }
 
 pub(super) fn parse_db_msg_id(s: &str) -> Result<i64> {
     let (_, _, body) = parse_msg_id_with(s, MSG_ID_DB)?;
-    Ok(bare::Reader(&body).uint().map_err(body_err)? as i64)
+    Ok(i64::try_from(
+        bare::Reader(&body).uint().map_err(body_err)?,
+    )?)
 }
 
 /// A persistent store for IRC messages, using the soju database.
@@ -31,7 +34,7 @@ impl DbStore {
 
     pub(super) fn last_msg_id(&self, network: &Network, entity: &str) -> Result<String> {
         let id = self.db.get_message_last_id(network.id, entity)?;
-        Ok(format_db_msg_id(network.id, entity, id))
+        format_db_msg_id(network.id, entity, id)
     }
 
     pub(super) fn load_latest_id(
@@ -56,7 +59,10 @@ impl DbStore {
         let ids = self
             .db
             .store_messages(network.id, entity, std::slice::from_ref(msg))?;
-        Ok(format_db_msg_id(network.id, entity, ids[0]))
+        let id = ids
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("database returned no message ID"))?;
+        format_db_msg_id(network.id, entity, *id)
     }
 
     pub(super) fn list_targets(

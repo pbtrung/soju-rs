@@ -71,6 +71,8 @@ pub struct MessageOptions {
     pub after_id: i64,
     pub after_time: Option<Timestamp>,
     pub before_time: Option<Timestamp>,
+    /// Zero returns no rows. Values above i64::MAX (including usize::MAX on
+    /// 64-bit systems) explicitly request SQLite's unlimited LIMIT.
     pub limit: usize,
     pub events: bool,
     pub sender: String,

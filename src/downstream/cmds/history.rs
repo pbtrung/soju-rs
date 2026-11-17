@@ -124,8 +124,8 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
     // always lists TARGETS with 1000), and TARGETS replies list targets,
     // not messages
     let limit = match limit_str.parse::<i64>() {
-        Ok(l) if (0..=MAX_CHAT_HISTORY_LIMIT as i64).contains(&l) => {
-            let l = l as usize;
+        Ok(l) if (0..=i64::try_from(MAX_CHAT_HISTORY_LIMIT)?).contains(&l) => {
+            let l = usize::try_from(l)?;
             if subcommand == "TARGETS" {
                 l
             } else {
@@ -479,7 +479,7 @@ pub(super) fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()>
             }
             "text" => opts.text = value.to_owned(),
             "limit" => match value.parse::<i64>() {
-                Ok(l) if l > 0 => opts.limit = l as usize,
+                Ok(l) if l > 0 => opts.limit = usize::try_from(l)?,
                 _ => return Err(fail(&["SEARCH", "INVALID_PARAMS", name, "Invalid limit"])),
             },
             _ => {}

@@ -19,6 +19,10 @@ mod users;
 mod webpush;
 
 /// Current schema version, including local migrations.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "The compile-time migration list has 35 entries, far below i64::MAX."
+)]
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
 const SCHEMA: &str = include_str!("../sqlite_schema.sql");
@@ -131,7 +135,11 @@ impl Database {
                 .map_err(|e| anyhow!("failed to initialize schema: {e}"))?;
             tx.execute_batch(FTS_SCHEMA)?;
         } else {
-            for (i, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+            for (i, migration) in MIGRATIONS
+                .iter()
+                .enumerate()
+                .skip(usize::try_from(version)?)
+            {
                 tx.execute_batch(migration)
                     .map_err(|e| anyhow!("failed to execute migration #{i}: {e}"))?;
             }

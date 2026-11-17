@@ -14,13 +14,16 @@ pub struct Backoffer {
 }
 
 impl Backoffer {
-    pub fn new(min: Duration, max: Duration, jitter: Duration) -> Backoffer {
-        Backoffer {
+    pub fn new(min: Duration, max: Duration, jitter: Duration) -> anyhow::Result<Backoffer> {
+        if min.is_zero() || max < min {
+            anyhow::bail!("backoff requires a positive minimum and maximum at least the minimum");
+        }
+        Ok(Backoffer {
             min,
             max,
             jitter,
             n: 0,
-        }
+        })
     }
 
     pub fn reset(&mut self) {
@@ -41,8 +44,12 @@ impl Backoffer {
         }
 
         if !self.jitter.is_zero() {
-            let j = rand::rng().random_range(0..self.jitter.as_nanos() as u64);
-            d += Duration::from_nanos(j);
+            let j = rand::rng().random_range(0..self.jitter.as_nanos());
+            let secs = u64::try_from(j / 1_000_000_000)
+                .expect("a sample below a Duration fits its seconds range");
+            let nanos = u32::try_from(j % 1_000_000_000)
+                .expect("nanosecond remainder is below one billion");
+            d = d.saturating_add(Duration::new(secs, nanos));
         }
         d
     }
@@ -59,13 +66,16 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new(interval: Duration, burst: u32) -> RateLimiter {
-        RateLimiter {
-            interval,
-            burst: burst as f64,
-            tokens: burst as f64,
-            last: Instant::now(),
+    pub fn new(interval: Duration, burst: u32) -> anyhow::Result<RateLimiter> {
+        if interval.is_zero() || burst == 0 || Instant::now().checked_add(interval).is_none() {
+            anyhow::bail!("rate interval and burst must be positive");
         }
+        Ok(RateLimiter {
+            interval,
+            burst: f64::from(burst),
+            tokens: f64::from(burst),
+            last: Instant::now(),
+        })
     }
 
     /// Waits until an event is allowed.
@@ -92,7 +102,8 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(5),
             Duration::ZERO,
-        );
+        )
+        .unwrap();
         let got: Vec<u64> = (0..6).map(|_| b.next_delay().as_secs()).collect();
         assert_eq!(got, vec![0, 1, 2, 4, 5, 5]);
         b.reset();
@@ -101,7 +112,8 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(5),
             Duration::from_secs(1),
-        );
+        )
+        .unwrap();
         b.next_delay();
         let d = b.next_delay();
         assert!(d >= Duration::from_secs(1) && d < Duration::from_secs(2));
@@ -109,7 +121,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn limiter() {
-        let mut rl = RateLimiter::new(Duration::from_secs(2), 3);
+        let mut rl = RateLimiter::new(Duration::from_secs(2), 3).unwrap();
         let start = Instant::now();
         for _ in 0..3 {
             rl.wait().await;
@@ -119,5 +131,23 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_secs(2));
         rl.wait().await;
         assert!(start.elapsed() >= Duration::from_secs(4));
+    }
+    #[test]
+    fn invalid_rates_and_large_jitter_are_checked() {
+        assert!(RateLimiter::new(Duration::ZERO, 1).is_err());
+        assert!(RateLimiter::new(Duration::from_secs(1), 0).is_err());
+        assert!(RateLimiter::new(Duration::MAX, 1).is_err());
+        assert!(Backoffer::new(Duration::ZERO, Duration::from_secs(1), Duration::ZERO).is_err());
+        assert!(
+            Backoffer::new(
+                Duration::from_secs(2),
+                Duration::from_secs(1),
+                Duration::ZERO
+            )
+            .is_err()
+        );
+        let mut backoff = Backoffer::new(Duration::MAX, Duration::MAX, Duration::MAX).unwrap();
+        assert_eq!(backoff.next_delay(), Duration::ZERO);
+        assert_eq!(backoff.next_delay(), Duration::MAX);
     }
 }

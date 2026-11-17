@@ -163,7 +163,7 @@ impl Database {
                 detached_internal_msg_id: lossy_string(r, 4)?,
                 relay_detached: MessageFilter::from_i64(r.get(5)?),
                 reattach_on: MessageFilter::from_i64(r.get(6)?),
-                detach_after: Duration::from_secs(detach_after.max(0) as u64),
+                detach_after: Duration::from_secs(detach_after.max(0).unsigned_abs()),
                 detach_on: MessageFilter::from_i64(r.get(8)?),
             })
         })?;
@@ -171,7 +171,12 @@ impl Database {
     }
 
     pub fn store_channel(&self, network_id: i64, ch: &mut Channel) -> Result<()> {
-        let detach_after = ch.detach_after.as_secs_f64().ceil() as i64;
+        let seconds = ch
+            .detach_after
+            .as_secs()
+            .checked_add(u64::from(ch.detach_after.subsec_nanos() > 0))
+            .ok_or_else(|| anyhow::anyhow!("detach duration is too large"))?;
+        let detach_after = i64::try_from(seconds)?;
         let fields = named_params! {
             ":network": network_id,
             ":name": ch.name,

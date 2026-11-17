@@ -242,7 +242,8 @@ impl Database {
         let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> = vec![(":network", &network_id)];
         let after = time_to_sql(options.after_time);
         let before = time_to_sql(options.before_time);
-        let limit = options.limit as i64;
+        // Values beyond SQLite's signed LIMIT range retain the explicit unlimited policy.
+        let limit = i64::try_from(options.limit).unwrap_or(-1);
         if options.after_time.is_some() {
             binds.push((":after", &after));
         }
@@ -317,7 +318,8 @@ impl Database {
             }
         }
         query.push_str(&format!("WHERE m.target = {target} "));
-        let limit = options.limit as i64;
+        // Values beyond SQLite's signed LIMIT range retain the explicit unlimited policy.
+        let limit = i64::try_from(options.limit).unwrap_or(-1);
         let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> =
             vec![(":network", &network_id), (":target", &name)];
         if !options.text.is_empty() {

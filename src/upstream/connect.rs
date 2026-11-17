@@ -21,7 +21,8 @@ pub async fn run_network(p: RunnerParams) {
         crate::user::RETRY_CONNECT_MIN_DELAY,
         crate::user::RETRY_CONNECT_MAX_DELAY,
         crate::user::RETRY_CONNECT_JITTER,
-    );
+    )
+    .expect("constant positive backoff bounds are valid");
     loop {
         // A closed event channel means the user's event loop is gone (e.g.
         // it panicked): stop instead of reconnecting in a loop

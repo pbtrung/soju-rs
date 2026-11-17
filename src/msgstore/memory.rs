@@ -36,14 +36,21 @@ impl RingBuffer {
         }
     }
 
-    fn append(&mut self, msg: Message) -> u64 {
+    fn append(&mut self, msg: Message) -> Result<u64> {
+        if self.cap == 0 {
+            bail!("message buffer capacity must be positive");
+        }
+        let next = self
+            .cur
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("memory message sequence exhausted"))?;
         if self.buf.len() == self.cap {
             self.buf.pop_front();
         }
         self.buf.push_back(msg);
         let seq = self.cur;
-        self.cur += 1;
-        seq
+        self.cur = next;
+        Ok(seq)
     }
 
     /// The sequence number of the last message, 0 if there is none.
@@ -64,9 +71,7 @@ impl RingBuffer {
         } else if seq == self.cur {
             return Ok(Vec::new());
         }
-        let n = ((self.cur - seq - 1) as usize)
-            .min(self.buf.len())
-            .min(limit);
+        let n = usize::try_from((self.cur - seq - 1).min(self.buf.len() as u64))?.min(limit);
         Ok(self.buf.range(self.buf.len() - n..).cloned().collect())
     }
 }
@@ -103,19 +108,24 @@ impl MemoryStore {
         format_memory_msg_id(network.id, entity, seq)
     }
 
-    pub(super) fn append(&mut self, network: &Network, entity: &str, msg: &Message) -> String {
+    pub(super) fn append(
+        &mut self,
+        network: &Network,
+        entity: &str,
+        msg: &Message,
+    ) -> Result<String> {
         match msg.command.as_str() {
             // Only append these messages, because load_latest_id shouldn't
             // return other kinds of message.
             "PRIVMSG" | "NOTICE" => {}
-            _ => return String::new(),
+            _ => return Ok(String::new()),
         }
         let rb = self
             .buffers
             .entry((network.id, entity.to_owned()))
             .or_insert_with(|| RingBuffer::new(MESSAGE_RING_BUFFER_CAP));
-        let seq = rb.append(msg.clone());
-        format_memory_msg_id(network.id, entity, seq)
+        let seq = rb.append(msg.clone())?;
+        Ok(format_memory_msg_id(network.id, entity, seq))
     }
 
     pub(super) fn load_latest_id(
@@ -150,9 +160,10 @@ mod tests {
         };
         let mut s = MemoryStore::new();
         let id0 = s.last_msg_id(&net, "#a");
-        assert_eq!(s.append(&net, "#a", &msg!("JOIN", "#a")), "");
+        assert_eq!(s.append(&net, "#a", &msg!("JOIN", "#a")).unwrap(), "");
         for i in 0..10 {
-            s.append(&net, "#a", &msg!("PRIVMSG", "#a", i.to_string()));
+            s.append(&net, "#a", &msg!("PRIVMSG", "#a", i.to_string()))
+                .unwrap();
         }
         let opts = LoadMessageOptions {
             network: &net,
@@ -168,14 +179,14 @@ mod tests {
         let id = s.last_msg_id(&net, "#a");
         assert!(s.load_latest_id(&id, &opts).unwrap().is_empty());
         // Messages appended after taking the last ID are loaded
-        s.append(&net, "#a", &msg!("PRIVMSG", "#a", "10"));
+        s.append(&net, "#a", &msg!("PRIVMSG", "#a", "10")).unwrap();
         let l = s.load_latest_id(&id, &opts).unwrap();
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].params[1], "10");
 
         let mut rb = RingBuffer::new(4);
         for i in 0..10 {
-            rb.append(msg!("PRIVMSG", "#a", i.to_string()));
+            rb.append(msg!("PRIVMSG", "#a", i.to_string())).unwrap();
         }
         let l = rb.load_latest_seq(1, 100).unwrap();
         assert_eq!(
@@ -195,9 +206,24 @@ mod tests {
                 id,
                 ..Network::new("x")
             };
-            s.append(&net, "#a", &msg!("PRIVMSG", "#a", "hi"));
+            s.append(&net, "#a", &msg!("PRIVMSG", "#a", "hi")).unwrap();
         }
         s.delete_network(1);
         assert_eq!(s.buffers.keys().map(|k| k.0).collect::<Vec<_>>(), [2]);
+    }
+    #[test]
+    fn exhausted_sequence_and_zero_capacity_do_not_mutate_history() {
+        let mut ring = RingBuffer::new(1);
+        ring.append(msg!("PRIVMSG", "#a", "retained")).unwrap();
+        ring.cur = u64::MAX;
+        assert!(ring.append(msg!("PRIVMSG", "#a", "rejected")).is_err());
+        assert_eq!(ring.buf.front().unwrap().params.last().unwrap(), "retained");
+        assert_eq!(ring.cur, u64::MAX);
+        assert_eq!(ring.load_latest_seq(0, usize::MAX).unwrap().len(), 1);
+        assert!(
+            RingBuffer::new(0)
+                .append(msg!("PRIVMSG", "#a", "rejected"))
+                .is_err()
+        );
     }
 }

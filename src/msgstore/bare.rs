@@ -9,14 +9,16 @@ pub struct Writer(pub Vec<u8>);
 impl Writer {
     pub fn uint(&mut self, mut v: u64) {
         while v >= 0x80 {
-            self.0.push((v as u8) | 0x80);
+            let [low, ..] = v.to_le_bytes();
+            self.0.push(low | 0x80);
             v >>= 7;
         }
-        self.0.push(v as u8);
+        let [low, ..] = v.to_le_bytes();
+        self.0.push(low);
     }
 
     pub fn int(&mut self, v: i64) {
-        self.uint(((v << 1) ^ (v >> 63)) as u64);
+        self.uint(u64::from_ne_bytes(((v << 1) ^ (v >> 63)).to_ne_bytes()));
     }
 
     pub fn string(&mut self, s: &str) {
@@ -48,11 +50,11 @@ impl Reader<'_> {
 
     pub fn int(&mut self) -> Result<i64> {
         let u = self.uint()?;
-        Ok(((u >> 1) as i64) ^ -((u & 1) as i64))
+        Ok(i64::from_ne_bytes((u >> 1).to_ne_bytes()) ^ -i64::from(u & 1 != 0))
     }
 
     pub fn string(&mut self) -> Result<String> {
-        let n = self.uint()? as usize;
+        let n = usize::try_from(self.uint()?)?;
         if n > self.0.len() {
             bail!("unexpected EOF");
         }
@@ -85,5 +87,18 @@ mod tests {
         assert_eq!(r.uint().unwrap(), u64::MAX);
         assert_eq!(r.string().unwrap(), "héllo");
         assert!(r.uint().is_err());
+    }
+    #[test]
+    fn integer_boundaries_and_malformed_lengths() {
+        for value in [i64::MIN, -1, 0, 1, i64::MAX] {
+            let mut writer = Writer::default();
+            writer.int(value);
+            assert_eq!(Reader(&writer.0).int().unwrap(), value);
+        }
+        let mut length = Writer::default();
+        length.uint(u64::MAX);
+        assert!(Reader(&length.0).string().is_err());
+        assert!(Reader(&[0xff; 10]).uint().is_err());
+        assert!(Reader(&[0x80]).uint().is_err());
     }
 }
