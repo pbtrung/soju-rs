@@ -227,7 +227,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Unclear supported compiler and reproducibility expectations.
 - **Recommended fix:** Declare `rust-version = "1.100"` if adopting this audit's target as the support floor, or choose/test a justified lower MSRV. Record the tested stable version consistently; support distro Rust rather than require rustup unconditionally.
 - **Verification:** Build/check on declared MSRV and current stable for GNU/musl. No `cargo fix --edition` needed.
-- **Status:** Not Started.
+- **Status:** Completed. Declared rust-version 1.100 with Edition 2024 unchanged; README and AGENTS now document the floor and distro/rustup support. Installed stable 1.100 passes fmt, check, Clippy and 213 tests on both GNU and musl, plus reader smoke and doc tests. CI Cargo commands enforce the manifest floor.
 
 #### DOC-001 — Rustdoc has 13 warnings
 
@@ -501,13 +501,13 @@ This is the authoritative checklist for the **next implementation execution**. P
 
 ### Phase 2 — Rust Modernization
 
-- [ ] **STEP-004 (P1): Declare and test compiler support.**
+- [x] **STEP-004 (P1): Declare and test compiler support.**
   - Findings: RUST-001. Objective: make the already-modern edition/compiler baseline explicit.
   - Files: `Cargo.toml`, README, toolchain configuration only if it suits distro and CI support.
   - Instructions: use Rust 1.100 as the intended support floor unless a lower floor is explicitly chosen/tested; retain Edition 2024; document compiler/native toolchain setup consistently. Review stable release notes before API changes.
   - Dependencies: STEP-001. Risks: raising the support floor excludes old compilers; document that choice.
   - Verification: fmt/check/test on declared floor, GNU/musl.
-  - Acceptance/status: manifest/docs/CI agree; no nightly production feature; **Not Started**.
+  - Acceptance/status: manifest/docs/CI agree; no nightly production feature; **Completed**.
 
 ### Phase 3 — Dependency Upgrades
 
@@ -794,6 +794,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / planning | Created findings, 10 phases, 29 actionable steps with dependencies/risks/checks/acceptance criteria | STEP-001 completed; STEP-002–029 not started |
 | 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-003 | Downstream and upstream counts now use one RAII guard; regressions cover completion, operational error, cancellation and unwind. fmt, check, default Clippy, 213 tests, reader smoke and doc tests pass. Rustdoc builds with the 13 pre-existing warnings. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-004 | Declared rust-version 1.100 with Edition 2024 unchanged; README and AGENTS now document the floor and distro/rustup support. Installed stable 1.100 passes fmt, check, Clippy and 213 tests on both GNU and musl, plus reader smoke and doc tests. CI Cargo commands enforce the manifest floor. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

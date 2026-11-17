@@ -25,10 +25,14 @@ sojuctl -config /etc/soju/config user create -username alice -password secret -a
 
 ## Building
 
-Requires the latest stable Rust toolchain and a C compiler (SQLite, the TLS
+Requires Rust 1.100.0 or newer (Edition 2024) and a C compiler (SQLite, the TLS
 library and the mimalloc allocator are built from source):
 
     cargo build --release
+
+Both distro-packaged Rust and rustup toolchains are supported. CI uses Arch
+Linux's stable Rust package; Cargo enforces the minimum version declared in
+`Cargo.toml`. No nightly compiler or edition migration is required.
 
 The `soju` and `sojuctl` binaries are written to `target/release/`. Release
 archives for Linux x86_64 can be built with `scripts/build-release.sh`

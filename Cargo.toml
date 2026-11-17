@@ -2,6 +2,7 @@
 name = "soju"
 version = "0.99.25"
 edition = "2024"
+rust-version = "1.100"
 description = "A user-friendly IRC bouncer (Rust port of soju)"
 license = "AGPL-3.0-only"
 repository = "https://github.com/pbtrung/soju-rs"

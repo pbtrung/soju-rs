@@ -55,8 +55,7 @@ automatically require a full audit for every task.
 
 ## Build and verification
 
-Use the installed stable Rust toolchain. The 2026-11-17 audit verified Rust
-1.100.0; the manifest currently has no explicit MSRV. Distro Rust is supported;
+Use Rust 1.100.0 or newer, the minimum declared in `Cargo.toml`. Distro Rust is supported;
 do not assume rustup is installed. Native dependencies build bundled SQLite,
 AWS-LC and mimalloc and require a C compiler plus CMake, Make and Perl.
 
