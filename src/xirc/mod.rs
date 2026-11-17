@@ -12,31 +12,34 @@ pub use whox::*;
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
 use indexmap::{IndexMap, IndexSet};
+use jiff::Timestamp;
 
 pub const MAX_MESSAGE_LENGTH: usize = 512;
 pub const MAX_MESSAGE_PARAMS: usize = 15;
 pub const MAX_SASL_LENGTH: usize = 400;
 
 /// Formats a time with the IRCv3 server-time layout.
-pub fn format_server_time(t: DateTime<Utc>) -> String {
-    t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+pub fn format_server_time(t: Timestamp) -> String {
+    jiff::fmt::temporal::DateTimePrinter::new()
+        .precision(Some(3))
+        .timestamp_to_string(&t)
 }
 
 /// Parses a time with the IRCv3 server-time layout
 /// ("2006-01-02T15:04:05.000Z" in Go notation).
 ///
-/// The fractional seconds may have any number of digits or be omitted.
+/// The fractional seconds may have one through nine digits or be omitted.
 /// This is more lenient than upstream, whose layout requires exactly three
 /// digits.
-pub fn parse_server_time(s: &str) -> Option<DateTime<Utc>> {
+/// Leap seconds are constrained to second 59, following Jiff's Unix timescale.
+/// Dates outside Jiff's representable timestamp range are rejected.
+pub fn parse_server_time(s: &str) -> Option<Timestamp> {
     let s = s.strip_suffix('Z')?;
     let (base, frac) = match s.split_once('.') {
         Some((b, f)) => (b, Some(f)),
         None => (s, None),
     };
-    let naive = NaiveDateTime::parse_from_str(base, "%Y-%m-%dT%H:%M:%S").ok()?;
     if base.len() != 19 {
         return None;
     }
@@ -48,8 +51,11 @@ pub fn parse_server_time(s: &str) -> Option<DateTime<Utc>> {
         let padded = format!("{frac:0<9}");
         nanos = padded.parse().ok()?;
     }
-    let t = naive.and_utc() + chrono::Duration::nanoseconds(nanos as i64);
-    Some(t)
+    let mut parsed = jiff::fmt::strtime::parse("%Y-%m-%dT%H:%M:%S", base).ok()?;
+    parsed.set_offset(Some(jiff::tz::Offset::UTC));
+    let t = parsed.to_timestamp().ok()?;
+    t.checked_add(jiff::SignedDuration::from_nanos(nanos as i64))
+        .ok()
 }
 
 /// A set of capabilities, with the available ones and the enabled ones.
@@ -193,27 +199,89 @@ pub type Isupport = HashMap<String, Option<String>>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     #[test]
     fn server_time() {
-        let t = Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap()
-            + chrono::Duration::milliseconds(678);
+        let t = "2024-01-02T03:04:05Z".parse::<Timestamp>().unwrap()
+            + jiff::SignedDuration::from_millis(678);
         assert_eq!(format_server_time(t), "2024-01-02T03:04:05.678Z");
         assert_eq!(parse_server_time("2024-01-02T03:04:05.678Z"), Some(t));
         assert_eq!(
             parse_server_time("2024-01-02T03:04:05Z"),
-            Some(Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap())
+            Some("2024-01-02T03:04:05Z".parse::<Timestamp>().unwrap())
         );
         assert_eq!(
             parse_server_time("2024-01-02T03:04:05.6Z"),
             Some(
-                Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap()
-                    + chrono::Duration::milliseconds(600)
+                "2024-01-02T03:04:05Z".parse::<Timestamp>().unwrap()
+                    + jiff::SignedDuration::from_millis(600)
             )
         );
         assert_eq!(parse_server_time("2024-01-02T03:04:05.678"), None);
         assert_eq!(parse_server_time("garbage"), None);
+    }
+
+    #[test]
+    fn server_time_compatibility() {
+        for (input, output) in [
+            ("0000-01-01T00:00:00Z", "0000-01-01T00:00:00.000Z"),
+            ("9999-12-30T22:00:00.999999999Z", "9999-12-30T22:00:00.999Z"),
+            ("1969-12-31T23:59:59.999999999Z", "1969-12-31T23:59:59.999Z"),
+            ("2000-02-29T00:00:00Z", "2000-02-29T00:00:00.000Z"),
+            ("2024- 1-02T03:04:05Z", "2024-01-02T03:04:05.000Z"),
+            ("2024-01-02T 3:04:05Z", "2024-01-02T03:04:05.000Z"),
+            ("2016-12-31T23:59:60.123Z", "2016-12-31T23:59:59.123Z"),
+        ] {
+            assert_eq!(
+                format_server_time(parse_server_time(input).expect(input)),
+                output,
+                "{input}"
+            );
+        }
+        for fraction in [
+            "1",
+            "12",
+            "123",
+            "1234",
+            "12345",
+            "123456",
+            "1234567",
+            "12345678",
+            "123456789",
+        ] {
+            let input = format!("2024-01-02T03:04:05.{fraction}Z");
+            let t = parse_server_time(&input).unwrap();
+            let start = parse_server_time("2024-01-02T03:04:05Z").unwrap();
+            assert_eq!(
+                (t - start).as_nanos(),
+                format!("{fraction:0<9}").parse::<i128>().unwrap()
+            );
+            assert_eq!(
+                format_server_time(t),
+                format!(
+                    "2024-01-02T03:04:05.{:0<3}Z",
+                    &fraction[..fraction.len().min(3)]
+                )
+            );
+            assert!(t > parse_server_time("2024-01-02T03:04:05Z").unwrap());
+        }
+        for input in [
+            "1900-02-29T00:00:00Z",
+            "2024-13-01T00:00:00Z",
+            "2024-01-01T24:00:00Z",
+            "2024-01-01T00:00:61Z",
+            "2024-01-01T00:00:00.Z",
+            "2024-01-01T00:00:00.1234567890Z",
+            "2024-01-01T00:00:00.１２Z",
+            "2024-01-01T00:00:00+00:00",
+            "2024-01-01T00:00:00z",
+            "10000-01-01T00:00:00Z",
+            "9999-12-30T22:00:01Z",
+            "9999-12-31T23:59:59.999999999Z",
+            "garbage",
+        ] {
+            assert!(parse_server_time(input).is_none(), "{input}");
+        }
     }
 
     #[test]

@@ -128,7 +128,7 @@ pub(super) fn handle_message(
                     msg.tags
                         .get("time")
                         .and_then(xirc::parse_server_time)
-                        .unwrap_or_else(Utc::now),
+                        .unwrap_or_else(Timestamp::now),
                 );
             } else {
                 ch.topic.clear();
@@ -211,7 +211,7 @@ pub(super) fn handle_message(
             let sec: i64 = msg.params[3]
                 .parse()
                 .map_err(|e| anyhow!("failed to parse topic time: {e}"))?;
-            ch.topic_time = chrono::DateTime::from_timestamp(sec, 0);
+            ch.topic_time = Timestamp::from_second(sec).ok();
             if first && !u.networks[ni].is_detached(&channel) {
                 forward_message(u, net_id, msg);
             }

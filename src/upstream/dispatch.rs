@@ -182,7 +182,7 @@ fn handle_message_inner(
             .tags
             .get("time")
             .and_then(xirc::parse_server_time)
-            .unwrap_or_else(Utc::now);
+            .unwrap_or_else(Timestamp::now);
         msg.tags.set("time", xirc::format_server_time(t));
     }
 

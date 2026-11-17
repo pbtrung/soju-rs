@@ -185,17 +185,17 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Missed maintenance fixes; SQLite wrapper updates carry behavioral/native/FTS compatibility risk and need dedicated verification.
 - **Recommended fix:** Separate rand/compatible lock refresh from rusqlite 0.43 migration. Read release notes, keep bundled SQLite and review native versions/features. Upgrade parent crates for constrained transitives; do not force incompatible transitive versions with patches.
 - **Verification:** Current registry refresh, `cargo tree -e features`, `cargo audit`, `cargo deny`, GNU/musl tests/releases; schema 35 migration/reopen/FTS/ID-exhaustion tests. No schema bump solely for a wrapper upgrade.
-- **Status:** Completed. Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030.
+- **Status:** Completed. Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks passed; at STEP-007 completion full deny failed on DEPS-002. The later STEP-030 migration resolves that advisory.
 
 #### DEPS-002 — Replace unmaintained chrono with jiff
 
 - **Severity / classification:** Medium; confirmed maintenance advisory, not a demonstrated exploitable vulnerability.
-- **Location:** `Cargo.toml` chrono dependency; timestamp types in `src/database/mod.rs`, `src/msgstore/`, `src/user/`, `src/xirc/mod.rs`; local-time logging in `src/logger.rs` and `src/server/configuration.rs`. Direct chrono/time-type usage spans 31 Rust files including tests at discovery.
-- **Problem:** RustSec `RUSTSEC-2026-0543` reports all chrono versions unmaintained, with no patched upgrade. cargo-audit emits a warning; cargo-deny fails its advisory gate. Updating chrono to its latest version does not resolve this.
-- **Impact:** Ongoing dependency maintenance risk; the full dependency-policy check remains failing until the migration is complete. The live scan reports zero known vulnerabilities, which is a separate result.
+- **Location at discovery:** `Cargo.toml` chrono dependency; timestamp types in `src/database/mod.rs`, `src/msgstore/`, `src/user/`, `src/xirc/mod.rs`; local-time logging in `src/logger.rs` and `src/server/configuration.rs`. Direct chrono/time-type usage spans 31 Rust files including tests at discovery.
+- **Problem at discovery:** RustSec `RUSTSEC-2026-0543` reports all chrono versions unmaintained, with no patched upgrade. cargo-audit emits a warning; cargo-deny fails its advisory gate. Updating chrono to its latest version does not resolve this.
+- **Impact:** Dependency maintenance risk; the original full dependency-policy check failed despite finding zero known vulnerabilities. STEP-030 resolves the maintenance advisory without ignoring it.
 - **Recommended fix:** Replace chrono with **jiff**, as requested by the user. Inventory public timestamp types and conversions; preserve IRCv3 parsing of UTC timestamps with zero through nine fractional digits, canonical three-digit output, ordering, future clocks, duration bounds, local-time log output, and existing SQLite TEXT timestamps/cursors. Remove chrono only after GNU/musl and storage/protocol regression checks pass. Do not suppress the advisory to make the gate pass.
 - **Verification:** STEP-030; server-time boundary/roundtrip tests, timestamp ordering and expiry tests, local-time logging fixtures, file-backed migration/reopen/FTS/cursor tests, full dual-runtime GNU/musl tests, release/static-link checks, and fresh cargo audit/deny/machete runs.
-- **Status:** Not Started. Added as a planned follow-up at the user's request; it is not claimed implemented by the original STEP-002–007 work.
+- **Status:** Completed in STEP-030. Migrated to Jiff 1.0.0 while preserving schema 35, canonical millisecond TEXT, nanosecond input and pre-epoch Unix topic rounding. Intentional leap-second and date-range differences are documented in [timestamp compatibility](dependencies.md#timestamp-compatibility). Required GNU/musl verification passes; audit has no vulnerabilities or advisory warnings, and full deny/machete pass. See §15 for the complete verification record.
 - **Evidence:** [Upstream maintenance announcement](https://github.com/chronotope/chrono/issues/1768); live cargo-audit 0.23.0 and cargo-deny 0.21.0 output against RustSec database commit `233155b4025b854c68a4b199c0e32d7fd53291a2`.
 
 #### ARCH-001 — Cohesive files still contain oversized multi-responsibility handlers
@@ -322,8 +322,10 @@ The rusqlite 0.43 migration is deliberately isolated in STEP-006.
 The first live RustSec scan (cargo-audit 0.23.0, database commit
 `233155b4025b854c68a4b199c0e32d7fd53291a2`, 1,527 advisories) reports zero
 known vulnerabilities and the informational unmaintained-chrono advisory
-`RUSTSEC-2026-0543`. No advisory is suppressed. STEP-007 assesses the migration
+`RUSTSEC-2026-0543`. No advisory was suppressed. STEP-007 assessed the migration
 needed to replace chrono; a passing audit exit code does not mean no warnings.
+STEP-030 subsequently replaces it with Jiff 1.0.0; the refreshed scan has no
+vulnerabilities or advisory warnings and the full deny policy passes.
 
 All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied during the original audit; implementation updates are recorded above.
 
@@ -571,14 +573,14 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: `cargo tree --target all -e features`, cargo audit/deny/machete, all-target tests and cross-target builds.
   - Acceptance/status: each remaining older line has a parent/compatibility reason; no unsupported patch overrides or untested removals; **Completed**.
 
-- [ ] **STEP-030 (P1 follow-up): Replace chrono with jiff.**
+- [x] **STEP-030 (P1 follow-up): Replace chrono with jiff.**
   - Findings: DEPS-002. Objective: remove the unmaintained timestamp dependency and make the advisory gate pass without suppressions.
   - Files: `Cargo.toml`, `Cargo.lock`, `src/xirc/mod.rs`, timestamp-bearing database/message-store/user/upstream/downstream modules, `src/logger.rs`, `src/server/configuration.rs`, and affected unit/integration fixtures.
   - Instructions: first capture chrono's accepted timestamp/date-range/leap-second behavior and local-time formatting in compatibility fixtures; choose explicit jiff timestamp/duration/time-zone APIs and review the current stable jiff release. Migrate types and conversions in cohesive groups, preserving canonical persisted TEXT values, chronological comparisons, nanosecond parsing and millisecond output. Preserve message IDs and schema 35; no schema bump is justified solely by a Rust time-library change. Remove chrono and its otherwise-unused transitives only after equivalence tests pass.
-  - Dependencies: STEP-006–007. This newly requested follow-up is **planning only** in the current execution; the user requested adding it to the audit results, separately from implementing the original phases 1–3 checklist.
+  - Dependencies: STEP-006–007. Initially added as planning only; the user subsequently authorized implementing the migration and the established commit/push workflow.
   - Risks: changed public Rust timestamp types, date ranges/leap-second acceptance, local timezone and DST behavior, duration overflow, history/read-marker boundaries, expiry and persisted timestamp sorting.
   - Verification: server-time tests for absent and 1–9 fractional digits, invalid dates/bounds and timezone policy; future-clock/read-marker/history tests; configured local-time logging tests; all-target check/Clippy and full tests/doc tests on GNU/musl; migration/reopen/foreign-key/FTS/cursor tests; optimized release/static-link/CLI checks; fresh cargo audit/deny/machete and `cargo tree --invert chrono` confirming removal.
-  - Acceptance/status: chrono absent from the resolved graph, canonical database/wire timestamp fixtures unchanged except explicitly reviewed differences, required tests/releases pass, and no chrono advisory suppression added; **Not Started**.
+  - Acceptance/status: chrono absent from the resolved graph, canonical database/wire timestamp fixtures unchanged except explicitly reviewed differences, required tests/releases pass, and no chrono advisory suppression added; **Completed**.
 
 ### Phase 4 — Compiler and Clippy
 
@@ -817,16 +819,17 @@ they do not imply completion of later hardening phases.
 | STEP-005 compatible updates | PASS | 213 GNU/musl tests, releases, static linkage and CLI smoke |
 | STEP-006 rusqlite migration | PASS | 214 GNU/musl tests, file-backed schema-30→35 reopen/FTS/FK/cursor/ID regression, native releases and static-link/CLI checks |
 | STEP-007 reduced features | PASS | 214 GNU/musl tests, fmt/check/Clippy, reader smoke/doc tests, both releases and static-link/CLI checks |
+| STEP-030 Jiff migration | PASS | fmt/check/strict Clippy; 219 tests per GNU/musl target plus reader smoke/doc tests; legacy TEXT/schema/FTS/cursor/ID preservation; timezone/DST and temporal boundary fixtures; both optimized releases/static-link/CLI; rustdoc with 13 existing warnings |
 | Live registry dry run after upgrades | PASS | `cargo update --dry-run`: zero compatible updates |
-| Current advisory scan | PASS | cargo-audit 0.23.0: zero known vulnerabilities; unsuppressed RUSTSEC-2026-0543 for chrono |
-| Full dependency policy | FAIL | cargo-deny 0.21.0 rejects unmaintained chrono; no advisory ignored |
+| Current advisory scan | PASS | STEP-030: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
+| Full dependency policy | PASS | STEP-030: cargo-deny 0.21.0 accepts advisories, bans, licenses and sources; existing syn/untrusted duplicate warnings remain; no advisory ignored |
 | License/source/duplicate policy subset | PASS | `cargo deny --all-features --locked check bans licenses sources`; parent-owned duplicates remain warnings |
 | Unused direct dependency analysis | PASS | cargo-machete 0.10.1 with metadata finds no unused direct requirements |
 
 Tool installation and registry-fetch failures under the restricted sandbox
 were retried with approved access. Tools live under `/tmp/soju-audit-tools`;
 registry/analysis logs use `/tmp/soju-step-<step>-*.log` and advisory JSON files.
-The chrono-to-jiff follow-up is planned only; the full advisory gate is not green.
+The STEP-030 dependency graph removes chrono; the advisory gate now passes without exceptions.
 
 Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, `soju-audit-all-targets.log`, `soju-audit-musl.log`, `soju-audit-doc.log`, `soju-audit-strict-doc.log`, `soju-audit-strict-clippy.log`, `soju-audit-release.log`, `soju-audit-musl-release.log`, `soju-audit-update-dry-run.log`. Paths after the first share `/tmp/`. Temporary files are convenience evidence, not durable repository artifacts; key outcomes are recorded here.
 
@@ -843,15 +846,15 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 **Remaining high-priority work:** CI-001 test-before-release enforcement, MEM-001 aggregate history growth and ASYNC-001 unbounded task admission. REL-001 is fixed in STEP-002. No critical defect was confirmed.
 
-**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, default rustdoc warnings, missing strict lint policy and unchecked numeric library boundaries. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 tracks the still-unresolved chrono maintenance advisory and planned jiff replacement. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
+**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, default rustdoc warnings, missing strict lint policy and unchecked numeric library boundaries. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 is resolved by the verified STEP-030 Jiff migration. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
 
 **Potential risks needing targeted measurement/validation:** accepted-session saturation, single-runtime DB stalls under contention, receipt-cache cardinality, provider metadata trust configurations, failure/poison paths, native/advisory exposure. Do not label these all exploitable vulnerabilities.
 
 **Optional improvements:** cohesive function/module extraction, measured receipt deduplication, feature pruning and reproducibility refinements. None justify speculative architecture/allocator rewrites.
 
-**Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. cargo-deny fails on the unsuppressed chrono maintenance advisory (DEPS-002); replacing it with jiff is the user-requested planning-only STEP-030. cargo-outdated/Miri/fuzz tooling and native sanitizer coverage remain unavailable/not configured; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
+**Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. STEP-030 removes chrono and the full cargo-deny policy passes without advisory ignores; duplicate-major warnings remain visible. cargo-outdated/Miri/fuzz tooling and native sanitizer coverage remain unavailable/not configured; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
 
-**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3 and commit/push after each step. Later phases remain outside the current request. Mark findings Completed only after implementation and verification.
+**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3, the STEP-030 migration, and commit/push after each step. Other later phases remain outside the current request. Mark findings Completed only after implementation and verification.
 
 ## 15. Implementation Progress Log
 
@@ -868,11 +871,12 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-005 | Applied seven compatible stable upgrades from the refreshed registry, including rand 0.10.4. fmt/check/Clippy, 213 GNU and musl tests, reader smoke/doc tests, both release builds and musl static linkage/CLI smoke pass. cargo-audit finds no known vulnerabilities and reports the unsuppressed chrono maintenance warning; graph downloads required network escalation. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-006 | Migrated rusqlite 0.42 to 0.43 without changing libsqlite3-sys 0.40.0, SQLite 3.54.1 or schema 35. New file-backed migration/reopen/ID/cursor/foreign-key/FTS regression passes. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests, release/static-link/CLI checks pass. Audit finds no known vulnerabilities; deny preview fails on unsuppressed DEPS-002. Added the user-requested jiff migration as planning-only STEP-030. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-007 | Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-030 | Replaced chrono with Jiff 1.0.0 across timestamp APIs, persistence, elapsed intervals and local logs. Preserved millisecond TEXT/schema 35, nanosecond input, pre-epoch Unix topic rounding, history/future clocks and IDs/cursors/FTS. Documented the intentional leap-second normalization and narrower date range. Added compatibility, timezone/DST, storage and duration-overflow regressions. fmt/check/strict Clippy, 219 tests on each GNU/musl target, reader smoke/doc tests, both optimized releases/static-link/CLI checks pass. Rustdoc builds with 13 existing warnings. Fresh audit has no vulnerabilities or advisory warnings; full deny and machete pass without ignores. Registry dry run finds no compatible updates. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
-The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. Next, address the planned strict lint policy and resource/lifecycle hazards with focused regressions before broad refactoring. Complete the user-requested chrono-to-jiff follow-up in STEP-030 to resolve the remaining advisory gate failure. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
+The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. Next, address the planned strict lint policy and resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
 
 This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.

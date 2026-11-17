@@ -21,7 +21,8 @@ fn message_ids_not_reused() {
         .store_messages(n.id, "#a", std::slice::from_ref(&m))
         .unwrap()[0];
     assert_eq!(
-        db.delete_messages_before(Utc::now(), usize::MAX).unwrap(),
+        db.delete_messages_before(Timestamp::now(), usize::MAX)
+            .unwrap(),
         1
     );
     let id2 = db
@@ -101,7 +102,8 @@ fn delete_messages_vacuum() {
 
     assert!(db.free_page_ratio().unwrap() < 0.05);
     assert_eq!(
-        db.delete_messages_before(Utc::now(), usize::MAX).unwrap(),
+        db.delete_messages_before(Timestamp::now(), usize::MAX)
+            .unwrap(),
         2000
     );
     assert!(db.free_page_ratio().unwrap() > 0.5);
@@ -167,11 +169,11 @@ fn message_id_exhaustion_is_atomic() {
 fn expiry_rejects_zero_chunks_and_honors_preexisting_cancellation() {
     let db = db();
     assert!(
-        db.expire_messages(Utc::now(), 0, Duration::ZERO, &|| false)
+        db.expire_messages(Timestamp::now(), 0, Duration::ZERO, &|| false)
             .is_err()
     );
     assert_eq!(
-        db.expire_messages(Utc::now(), 1, Duration::ZERO, &|| true)
+        db.expire_messages(Timestamp::now(), 1, Duration::ZERO, &|| true)
             .unwrap(),
         0
     );

@@ -3,6 +3,59 @@
 use super::*;
 
 #[test]
+fn legacy_timestamp_text_remains_readable_and_writes_milliseconds() {
+    let db = db();
+    let mut user = User::new("timestamps");
+    db.store_user(&mut user).unwrap();
+    let mut network = Network::new("irc.example.org");
+    db.store_network(user.id, &mut network).unwrap();
+    let mut receipt = ReadReceipt {
+        target: "#time".into(),
+        timestamp: Some(Timestamp::UNIX_EPOCH),
+        ..Default::default()
+    };
+    db.store_read_receipt(network.id, &mut receipt).unwrap();
+    for (legacy, canonical) in [
+        ("0000-01-01T00:00:00Z", "0000-01-01T00:00:00.000Z"),
+        ("1969-12-31T23:59:59.999999999Z", "1969-12-31T23:59:59.999Z"),
+        ("2024-02-29T12:00:00.123456789Z", "2024-02-29T12:00:00.123Z"),
+    ] {
+        db.conn()
+            .execute(
+                "UPDATE ReadReceipt SET timestamp=? WHERE id=?",
+                (legacy, receipt.id),
+            )
+            .unwrap();
+        let mut loaded = db.get_read_receipt(network.id, "#time").unwrap().unwrap();
+        assert_eq!(loaded.timestamp, xirc::parse_server_time(legacy));
+        db.store_read_receipt(network.id, &mut loaded).unwrap();
+        let stored: String = db
+            .conn()
+            .query_row(
+                "SELECT timestamp FROM ReadReceipt WHERE id=?",
+                [receipt.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, canonical);
+        assert_eq!(
+            db.get_read_receipt(network.id, "#time")
+                .unwrap()
+                .unwrap()
+                .timestamp,
+            xirc::parse_server_time(canonical)
+        );
+    }
+    db.conn()
+        .execute(
+            "UPDATE ReadReceipt SET timestamp='invalid' WHERE id=?",
+            [receipt.id],
+        )
+        .unwrap();
+    assert!(db.get_read_receipt(network.id, "#time").is_err());
+}
+
+#[test]
 fn receipts_targets_webpush_certs() {
     let db = db();
     let mut u = User::new("alice");
@@ -26,7 +79,7 @@ fn receipts_targets_webpush_certs() {
     assert!(db.get_read_receipt(n.id, "#a").unwrap().is_none());
     let mut r = ReadReceipt {
         target: "#a".into(),
-        timestamp: Some(Utc::now()),
+        timestamp: Some(Timestamp::now()),
         ..Default::default()
     };
     db.store_read_receipt(n.id, &mut r).unwrap();
@@ -112,14 +165,14 @@ fn unchanged_records_and_receipts_do_not_write() {
     db.store_message_target(network.id, &mut target).unwrap();
     let mut receipt = ReadReceipt {
         target: "#cost".into(),
-        timestamp: Some(Utc::now()),
+        timestamp: Some(Timestamp::now()),
         ..Default::default()
     };
     db.store_read_receipt(network.id, &mut receipt).unwrap();
     let mut cert = DeviceCertificate {
         label: "cost".into(),
         fingerprint: vec![17; 64],
-        last_used: Some(Utc::now()),
+        last_used: Some(Timestamp::now()),
         ..Default::default()
     };
     db.store_device_certificate(user.id, &mut cert).unwrap();

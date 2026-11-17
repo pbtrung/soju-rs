@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::{
     ChatHistoryTarget, LoadMessageOptions, MSG_ID_DB, SearchMessageOptions, bare, body_err,
@@ -62,8 +62,8 @@ impl DbStore {
     pub(super) fn list_targets(
         &self,
         network: &Network,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Timestamp,
+        end: Timestamp,
         limit: usize,
         events: bool,
     ) -> Result<Vec<ChatHistoryTarget>> {
@@ -100,8 +100,8 @@ impl DbStore {
 
     pub(super) fn load_before_time(
         &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        start: Option<Timestamp>,
+        end: Option<Timestamp>,
         options: &LoadMessageOptions,
     ) -> Result<Vec<Message>> {
         self.db.list_messages(
@@ -120,8 +120,8 @@ impl DbStore {
 
     pub(super) fn load_after_time(
         &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        start: Option<Timestamp>,
+        end: Option<Timestamp>,
         options: &LoadMessageOptions,
     ) -> Result<Vec<Message>> {
         self.db.list_messages(

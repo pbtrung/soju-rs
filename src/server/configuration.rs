@@ -12,7 +12,7 @@ pub async fn load_server_config(raw: &config::Server) -> Result<ServerConfig> {
     if !raw.basic.hostname.contains('.') {
         eprintln!(
             "{} warning: hostname {:?} is not a fully qualified domain name",
-            chrono::Local::now().format("%Y/%m/%d %H:%M:%S"),
+            jiff::ZonedDateTime::now().strftime(crate::logger::TIME_FORMAT),
             raw.basic.hostname
         );
     }

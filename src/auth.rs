@@ -412,7 +412,7 @@ mod tests {
         // A live user's record still holds the old hash
         u.realname = "Alice".to_owned();
         db.store_user_keep_password(&u).unwrap();
-        db.set_user_downstream_interacted_at(u.id, chrono::Utc::now())
+        db.set_user_downstream_interacted_at(u.id, jiff::Timestamp::now())
             .unwrap();
         let stored = db.get_user("alice").unwrap().unwrap();
         assert_eq!(stored.password, upgraded);

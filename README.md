@@ -122,6 +122,9 @@ Behaviour changes:
   doesn't validate UTF-8) is decoded lossily
 - Server times (e.g. CHATHISTORY bounds) may have from one to nine
   fractional second digits, or none; upstream requires exactly three
+- Timestamps use Jiff's Unix timescale: leap seconds are constrained to second
+  59 and dates outside Jiff's timestamp range are rejected. See the
+  [time-library migration notes](doc/dependencies.md#timestamp-compatibility).
 - HTTP listeners only speak HTTP/1.1 (no HTTP/2)
 - Behind a trusted proxy, the client address is the last element of
   `X-Forwarded-For` (the one the proxy added), and must be an IP address.

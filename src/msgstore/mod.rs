@@ -10,7 +10,7 @@ pub use memory::MemoryStore;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::database::Network;
 use crate::irc::Message;
@@ -25,7 +25,7 @@ pub struct LoadMessageOptions<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatHistoryTarget {
     pub name: String,
-    pub latest_message: DateTime<Utc>,
+    pub latest_message: Timestamp,
     /// A text message is after the read marker
     pub unread: bool,
     /// A message mentioning the user is after the read marker
@@ -34,8 +34,8 @@ pub struct ChatHistoryTarget {
 
 #[derive(Clone, Debug, Default)]
 pub struct SearchMessageOptions {
-    pub start: Option<DateTime<Utc>>,
-    pub end: Option<DateTime<Utc>>,
+    pub start: Option<Timestamp>,
+    pub end: Option<Timestamp>,
     pub limit: usize,
     pub from: String,
     pub r#in: String,
@@ -120,8 +120,8 @@ impl Store {
     pub fn list_targets(
         &mut self,
         network: &Network,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Timestamp,
+        end: Timestamp,
         limit: usize,
         events: bool,
     ) -> Result<Vec<ChatHistoryTarget>> {
@@ -136,8 +136,8 @@ impl Store {
     /// bounds mean no bound.
     pub fn load_before_time(
         &mut self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        start: Option<Timestamp>,
+        end: Option<Timestamp>,
         options: &LoadMessageOptions,
     ) -> Result<Vec<Message>> {
         match self {
@@ -151,8 +151,8 @@ impl Store {
     /// bounds mean no bound.
     pub fn load_after_time(
         &mut self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
+        start: Option<Timestamp>,
+        end: Option<Timestamp>,
         options: &LoadMessageOptions,
     ) -> Result<Vec<Message>> {
         match self {

@@ -6,7 +6,7 @@ use crate::database as db;
 use crate::user::{Event, UserHandle};
 use crate::{logf, xirc};
 use anyhow::{Result, anyhow, bail};
-use chrono::Utc;
+use jiff::Timestamp;
 use std::{
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
@@ -42,7 +42,7 @@ impl Server {
         if delay.is_zero() {
             return Ok(());
         }
-        let limit = Utc::now() - chrono::Duration::from_std(delay)?;
+        let limit = Timestamp::now().checked_sub(delay)?;
         let usernames = db::run(&self.db, move |db| db.list_inactive_usernames(limit))
             .await
             .map_err(|e| anyhow!("failed to list inactive users: {e}"))?;
@@ -103,7 +103,7 @@ impl Server {
         if expiry.is_zero() {
             return Ok(());
         }
-        let before = Utc::now() - chrono::Duration::from_std(expiry)?;
+        let before = Timestamp::now().checked_sub(expiry)?;
         let before_str = xirc::format_server_time(before);
         logf!(
             self.logger,

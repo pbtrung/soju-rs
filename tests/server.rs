@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
+use jiff::Timestamp;
 use soju::config::{MsgStore, MsgStoreDriver};
 use soju::conn::{Conn, ConnInfo, ConnReader};
 use soju::database::{self, Database};

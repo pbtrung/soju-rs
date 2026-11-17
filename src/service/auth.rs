@@ -208,7 +208,7 @@ pub(super) fn handle_device_cert_status(
         let n = DEVICE_CERTIFICATE_DISPLAY_BYTES.min(cert.fingerprint.len());
         let last_used = cert
             .last_used
-            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+            .map(|t| t.strftime("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "0001-01-01 00:00:00".to_owned());
         ctx.print(format!(
             "{} [{}] [{}] [{}]",

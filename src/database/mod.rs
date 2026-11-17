@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 /// Runs database operations from async code, on tokio's blocking thread
 /// pool: SQLite calls block, and would otherwise stall a runtime worker and
@@ -42,14 +42,14 @@ impl std::error::Error for DuplicateDeviceCertificate {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageTargetLast {
     pub name: String,
-    pub latest_message: Option<DateTime<Utc>>,
+    pub latest_message: Option<Timestamp>,
     /// The latest text message: latest_message may be an event
-    pub latest_text: Option<DateTime<Utc>>,
+    pub latest_text: Option<Timestamp>,
     /// The latest message mentioning the user, see
     /// store_message_target_highlight
-    pub highlight: Option<DateTime<Utc>>,
+    pub highlight: Option<Timestamp>,
     /// The read marker
-    pub read: Option<DateTime<Utc>>,
+    pub read: Option<Timestamp>,
 }
 
 impl MessageTargetLast {
@@ -69,8 +69,8 @@ impl MessageTargetLast {
 #[derive(Clone, Debug, Default)]
 pub struct MessageOptions {
     pub after_id: i64,
-    pub after_time: Option<DateTime<Utc>>,
-    pub before_time: Option<DateTime<Utc>>,
+    pub after_time: Option<Timestamp>,
+    pub before_time: Option<Timestamp>,
     pub limit: usize,
     pub events: bool,
     pub sender: String,
@@ -98,7 +98,7 @@ pub struct User {
     pub realname: String,
     pub admin: bool,
     pub enabled: bool,
-    pub downstream_interacted_at: Option<DateTime<Utc>>,
+    pub downstream_interacted_at: Option<Timestamp>,
     pub max_networks: i64,
 }
 
@@ -393,13 +393,13 @@ pub struct DeviceCertificate {
     pub label: String,
     /// SHA-512 hash
     pub fingerprint: Vec<u8>,
-    pub last_used: Option<DateTime<Utc>>,
+    pub last_used: Option<Timestamp>,
     pub last_ip: String,
 }
 
 impl DeviceCertificate {
     pub fn mark_used(&mut self, addr: Option<SocketAddr>) {
-        self.last_used = Some(Utc::now());
+        self.last_used = Some(Timestamp::now());
         self.last_ip = match addr {
             Some(a) => a.ip().to_canonical().to_string(),
             None => String::new(),
@@ -421,7 +421,7 @@ pub struct ReadReceipt {
     pub id: i64,
     /// channel or nick
     pub target: String,
-    pub timestamp: Option<DateTime<Utc>>,
+    pub timestamp: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -443,9 +443,9 @@ pub struct WebPushSubscription {
     pub id: i64,
     pub endpoint: String,
     /// read-only
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<Timestamp>,
     /// read-only
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<Timestamp>,
     pub keys: WebPushKeys,
 }
 

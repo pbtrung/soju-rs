@@ -1,5 +1,4 @@
 [advisories]
-# Keep chrono's unmaintained advisory failing until STEP-030 replaces it.
 # No vulnerability, maintenance or yanked-package exceptions are configured.
 yanked = "deny"
 unmaintained = "all"

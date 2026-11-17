@@ -168,7 +168,7 @@ pub fn vapid_authorization(
     } else {
         format!("mailto:{subscriber}")
     };
-    let exp = chrono::Utc::now().timestamp() + 12 * 3600;
+    let exp = jiff::Timestamp::now().as_second() + 12 * 3600;
     let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256","typ":"JWT"}"#);
     let claims = serde_json::json!({
         "aud": format!("{}://{}", u.scheme, u.host),

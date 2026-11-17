@@ -116,7 +116,7 @@ pub(super) fn handle_message(
                 .tags
                 .get("time")
                 .and_then(xirc::parse_server_time)
-                .unwrap_or_else(Utc::now);
+                .unwrap_or_else(Timestamp::now);
             // highlight is only computed for saved channels
             // A private PRIVMSG, which clients show in its own conversation,
             // unlike NOTICEs (e.g. from services) and CTCP requests or replies
@@ -374,7 +374,7 @@ const MENTION_FLUSH_DELAY: Duration = Duration::from_secs(1);
 
 /// Records the latest mention of a conversation, stored by one background
 /// task per network along with the others of the period.
-fn record_mention(u: &mut User, ni: usize, target_cm: String, time: chrono::DateTime<Utc>) {
+fn record_mention(u: &mut User, ni: usize, target_cm: String, time: Timestamp) {
     let net = &u.networks[ni];
     let mut pending = net.pending_mentions.lock().unwrap();
     let first = pending.is_empty();

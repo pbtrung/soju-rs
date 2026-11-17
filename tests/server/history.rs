@@ -14,14 +14,14 @@ pub(super) async fn chat_history_params() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
     let nick = register_upstream_with(&mut uc, &[]).await;
-    let base = Utc.with_ymd_and_hms(2023, 5, 23, 6, 0, 0).unwrap();
+    let base = "2023-05-23T06:00:00Z".parse::<Timestamp>().unwrap();
     for i in 0..3 {
         uc.send(
             msg!("PRIVMSG", nick.clone(), format!("msg {i}"))
                 .with_prefix(Prefix::new("Foo"))
                 .with_tag(
                     "time",
-                    xirc::format_server_time(base + chrono::Duration::seconds(i)),
+                    xirc::format_server_time(base + jiff::SignedDuration::from_secs(i)),
                 ),
         );
     }
@@ -82,7 +82,7 @@ pub(super) async fn upstream_clock_skew() {
     let nick = register_upstream_with(&mut uc, &[]).await;
 
     // The upstream server's clock is an hour ahead of ours
-    let ahead = Utc::now() + chrono::Duration::hours(1);
+    let ahead = Timestamp::now() + jiff::SignedDuration::from_hours(1);
     let ahead_str = xirc::format_server_time(ahead);
     uc.send(
         msg!("PRIVMSG", nick, "from the future")
@@ -116,20 +116,20 @@ pub(super) async fn upstream_clock_skew() {
     dc.send(msg!("MARKREAD", "foo", format!("timestamp={ahead_str}")));
     let m = dc.expect("MARKREAD").await;
     assert_eq!(m.params[1], format!("timestamp={ahead_str}"));
-    let later = xirc::format_server_time(ahead + chrono::Duration::hours(1));
+    let later = xirc::format_server_time(ahead + jiff::SignedDuration::from_hours(1));
     dc.send(msg!("MARKREAD", "foo", format!("timestamp={later}")));
     let m = dc.expect("MARKREAD").await;
     assert_eq!(m.params[1], format!("timestamp={ahead_str}"));
 
     // Without messages in the future, markers stop at our clock
-    let before = Utc::now();
-    let far = xirc::format_server_time(before + chrono::Duration::days(1));
+    let before = Timestamp::now();
+    let far = xirc::format_server_time(before + jiff::SignedDuration::from_hours(24));
     dc.send(msg!("MARKREAD", "#empty", format!("timestamp={far}")));
     let m = dc.expect("MARKREAD").await;
     let t = xirc::parse_server_time(m.params[1].strip_prefix("timestamp=").unwrap()).unwrap();
     // Server times have millisecond precision
-    let before = before - chrono::Duration::milliseconds(1);
-    assert!(t >= before && t <= Utc::now(), "{m}");
+    let before = before - jiff::SignedDuration::from_millis(1);
+    assert!(t >= before && t <= Timestamp::now(), "{m}");
     env.srv.shutdown().await;
 }
 
@@ -198,8 +198,8 @@ async fn chat_history(msg_store: MsgStore) {
         "How are you doing?",
         "Can I take a sip from your glass of soju?",
     ];
-    let base = Utc.with_ymd_and_hms(2023, 5, 23, 6, 0, 0).unwrap();
-    let at = |secs: i64| base + chrono::Duration::milliseconds(secs);
+    let base = "2023-05-23T06:00:00Z".parse::<Timestamp>().unwrap();
+    let at = |secs: i64| base + jiff::SignedDuration::from_millis(secs);
     for (i, text) in texts.iter().enumerate() {
         uc.send(
             msg!("PRIVMSG", TEST_USERNAME, *text)

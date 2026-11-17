@@ -1,7 +1,7 @@
 //! Users and their device certificates.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::{OptionalExtension, TransactionBehavior, named_params, params};
 
 use super::{Database, lossy_string, null_string, time_from_sql, time_to_sql};
@@ -81,7 +81,7 @@ impl Database {
     }
 
     /// Lists the enabled users who haven't interacted since limit.
-    pub fn list_inactive_usernames(&self, limit: DateTime<Utc>) -> Result<Vec<String>> {
+    pub fn list_inactive_usernames(&self, limit: Timestamp) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT username FROM User
@@ -126,7 +126,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_user_downstream_interacted_at(&self, id: i64, t: DateTime<Utc>) -> Result<()> {
+    pub fn set_user_downstream_interacted_at(&self, id: i64, t: Timestamp) -> Result<()> {
         self.conn().execute(
             "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND \
                 downstream_interacted_at IS NOT ?1",
@@ -162,7 +162,7 @@ impl Database {
                 fields,
             )?;
         } else {
-            let now = xirc::format_server_time(Utc::now());
+            let now = xirc::format_server_time(Timestamp::now());
             conn.execute(
                 "INSERT INTO
                 User(username, password, admin, nick, realname, created_at,

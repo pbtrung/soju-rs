@@ -1,7 +1,7 @@
 //! Web Push configuration and subscriptions.
 
 use anyhow::{Result, bail};
-use chrono::Utc;
+use jiff::Timestamp;
 use rusqlite::{named_params, params};
 
 use super::{Database, null_id, time_from_sql};
@@ -34,7 +34,7 @@ impl Database {
             named_params! {
                 ":vapid_key_public": config.vapid_public,
                 ":vapid_key_private": config.vapid_private,
-                ":now": xirc::format_server_time(Utc::now()),
+                ":now": xirc::format_server_time(Timestamp::now()),
             },
         )?;
         config.id = conn.last_insert_rowid();
@@ -101,7 +101,7 @@ impl Database {
         sub: &mut WebPushSubscription,
     ) -> Result<()> {
         let conn = self.conn();
-        let now = xirc::format_server_time(Utc::now());
+        let now = xirc::format_server_time(Timestamp::now());
         if sub.id != 0 {
             conn.execute(
                 "UPDATE WebPushSubscription

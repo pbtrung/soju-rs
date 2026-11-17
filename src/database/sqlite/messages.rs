@@ -1,7 +1,7 @@
 //! Message targets, logged messages and their full-text search.
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::{OptionalExtension, TransactionBehavior, named_params};
 
 use super::{Database, lossy_string, time_from_sql, time_to_sql};
@@ -120,7 +120,7 @@ impl Database {
         &self,
         network_id: i64,
         target: &str,
-        time: DateTime<Utc>,
+        time: Timestamp,
     ) -> Result<()> {
         self.conn().execute(
             "INSERT INTO TargetHighlight(network, target, time)
@@ -382,7 +382,7 @@ impl Database {
     /// The database is locked meanwhile: deleting in chunks lets other
     /// queries run in between. Expired messages are the oldest of each
     /// target: each chunk finds them at the start of its targets' ranges.
-    pub fn delete_messages_before(&self, before: DateTime<Utc>, limit: usize) -> Result<usize> {
+    pub fn delete_messages_before(&self, before: Timestamp, limit: usize) -> Result<usize> {
         if limit == 0 {
             return Ok(0);
         }
@@ -408,7 +408,7 @@ fn message_time_text(msg: &Message) -> Result<(String, Option<String>)> {
     let t = match msg.tags.get("time") {
         Some(tag) => xirc::parse_server_time(tag)
             .ok_or_else(|| anyhow!("failed to parse message time tag: {tag:?}"))?,
-        None => Utc::now(),
+        None => Timestamp::now(),
     };
     let text = match msg.command.as_str() {
         "PRIVMSG" | "NOTICE" if msg.params.len() > 1 => Some(strip_ansi(&msg.params[1])),

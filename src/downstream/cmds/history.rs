@@ -92,7 +92,7 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
     let target = u.networks[ni].casemap(&target);
 
     // TODO: support msgid criteria
-    let mut bounds: [Option<chrono::DateTime<Utc>>; 2] = [None, None];
+    let mut bounds: [Option<Timestamp>; 2] = [None, None];
     bounds[0] = ircutil::parse_chathistory_bound(&bounds_str[0]);
     if subcommand == "LATEST" && bounds_str[0] == "*" {
         bounds[0] = None;
@@ -181,7 +181,7 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                 }
                 // There are no messages before, subtract an arbitrary amount
                 // of time to make the bound inclusive
-                None => bounds[0].unwrap() - chrono::Duration::seconds(1),
+                None => bounds[0].unwrap() - jiff::SignedDuration::from_secs(1),
             };
             let after = store.load_after_time(
                 Some(after_bound),
@@ -341,7 +341,7 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                 "Invalid criteria",
             ]));
         };
-        let now = Utc::now();
+        let now = Timestamp::now();
         if r.timestamp.is_none_or(|t| t < timestamp) && timestamp > now {
             // Only allow read markers after now if the upstream server's
             // clock is ahead of ours, i.e. if we have a message more recent

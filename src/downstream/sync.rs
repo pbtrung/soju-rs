@@ -170,7 +170,7 @@ pub fn send_topic(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
             ch.topic.clone()
         ));
         if let Some(who) = &ch.topic_who {
-            let t = ch.topic_time.map(|t| t.timestamp()).unwrap_or(-62135596800);
+            let t = topic_time_seconds(ch.topic_time);
             dc.send_message(msg!(
                 RPL_TOPICWHOTIME,
                 nick,
@@ -182,6 +182,15 @@ pub fn send_topic(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
     } else {
         dc.send_message(msg!(RPL_NOTOPIC, nick, ch.name.clone(), "No topic is set"));
     }
+}
+
+fn topic_time_seconds(time: Option<jiff::Timestamp>) -> i64 {
+    time.map(|t| {
+        // IRC Unix seconds round down, while Jiff's as_second truncates
+        // towards zero. Preserve pre-epoch fractional topic timestamps.
+        t.as_second() - i64::from(t.subsec_nanosecond().is_negative())
+    })
+    .unwrap_or(-62135596800)
 }
 
 pub fn send_names(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
@@ -306,5 +315,25 @@ pub fn handle_metadata_sub(
             Some(Ok(()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_unix_seconds_preserve_pre_epoch_rounding() {
+        for (input, seconds) in [
+            ("1969-12-31T23:59:58.999999999Z", -2),
+            ("1969-12-31T23:59:59Z", -1),
+            ("1969-12-31T23:59:59.999999999Z", -1),
+            ("1970-01-01T00:00:00Z", 0),
+            ("1970-01-01T00:00:00.999999999Z", 0),
+            ("1970-01-01T00:00:01Z", 1),
+        ] {
+            assert_eq!(topic_time_seconds(Some(input.parse().unwrap())), seconds);
+        }
+        assert_eq!(topic_time_seconds(None), -62135596800);
     }
 }

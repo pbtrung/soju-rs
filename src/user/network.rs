@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tokio_util::sync::CancellationToken;
 
 use super::{DeliveredStore, User, user_ident};
@@ -31,7 +31,7 @@ pub struct Network {
     pub delivered: DeliveredStore,
     pub last_error: Option<String>,
     pub casemap: CaseMapping,
-    pub push_targets: Arc<Mutex<CaseMappingMap<DateTime<Utc>>>>,
+    pub push_targets: Arc<Mutex<CaseMappingMap<Timestamp>>>,
     /// Shared with the runner, so it can pick up record changes (e.g. a new
     /// CertFP certificate) on reconnect.
     pub record_snapshot: Arc<Mutex<db::Network>>,
@@ -40,7 +40,7 @@ pub struct Network {
     /// them without a database query.
     pub message_targets: HashMap<String, db::MessageTarget>,
     /// Mentions to store, by conversation, see upstream::record_mention
-    pub pending_mentions: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+    pub pending_mentions: Arc<Mutex<HashMap<String, Timestamp>>>,
 }
 
 impl Network {

@@ -167,7 +167,7 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                 // Rate-limit subscription checks
                 let stale = old
                     .updated_at
-                    .is_none_or(|t| Utc::now() - t > chrono::Duration::hours(24));
+                    .is_none_or(|t| Timestamp::now() - t > jiff::SignedDuration::from_hours(24));
                 update_sub = stale || old.keys != new_sub.keys;
             }
 

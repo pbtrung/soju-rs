@@ -12,7 +12,7 @@ fn users() {
     let mut got = db.get_user("alice").unwrap().unwrap();
     assert_eq!(got, u);
     got.nick = "Alice".into();
-    got.downstream_interacted_at = Some(Utc::now());
+    got.downstream_interacted_at = Some(Timestamp::now());
     db.store_user(&mut got).unwrap();
     let users = db.list_users().unwrap();
     assert_eq!(users.len(), 1);
@@ -24,7 +24,7 @@ fn users() {
     );
     assert!(db.get_user("bob").unwrap().is_none());
     let inactive = db
-        .list_inactive_usernames(Utc::now() + chrono::Duration::hours(1))
+        .list_inactive_usernames(Timestamp::now() + jiff::SignedDuration::from_hours(1))
         .unwrap();
     assert_eq!(inactive, vec!["alice"]);
     // Disabled users are already inactive
@@ -32,12 +32,12 @@ fn users() {
     disabled.enabled = false;
     db.store_user(&mut disabled).unwrap();
     assert!(
-        db.list_inactive_usernames(Utc::now() + chrono::Duration::hours(1))
+        db.list_inactive_usernames(Timestamp::now() + jiff::SignedDuration::from_hours(1))
             .unwrap()
             .is_empty()
     );
     assert!(
-        db.list_inactive_usernames(Utc::now() - chrono::Duration::hours(1))
+        db.list_inactive_usernames(Timestamp::now() - jiff::SignedDuration::from_hours(1))
             .unwrap()
             .is_empty()
     );

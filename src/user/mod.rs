@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::Utc;
+use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -378,7 +378,7 @@ impl User {
     }
 
     fn bump_downstream_interaction_time(&mut self) {
-        let now = Utc::now();
+        let now = Timestamp::now();
         if let Err(e) = self
             .srv
             .db

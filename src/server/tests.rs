@@ -1,7 +1,20 @@
 use super::*;
 use crate::config::MsgStoreDriver;
 use crate::{msg, xirc};
-use chrono::Utc;
+use jiff::Timestamp;
+
+#[tokio::test]
+async fn oversized_maintenance_durations_return_errors() {
+    let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
+    for duration in [Duration::MAX, Duration::from_secs(20_000 * 366 * 86400)] {
+        let mut cfg = ServerConfig::default();
+        cfg.basic.message_expiry = duration;
+        cfg.basic.disable_inactive_users_delay = duration;
+        srv.set_config(cfg);
+        assert!(srv.delete_expired_messages(false).is_err());
+        assert!(srv.disable_inactive_users().await.is_err());
+    }
+}
 
 #[test]
 fn vacuum_requires_25_percent_free_and_maintenance_request() {
@@ -14,8 +27,11 @@ fn vacuum_requires_25_percent_free_and_maintenance_request() {
     let mut net = db::Network::new("irc.example.org");
     srv.db.store_network(user.id, &mut net).unwrap();
     let text = "x".repeat(1000);
-    let now = Utc::now();
-    for (count, time) in [(300, now - chrono::Duration::days(3)), (3700, now)] {
+    let now = Timestamp::now();
+    for (count, time) in [
+        (300, now - jiff::SignedDuration::from_hours(72)),
+        (3700, now),
+    ] {
         let messages: Vec<_> = (0..count)
             .map(|_| {
                 msg!("PRIVMSG", "#a", text.clone()).with_tag("time", xirc::format_server_time(time))
@@ -32,7 +48,7 @@ fn vacuum_requires_25_percent_free_and_maintenance_request() {
     assert_eq!(srv.db.free_page_ratio().unwrap(), low);
 
     srv.db
-        .delete_messages_before(now + chrono::Duration::days(1), usize::MAX)
+        .delete_messages_before(now + jiff::SignedDuration::from_hours(24), usize::MAX)
         .unwrap();
     let high = srv.db.free_page_ratio().unwrap();
     assert!(high >= 0.25, "{high}");
@@ -86,7 +102,7 @@ async fn expiry_reload_and_duplicate_users() {
     let mut old = msg!("PRIVMSG", "#a", "old");
     old.tags.set(
         "time",
-        xirc::format_server_time(Utc::now() - chrono::Duration::days(3)),
+        xirc::format_server_time(Timestamp::now() - jiff::SignedDuration::from_hours(72)),
     );
     srv.db.store_messages(net.id, "#a", &[old]).unwrap();
 

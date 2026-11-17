@@ -93,8 +93,8 @@ failures separately and use the available approval mechanism to rerun them.
   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc` as in CI when needed.
 - Dependency review: run cargo audit, `cargo deny --all-features --locked check`
   and `cargo machete --with-metadata` when available. The full deny policy
-  currently fails on unmaintained chrono; the planned jiff migration is
-  STEP-030 in the audit. Do not suppress that advisory. See
+  passes after STEP-030 replaced chrono with Jiff. Do not suppress advisories
+  to bypass future failures. See
   [dependency maintenance](doc/dependencies.md) for constraints and results.
 
 CI currently has separate manually dispatched Tests and Build and Release

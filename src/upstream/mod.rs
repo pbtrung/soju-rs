@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use chrono::Utc;
 use indexmap::IndexMap;
+use jiff::Timestamp;
 use rand::seq::IndexedRandom;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
@@ -185,7 +185,7 @@ pub struct UpstreamChannel {
     pub name: String,
     pub topic: String,
     pub topic_who: Option<Prefix>,
-    pub topic_time: Option<chrono::DateTime<Utc>>,
+    pub topic_time: Option<Timestamp>,
     pub status: ChannelStatus,
     pub modes: Option<ChannelModes>,
     pub creation_time: String,

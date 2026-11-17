@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::{Connection, Row, TransactionBehavior};
 
 use super::*;
@@ -26,11 +26,11 @@ const FTS_SCHEMA: &str = include_str!("../message_fts.sql");
 
 /// Times are stored as text in the server-time layout, which sorts
 /// lexicographically.
-fn time_to_sql(t: Option<DateTime<Utc>>) -> Option<String> {
+fn time_to_sql(t: Option<Timestamp>) -> Option<String> {
     t.map(xirc::format_server_time)
 }
 
-fn time_from_sql(s: Option<String>) -> Result<Option<DateTime<Utc>>> {
+fn time_from_sql(s: Option<String>) -> Result<Option<Timestamp>> {
     match s {
         None => Ok(None),
         Some(s) => xirc::parse_server_time(&s)
@@ -174,7 +174,7 @@ impl Database {
     /// Deletes expired messages in chunks, yielding database access between chunks.
     pub fn expire_messages(
         &self,
-        before: DateTime<Utc>,
+        before: Timestamp,
         chunk: usize,
         pause: Duration,
         stopped: &dyn Fn() -> bool,

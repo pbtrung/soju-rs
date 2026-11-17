@@ -1,7 +1,7 @@
 # Dependency maintenance
 
 Reviewed on 2026-11-17 with Rust 1.100.0. The package uses 35 direct
-dependencies; the reduced lockfile contains 268 packages including soju.
+dependencies; the reduced lockfile contains 266 packages including soju.
 The original inventory remains in [the audit report](audit_results.md#5-dependency-upgrade-assessment).
 
 ## Completed updates
@@ -10,6 +10,7 @@ The original inventory remains in [the audit report](audit_results.md#5-dependen
 | --- | --- | --- |
 | rand | 0.10.3 | 0.10.4 |
 | rusqlite | 0.42.0 | 0.43.0 |
+| chrono → jiff | chrono 0.4.45 | jiff 1.0.0 |
 | bumpalo | 3.20.3 | 3.20.4 |
 | cc | 1.11.1 | 1.11.2 |
 | errno | 0.3.14 | 0.3.15 |
@@ -49,14 +50,12 @@ present in the inspected dependency graph, including build/dev dependencies.
 Duplicate major versions remain visible warnings; they are not suppressed.
 No advisory IDs are ignored.
 
-**Outstanding:** RustSec RUSTSEC-2026-0543 identifies chrono as unmaintained,
-with no patched chrono release. cargo-audit reports zero known vulnerabilities
-and this informational warning; the full cargo-deny check **fails** on the
-maintenance advisory. License, source and duplicate-policy checks pass.
-[DEPS-002 / STEP-030](audit_results.md#deps-002--replace-unmaintained-chrono-with-jiff)
-tracks the user-requested replacement with jiff. Timestamp/date-range,
-fractional-second, local-time and database compatibility need verification
-before removing chrono. This follow-up is planned, not implemented.
+**Resolved:** [DEPS-002 / STEP-030](audit_results.md#deps-002--replace-unmaintained-chrono-with-jiff)
+replaces chrono with [Jiff 1.0.0](https://docs.rs/jiff/1.0.0/jiff/), the current
+stable release reviewed on 2026-11-17. chrono and its timezone backend are absent
+from the lockfile. A fresh RustSec scan reports zero known vulnerabilities and
+no advisory warnings. The full cargo-deny check passes without advisory ignores;
+its existing duplicate-major warnings for syn and untrusted remain visible.
 
 Checks used cargo-audit 0.23.0, cargo-deny 0.21.0 and cargo-machete 0.10.1.
 Tools were installed into a temporary directory for this run; they are not
@@ -71,8 +70,42 @@ cargo machete --with-metadata
 ```
 
 A successful cargo-audit exit code does not mean that its warning list is
-empty. The full cargo-deny command above is expected to remain failing until
-STEP-030 resolves the chrono advisory; do not add an ignore just to pass it.
+empty; inspect the JSON warnings as well as vulnerabilities.
+
+## Timestamp compatibility
+
+Public Rust timestamp fields and methods now use `jiff::Timestamp` in place of
+`chrono::DateTime<Utc>`. Callers must update imports and constructors; this is a
+Rust API change. Fixed elapsed intervals use `jiff::SignedDuration`, retaining
+24-hour expiry intervals across DST. Configured maintenance durations use checked
+subtraction and return errors when their result cannot be represented.
+The separate `time` dependency remains necessary for rcgen certificate dates.
+
+Server-time input still requires uppercase `Z`, accepts omitted fractions or
+one through nine ASCII fractional digits, and retains nanoseconds in memory.
+Output still truncates to exactly three fractional digits. Existing padding
+leniency, pre-epoch values, leap-year rules, chronological comparisons, future
+clock/read-marker handling, floor rounding of pre-epoch Unix topic seconds,
+and canonical SQLite TEXT values are covered by regressions. Schema 35, IDs, FTS and delivery cursors are unchanged; opening a
+database does not rewrite timestamp strings.
+
+Two differences from the captured chrono fixtures are intentional:
+
+- Jiff has no leap-second representation. Input second `60` is constrained to
+  `59`, retaining its fraction, rather than preserving chrono's leap-second
+  value. Existing leap-second TEXT remains readable and becomes second `59`
+  if written back through the timestamp API.
+- Jiff's timestamp range is narrower. The maximum UTC instant is
+  `9999-12-30T22:00:00.999999999Z`; later four-digit dates that chrono accepted
+  are rejected. Four-digit year `0000` remains supported. Unix topic seconds
+  outside Jiff's range become an unknown topic time, as with out-of-range
+  chrono values previously. See [Jiff's timestamp documentation](https://docs.rs/jiff/1.0.0/jiff/struct.Timestamp.html).
+
+Local logs and configuration warnings retain `YYYY/MM/DD HH:MM:SS`, using
+Jiff's system timezone and `TZ` selection. Isolated subprocess fixtures verify
+New York spring/fall DST transitions and Tokyo output without changing the
+parent test process's environment. Default Jiff timezone features are retained
+for system zoneinfo and platform fallback support.
 
 ## Remaining parent-constrained versions
 
@@ -98,17 +131,12 @@ these rows when parents publish compatible updates.
 | r-efi | 6.0.0 | 7.2.0 | getrandom 0.4.3 (^6) |
 | redox_syscall | 0.5.18 | 0.9.5 | parking_lot_core 0.9.12 (^0.5) |
 | rusticata-macros | 4.1.0 | 5.0.0 | asn1-rs 0.7.2 (^4.0); der-parser 10.0.0 (^4.0); x509-parser 0.18.1 (^4.0) |
-| syn | 2.0.119 | 3.0.10 | asn1-rs-derive 0.6.0 (^2.0); asn1-rs-impl 0.2.0 (^2.0); jni-macros 0.22.4 (^2.0); jni-sys-macros 0.4.1 (^2); synstructure 0.13.2 (^2); windows-implement 0.60.2 (^2.0); windows-interface 0.59.3 (^2.0) |
+| syn | 2.0.119 | 3.0.10 | asn1-rs-derive 0.6.0 (^2.0); asn1-rs-impl 0.2.0 (^2.0); jni-macros 0.22.4 (^2.0); jni-sys-macros 0.4.1 (^2); synstructure 0.13.2 (^2) |
 | synstructure | 0.13.2 | 0.14.0 | asn1-rs-derive 0.6.0 (^0.13) |
 | tower-http | 0.6.11 | 0.7.1 | reqwest 0.13.5 (^0.6.8) |
 | untrusted | 0.7.1 | 0.9.0 | aws-lc-rs 1.19.0 (^0.7.1) |
 | wasi | 0.11.1+wasi-snapshot-preview1 | 0.14.7+wasi-0.2.4 | getrandom 0.2.17 (^0.11); mio 1.2.5 (^0.11.0) |
-| windows-core | 0.62.2 | 0.100.0 | iana-time-zone 0.1.65 (>=0.56, <=0.62) |
-| windows-implement | 0.60.2 | 0.100.0 | windows-core 0.62.2 (^0.60.2) |
-| windows-interface | 0.59.3 | 0.100.0 | windows-core 0.62.2 (^0.59.3) |
-| windows-link | 0.2.1 | 0.100.0 | chrono 0.4.45 (^0.2); gethostname 1.1.0 (^0.2.1); jni 0.22.4 (^0.2); parking_lot_core 0.9.12 (^0.2.0); windows-core 0.62.2 (^0.2.1); windows-result 0.4.1 (^0.2.1); windows-strings 0.5.1 (^0.2.1); windows-sys 0.61.2 (^0.2.1) |
-| windows-result | 0.4.1 | 0.100.0 | windows-core 0.62.2 (^0.4.1) |
-| windows-strings | 0.5.1 | 0.100.0 | windows-core 0.62.2 (^0.5.1) |
+| windows-link | 0.2.1 | 0.100.0 | gethostname 1.1.0 (^0.2.1); jiff 1.0.0 (^0.2.1); jni 0.22.4 (^0.2); parking_lot_core 0.9.12 (^0.2.0); windows-sys 0.61.2 (^0.2.1) |
 | windows-sys | 0.52.0 | 0.61.2 | ring 0.17.14 (^0.52) |
 | windows-targets | 0.52.6 | 0.53.5 | windows-sys 0.52.0 (^0.52.0) |
 | windows_aarch64_gnullvm | 0.52.6 | 0.53.1 | windows-targets 0.52.6 (^0.52.6) |

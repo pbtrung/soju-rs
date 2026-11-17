@@ -1,7 +1,7 @@
 //! IRC helpers used by the bouncer logic (port of upstream's irc.go).
 
-use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
+use jiff::Timestamp;
 
 use crate::irc::{Message, Tags, numerics::*};
 use crate::xirc::{self, CaseMappingMap, Membership, MembershipSet};
@@ -288,7 +288,7 @@ pub fn is_highlight(text: &str, nick: &str) -> bool {
 }
 
 /// Parses a CHATHISTORY parameter as a bound.
-pub fn parse_chathistory_bound(param: &str) -> Option<DateTime<Utc>> {
+pub fn parse_chathistory_bound(param: &str) -> Option<Timestamp> {
     let (kind, value) = param.split_once('=')?;
     match kind {
         "timestamp" => xirc::parse_server_time(value),
