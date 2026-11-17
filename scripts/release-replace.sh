@@ -11,6 +11,7 @@ if [[ $# != 0 ]]; then
 	exit 2
 fi
 cd "$(dirname "$0")/.."
+source scripts/release-common.sh
 for tool in git gh; do
 	if ! command -v "$tool" >/dev/null; then
 		printf 'Missing required tool: %s\n' "$tool" >&2
@@ -29,6 +30,7 @@ fi
 gh auth status >/dev/null
 origin_url="$(git remote get-url origin)"
 repository="$(gh repo view "$origin_url" --json nameWithOwner --jq .nameWithOwner)"
+preflight_release_workflow "$repository"
 git fetch --no-tags origin main
 git merge-base --is-ancestor FETCH_HEAD HEAD || {
 	printf 'main is behind or has diverged from origin/main; reconcile it first.\n' >&2
@@ -55,5 +57,5 @@ git update-ref "$ref" HEAD
 if [[ -n "$release_id" ]]; then
 	gh release delete "$tag" --yes --repo "$repository"
 fi
-gh workflow run ci.yml --ref main -F publish=true --repo "$repository"
+gh workflow run "$RELEASE_WORKFLOW" --ref main -F publish=true --repo "$repository"
 printf 'Replacement workflow started for %s at %s.\n' "$tag" "$(git rev-parse HEAD)"

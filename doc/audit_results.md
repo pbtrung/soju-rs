@@ -12,7 +12,7 @@ implementation findings still require the planned changes.
 
 Audit date: 2026-11-17. Reviewed commit: `c103b74be47920e307b99efe4ff739a1614ec7a1` (`soju` 0.99.25).
 
-The original execution was **audit and planning only**, as required by [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory), which superseded its earlier implementation instructions. No Rust source, manifests, lockfile, tests, release scripts, or workflows were changed. Findings below remain unfixed. Build artifacts and temporary audit probes were generated; this report was that run's only new deliverable. The pre-existing untracked `audit_prompt.md` is preserved at `doc/audit_prompt.md`.
+The original execution was **audit and planning only**, as required by [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory), which superseded its earlier implementation instructions. No Rust source, manifests, lockfile, tests, release scripts, or workflows were changed. Finding statuses below track subsequent verified implementation. Build artifacts and temporary audit probes were generated; this report was that run's only new deliverable. The pre-existing untracked `audit_prompt.md` is preserved at `doc/audit_prompt.md`.
 
 The baseline is healthy: formatting, all-target checking, default Clippy with warnings denied, and 210 tests pass on GNU; the same 210 tests pass on musl. Edition 2024 is already in use. Rust 1.100.0 is installed and its official release is verified. Default documentation generation succeeds with 13 warnings; documentation with warnings denied fails. The requested expanded lint policy fails with thousands of diagnostics and requires staged remediation.
 
@@ -72,7 +72,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** New release automation fails; replacement can remove the current release without starting its replacement. No remote mutation was performed in this audit.
 - **Recommended fix:** Establish the final tested release workflow, update both dispatches and documentation, and preflight workflow availability before any destructive operation. Add local stub-based script tests that record command ordering and simulate missing workflows/API failures. Preserve leases and clean-checkout guards.
 - **Verification:** `bash -n scripts/release-*.sh`; hermetic shell test with stub `git`/`gh`; ensure failed preflight performs no push, tag move or delete; verify dispatched filename exists and accepts `publish`.
-- **Status:** Not Started.
+- **Status:** Completed. Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9.
 
 #### CI-001 — Tests are manual and publishing does not require them
 
@@ -470,7 +470,7 @@ Missing automation: pull-request/push triggers, lint/doc gates, tested-commit re
 
 ## 11. Step-by-Step Implementation Plan
 
-This is the authoritative checklist for the **next implementation execution**. P0 means immediate operational protection; P1 means correctness/resource/required gates; P2 means maintainability/extended verification. Completed checkboxes below mark audit work only. Each step must update its related findings, record executed checks, and keep the checkout functional before proceeding. Publishing/committing/remote changes remain outside authorization.
+This is the authoritative checklist for the **next implementation execution**. P0 means immediate operational protection; P1 means correctness/resource/required gates; P2 means maintainability/extended verification. Completed checkboxes record verified audit or implementation work. Each step must update its related findings, record executed checks, and keep the checkout functional before proceeding. The user authorized implementation of phases 1–3 and a commit/push after each step; release publication and other remote mutations remain outside authorization.
 
 ### Phase 1 — Baseline and Critical Fixes
 
@@ -482,13 +482,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: §12 commands; `git diff --exit-code -- src Cargo.toml Cargo.lock .github scripts tests`.
   - Acceptance/status: **Completed (audit only)**; findings/plan delivered, implementation unchanged.
 
-- [ ] **STEP-002 (P0): Repair release dispatch and destructive-action preflight.**
+- [x] **STEP-002 (P0): Repair release dispatch and destructive-action preflight.**
   - Findings: REL-001, CI-001. Objective: make release helper behavior match actual workflow files before allowing replacement actions.
   - Files: `scripts/release-new.sh`, `scripts/release-replace.sh`, README; new hermetic release-script tests under `tests/` or `scripts/tests/`.
   - Instructions: dispatch the final existing release workflow; validate it/its inputs before mutation; keep lease/ref/version checks; stub git/gh and assert exact ordering. Initially use `release.yml`, then adapt to the tested reusable graph in STEP-026.
   - Dependencies: STEP-001. Risks: script automation compatibility; remote actions must not be used as tests.
   - Verification: `bash -n`; hermetic script test command documented in README; missing-workflow/API/dirty-checkout cases.
-  - Acceptance/status: no mutation on failed preflight; valid path dispatches a real workflow; **Not Started**.
+  - Acceptance/status: no mutation on failed preflight; valid path dispatches a real workflow; **Completed**.
 
 - [ ] **STEP-003 (P1): Make session metric accounting cancellation-safe.**
   - Findings: ASYNC-005. Objective: preserve observability under task cancellation/unwind.
@@ -792,10 +792,12 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / focused probes | Cancelled metric guard, dropped connection ownership, 10,000 history targets | Defects/retention reproduced; tests not added in audit-only phase |
 | 2026-11-17 / planning | Created findings, 10 phases, 29 actionable steps with dependencies/risks/checks/acceptance criteria | STEP-001 completed; STEP-002–029 not started |
 
+| 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9. | Completed; commit/push follows verification |
+
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
 Start with STEP-002's safe release automation repair and STEP-003's small verified metric fix; establish the toolchain/dependency baseline, then remove resource/lifecycle hazards with focused regressions before broad refactoring. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
 
-This audit delivers findings and a reviewable implementation checklist. **No issue is claimed fixed.**
+This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.

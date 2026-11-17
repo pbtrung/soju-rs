@@ -56,12 +56,23 @@ selected commit if needed. Bump the package version and update `Cargo.lock`
 before publishing a new release.
 
 Run the separate **Tests** workflow against the same ref before publishing.
-The release workflow currently does not require that test run. The local
-`release-new.sh` and `release-replace.sh` helpers still dispatch a removed
-`ci.yml`; the replacement helper can delete an existing release before dispatch
-fails. Use the workflow directly until the
-[release automation findings](doc/audit_results.md#rel-001--release-helpers-dispatch-a-nonexistent-workflow)
-are resolved.
+The release workflow currently does not require that test run.
+
+From a clean `main` checkout, `scripts/release-new.sh 0.99.26` bumps the
+version, commits and pushes it, then dispatches **Build and Release**.
+`scripts/release-replace.sh` replaces the current version's tag/release and
+starts a new build. Replacement deletes existing release assets; use it only
+when you intend to replace that release. Both require authenticated `gh` and
+Git; the new-version helper also requires Python 3.11+.
+
+Before modifying manifests, tags or releases, the helpers verify that
+`release.yml` is active and its definition on remote `main` matches the local
+workflow, including its publishing input. Push workflow changes first.
+This preflight catches missing/disabled/stale workflows, but later network or
+service failures can still prevent dispatch after mutations.
+
+Run their hermetic regression tests with `python3 tests/release_scripts.py`.
+The tests stub all Git/GitHub commands and never publish or replace a release.
 
 ## Differences from upstream soju
 

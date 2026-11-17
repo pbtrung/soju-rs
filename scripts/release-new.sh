@@ -15,6 +15,7 @@ if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; th
 	exit 2
 fi
 cd "$(dirname "$0")/.."
+source scripts/release-common.sh
 for tool in git gh python3; do
 	if ! command -v "$tool" >/dev/null; then
 		printf 'Missing required tool: %s\n' "$tool" >&2
@@ -28,6 +29,7 @@ fi
 gh auth status >/dev/null
 origin_url="$(git remote get-url origin)"
 repository="$(gh repo view "$origin_url" --json nameWithOwner --jq .nameWithOwner)"
+preflight_release_workflow "$repository"
 git fetch --no-tags origin main
 git merge-base --is-ancestor FETCH_HEAD HEAD || {
 	printf 'main is behind or has diverged from origin/main; reconcile it first.\n' >&2
@@ -89,5 +91,5 @@ PY
 git add -- Cargo.toml Cargo.lock
 git commit -m "Release $tag" -m "Bump the package version and lockfile to $version for the GitHub release."
 git push origin HEAD:refs/heads/main
-gh workflow run ci.yml --ref main -F publish=true --repo "$repository"
-printf 'Release workflow started for %s; it creates the tag after checks pass.\n' "$tag"
+gh workflow run "$RELEASE_WORKFLOW" --ref main -F publish=true --repo "$repository"
+printf 'Release workflow started for %s; it creates the tag after the build passes.\n' "$tag"
