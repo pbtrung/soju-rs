@@ -41,11 +41,13 @@ enum BoundListener {
 }
 
 impl BoundListener {
-    async fn accept(&self) -> std::io::Result<Accepted> {
+    async fn accept(&self, logger: &crate::logger::Logger) -> std::io::Result<Accepted> {
         match self {
             BoundListener::Tcp(l) => {
                 let (s, addr) = l.accept().await?;
-                let _ = set_keepalive(&s);
+                if let Err(e) = set_keepalive(&s) {
+                    logf!(logger, "failed to enable TCP keep-alive: {e}");
+                }
                 Ok(Accepted {
                     io: Box::new(s),
                     remote: Some(addr),
@@ -185,7 +187,7 @@ pub async fn spawn_listener(
         let mut delay = std::time::Duration::ZERO;
         loop {
             let accepted = tokio::select! {
-                a = bound.accept() => a,
+                a = bound.accept(&logger) => a,
                 _ = stop.cancelled() => return,
             };
             let a = match accepted {

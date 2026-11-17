@@ -52,7 +52,12 @@ pub fn abort_pending_commands(
                         "Command aborted"
                     ));
                 }
-                c => panic!("Unsupported pending command {c:?}"),
+                _ => dc.send_message(msg!(
+                    ERR_UNKNOWNCOMMAND,
+                    nick,
+                    cmd.msg.command.clone(),
+                    "Unsupported pending command"
+                )),
             }
         }
     }
@@ -78,7 +83,7 @@ const MAX_PENDING_COMMANDS: usize = 64;
 /// Queues a command whose replies need to be routed to a downstream
 /// connection. label is the downstream's label for the command.
 ///
-/// When too many commands of this type are already queued, the command is
+/// When the command is unsupported or too many of its type are queued, it is
 /// returned instead: the caller is expected to abort it.
 pub fn enqueue_command(
     uc: &mut UpstreamConn,
@@ -86,11 +91,17 @@ pub fn enqueue_command(
     label: String,
     msg: Message,
 ) -> Result<(), Box<PendingCommand>> {
-    match msg.command.as_str() {
+    let pending = PendingCommand {
+        downstream_id: dc_id,
+        downstream_label: label,
+        msg,
+        sent_at: None,
+    };
+    match pending.msg.command.as_str() {
         "LIST" | "WHO" | "WHOIS" | "AUTHENTICATE" | "REGISTER" | "VERIFY" => {}
-        c => panic!("Unsupported pending command {c:?}"),
+        _ => return Err(Box::new(pending)),
     }
-    let cmd = msg.command.clone();
+    let cmd = pending.msg.command.clone();
     let l = uc.pending_cmds.entry(cmd.clone()).or_default();
 
     // If we didn't get a reply after a while, just give up
@@ -114,12 +125,6 @@ pub fn enqueue_command(
         l.drain(..timed_out);
     }
 
-    let pending = PendingCommand {
-        downstream_id: dc_id,
-        downstream_label: label,
-        msg,
-        sent_at: None,
-    };
     if l.len() >= MAX_PENDING_COMMANDS {
         return Err(Box::new(pending));
     }

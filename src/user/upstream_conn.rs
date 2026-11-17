@@ -176,6 +176,10 @@ impl User {
             ConnOutcome { err: None }
         };
         if let Some(tx) = uc.outcome_tx.take() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The connection runner may have stopped; its completed outcome has no remaining receiver."
+            )]
             let _ = tx.send(outcome);
         }
     }

@@ -137,6 +137,10 @@ impl TestDatabaseDir {
 
 impl Drop for TestDatabaseDir {
     fn drop(&mut self) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "Best-effort fixture cleanup must not double-panic during unwinding."
+        )]
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }

@@ -63,8 +63,10 @@ pub fn route_message(u: &mut User, dc_id: u64, mut msg: Message) -> Option<(u64,
             "Network not attached",
         ]))
     };
-    // Only IRC errors: nothing to propagate
-    let _ = finish_message(dc, res);
+    if let Err(e) = finish_message(dc, res) {
+        logf!(dc.logger, "failed to finish multiplexed reply: {e}");
+        dc.conn.close();
+    }
     None
 }
 
@@ -79,6 +81,7 @@ pub fn attach_network(u: &mut User, parent_id: u64, net_id: i64) {
     let tx = u.tx.clone();
     let parent = &u.downstreams[i];
     let conn = parent.conn.view(NETWORK_TAG, &net_id.to_string(), move || {
+        #[expect(clippy::let_underscore_must_use, reason = "The user may already have stopped; a virtual disconnect has no remaining receiver.")]
         let _ = tx.send(crate::user::Event::DownstreamDisconnected { dc_id: id });
     });
     let mut dc = DownstreamConn::new(

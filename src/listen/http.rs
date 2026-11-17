@@ -86,6 +86,7 @@ pub(super) async fn serve_http(
     remote: Option<SocketAddr>,
     peer_cert: Option<Vec<u8>>,
 ) {
+    let logger = srv.logger.clone();
     let service = hyper::service::service_fn(move |req: Request<Incoming>| {
         let srv = srv.clone();
         let peer_cert = peer_cert.clone();
@@ -105,12 +106,15 @@ pub(super) async fn serve_http(
     });
     // Without a timer, hyper doesn't enforce its header read timeout: idle
     // connections would be kept forever
-    let _ = hyper::server::conn::http1::Builder::new()
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())
         .header_read_timeout(HTTP_HEADER_READ_TIMEOUT)
         .serve_connection(TokioIo::new(io), service)
         .with_upgrades()
-        .await;
+        .await
+    {
+        crate::debugf!(logger, "HTTP connection ended with an error: {e}");
+    }
 }
 
 async fn handle_http_request(

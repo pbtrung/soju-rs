@@ -89,13 +89,13 @@ impl Writer {
         Ok(())
     }
 
-    pub(super) async fn close(&mut self) {
+    pub(super) async fn close(&mut self) -> Result<()> {
         match self {
             Writer::Stream(w) => {
-                let _ = w.shutdown().await;
+                w.shutdown().await?;
             }
             Writer::Ws(w) => {
-                let _ = w
+                let sent = w
                     .send(WsMessage::Close(Some(
                         tokio_tungstenite::tungstenite::protocol::CloseFrame {
                             code: CloseCode::Normal,
@@ -103,9 +103,13 @@ impl Writer {
                         },
                     )))
                     .await;
-                let _ = w.close().await;
+                // Always attempt sink cleanup, including after a failed close frame.
+                let closed = w.close().await;
+                sent?;
+                closed?;
             }
         }
+        Ok(())
     }
 }
 

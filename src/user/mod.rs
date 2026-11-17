@@ -159,6 +159,10 @@ impl UserHandle {
 
     /// Stops the user and waits for its event loop to exit.
     pub async fn stop(&self) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The user may already have stopped; no receiver remains for this stop or service notification."
+        )]
         let _ = self.tx.send(Event::Stop);
         self.done.cancelled().await;
     }
@@ -413,10 +417,18 @@ pub fn spawn_deferred_service_command(
     tokio::spawn(async move {
         let print_tx = tx.clone();
         let print = Box::new(move |text| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The user may already have stopped; no receiver remains for this stop or service notification."
+            )]
             let _ = print_tx.send(Event::ServiceReply { dc_id, text });
         });
         if let Err(e) = deferred(print).await {
             let text = format!("error: {e}");
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The user may already have stopped; no receiver remains for this stop or service notification."
+            )]
             let _ = tx.send(Event::ServiceReply { dc_id, text });
         }
     });

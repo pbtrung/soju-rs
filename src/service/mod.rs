@@ -144,6 +144,10 @@ async fn run_on_user<T: Send + 'static>(
 ) -> Result<T> {
     let (done, rx) = tokio::sync::oneshot::channel();
     let ev = crate::user::Event::Run(Box::new(move |u| {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The caller may cancel while its user-loop operation finishes; no receiver remains for its result."
+        )]
         let _ = done.send(f(u));
     }));
     if tx.send(ev).is_err() {

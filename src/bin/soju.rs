@@ -252,8 +252,10 @@ impl Signals {
         Signals
     }
 
-    async fn wait(self, _srv: &Arc<Server>, _args: &Args, _certs: &Arc<tls::CertStore>) {
-        let _ = tokio::signal::ctrl_c().await;
+    async fn wait(self, srv: &Arc<Server>, _args: &Args, _certs: &Arc<tls::CertStore>) {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            logf!(srv.logger, "failed to wait for Ctrl-C: {e}");
+        }
     }
 }
 

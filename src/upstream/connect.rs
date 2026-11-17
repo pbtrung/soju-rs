@@ -60,12 +60,17 @@ pub async fn run_network(p: RunnerParams) {
                     record.addr,
                     err.text
                 );
-                let _ = p.tx.send(Event::UpstreamConnectionError {
-                    net_id,
-                    runner_id: p.runner_id,
-                    err: format!("connection error: {}", err.event),
-                });
                 metrics::inc(&p.srv.metrics.upstream_connect_errors_total);
+                if p.tx
+                    .send(Event::UpstreamConnectionError {
+                        net_id,
+                        runner_id: p.runner_id,
+                        err: format!("connection error: {}", err.event),
+                    })
+                    .is_err()
+                {
+                    return; // The user stopped; reconnect notifications have no receiver.
+                }
                 if !err.temporary {
                     return;
                 }
@@ -166,23 +171,33 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
         match res {
             Ok(Some((msg, permit))) => {
                 metrics::inc(&p.srv.metrics.upstream_in_messages_total);
-                let _ = p.tx.send(Event::UpstreamMessage {
-                    net_id: record.id,
-                    conn_id,
-                    msg,
-                    permit,
-                });
+                if p.tx
+                    .send(Event::UpstreamMessage {
+                        net_id: record.id,
+                        conn_id,
+                        msg,
+                        permit,
+                    })
+                    .is_err()
+                {
+                    break None;
+                }
             }
             Ok(None) => break None,
             Err(e) => break Some(e.to_string()),
         }
     };
     conn.close();
-    let _ = p.tx.send(Event::UpstreamClosed {
-        net_id: record.id,
-        conn_id,
-        read_error,
-    });
+    if p.tx
+        .send(Event::UpstreamClosed {
+            net_id: record.id,
+            conn_id,
+            read_error,
+        })
+        .is_err()
+    {
+        return Ok(()); // No user remains to process the closed event or return an outcome.
+    }
     let outcome = outcome_rx.await.unwrap_or(ConnOutcome { err: None });
 
     if p.stop.is_cancelled() {
@@ -246,7 +261,9 @@ async fn dial_tcp(srv: &Server, user_id: i64, addr: &str) -> Result<tokio::net::
     let s = dial_tcp_from(srv, user_id, addr).await?;
     // Detect dead peers on idle connections
     let keepalive = socket2::TcpKeepalive::new().with_time(KEEP_ALIVE);
-    let _ = socket2::SockRef::from(&s).set_tcp_keepalive(&keepalive);
+    if let Err(e) = socket2::SockRef::from(&s).set_tcp_keepalive(&keepalive) {
+        logf!(srv.logger, "failed to enable upstream TCP keep-alive: {e}");
+    }
     Ok(s)
 }
 

@@ -91,6 +91,10 @@ pub fn finish_registration(u: &mut User, ni: usize) {
                 tokio::time::sleep(CONNECT_COMMAND_DELAY).await;
             }
             tokio::time::sleep(Duration::from_secs(3)).await;
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "A stopped user no longer needs the registration-delay notification."
+            )]
             let _ = tx.send(Event::UpstreamRegistrationDelayDone { net_id, conn_id });
         });
     } else {

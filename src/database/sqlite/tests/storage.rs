@@ -81,7 +81,12 @@ fn delete_messages_in_chunks() {
 #[test]
 fn delete_messages_vacuum() {
     let dir = std::env::temp_dir().join(format!("soju-rs-vacuum-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir)
+        .or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+        .expect("remove stale SQLite fixture");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("main.db");
     let db = Database::open(path.to_str().unwrap()).unwrap();
@@ -114,7 +119,7 @@ fn delete_messages_vacuum() {
     assert!(size() < before / 2, "{} >= {before} / 2", size());
     let wal = std::fs::metadata(dir.join("main.db-wal")).map_or(0, |m| m.len());
     assert_eq!(wal, 0);
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).expect("remove temporary SQLite fixture");
 }
 
 #[test]

@@ -201,6 +201,10 @@ fn file_backed_history_survives_migration_and_reopen() -> anyhow::Result<()> {
     struct TestDirectory(std::path::PathBuf);
     impl Drop for TestDirectory {
         fn drop(&mut self) {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Best-effort temporary-directory cleanup must not double-panic during test unwinding."
+            )]
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }

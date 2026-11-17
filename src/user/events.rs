@@ -278,6 +278,10 @@ impl User {
                     }
                     Ok(())
                 });
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                )]
                 let _ = done.send(res.map_err(|e| e.to_string()));
 
                 // If the password was updated, kill all downstream
@@ -310,6 +314,10 @@ impl User {
                     crate::service::ServiceContext::for_user(self.srv.clone(), true, true);
                 let res = crate::service::handle_service_command(self, &mut ctx, &params);
                 for line in ctx.take_prints() {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                    )]
                     let _ = tx.send(UserRunMsg::Message(line));
                 }
                 match (res, ctx.take_deferred()) {
@@ -317,13 +325,25 @@ impl User {
                         tokio::spawn(async move {
                             let print_tx = tx.clone();
                             let print = Box::new(move |line| {
+                                #[expect(
+                                    clippy::let_underscore_must_use,
+                                    reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                                )]
                                 let _ = print_tx.send(UserRunMsg::Message(line));
                             });
                             let res = deferred(print).await;
+                            #[expect(
+                                clippy::let_underscore_must_use,
+                                reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                            )]
                             let _ = tx.send(UserRunMsg::Done(res.map_err(|e| e.to_string())));
                         });
                     }
                     (res, _) => {
+                        #[expect(
+                            clippy::let_underscore_must_use,
+                            reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                        )]
                         let _ = tx.send(UserRunMsg::Done(res.map_err(|e| e.to_string())));
                     }
                 }
@@ -334,6 +354,10 @@ impl User {
                 }
             }
             Event::HasNetwork { name, reply } => {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "The command caller may disconnect; completed user-loop work must not be undone or cancelled."
+                )]
                 let _ = reply.send(self.get_network(&name).is_some());
             }
             Event::WebPushTested {

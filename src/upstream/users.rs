@@ -434,7 +434,9 @@ pub(super) fn start_regain_nick_timer(u: &mut User, ni: usize) {
     let cm = u.networks[ni].casemap;
     let uc = uc!(u, ni);
     if uc.regain_nick_backoff.is_some() || uc.regain_nick_timer.is_some() {
-        panic!("start_regain_nick_timer called twice");
+        // Repeated nick-in-use replies must not reset an existing retry/backoff.
+        logf!(uc.logger, "nickname regain timer is already running");
+        return;
     }
     if is_our_nick(cm, uc, &want_nick) {
         return;

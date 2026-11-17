@@ -137,9 +137,9 @@ fn root_store() -> Arc<RootCertStore> {
         .get_or_init(|| {
             let mut roots = RootCertStore::empty();
             let native = rustls_native_certs::load_native_certs();
-            for cert in native.certs {
-                let _ = roots.add(cert);
-            }
+            // Native stores may contain malformed or unsupported certificates.
+            // Only parsable certificates become trust anchors; retain the empty-store fallback.
+            roots.add_parsable_certificates(native.certs);
             if roots.is_empty() {
                 roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             }
@@ -290,7 +290,7 @@ mod tests {
             }
             Err(_) => false,
         };
-        let _ = server.await;
+        server.await.expect("TLS fixture task panicked");
         ok
     }
 

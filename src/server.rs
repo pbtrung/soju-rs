@@ -147,7 +147,8 @@ impl Server {
     }
 
     pub fn set_identd(&self, identd: Arc<Identd>) {
-        let _ = self.identd.set(identd);
+        // Installation is first-wins, including concurrent calls.
+        self.identd.get_or_init(|| identd);
     }
 
     pub fn web_push(&self) -> Option<Arc<webpush::Sender>> {
@@ -228,10 +229,12 @@ impl Server {
             1 => configs.into_iter().next().unwrap(),
             n => bail!("expected zero or one Web push config, got {n}"),
         };
-        let _ = self.web_push.set(Arc::new(webpush::Sender::new(
-            &config.vapid_public,
-            &config.vapid_private,
-        )));
+        self.web_push.get_or_init(|| {
+            Arc::new(webpush::Sender::new(
+                &config.vapid_public,
+                &config.vapid_private,
+            ))
+        });
         Ok(())
     }
 

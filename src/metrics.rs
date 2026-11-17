@@ -39,7 +39,8 @@ impl Metrics {
     pub fn render(&self, users: usize) -> String {
         let mut s = String::new();
         let mut gauge = |name: &str, help: &str, v: f64| {
-            let _ = writeln!(s, "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {v}");
+            writeln!(s, "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {v}")
+                .expect("writing metrics into a String cannot fail");
         };
         gauge(
             "soju_users_active",
@@ -89,11 +90,12 @@ impl Metrics {
             ),
         ];
         for (name, help, v) in counters {
-            let _ = writeln!(
+            writeln!(
                 s,
                 "# HELP {name} {help}\n# TYPE {name} counter\n{name} {}",
                 v.load(Ordering::Relaxed)
-            );
+            )
+            .expect("writing metrics into a String cannot fail");
         }
         s
     }
@@ -136,6 +138,10 @@ mod tests {
 
     #[cfg(panic = "unwind")]
     #[tokio::test]
+    #[expect(
+        clippy::panic,
+        reason = "The intentional panic exercises gauge cleanup while unwinding."
+    )]
     async fn unwinding_restores_gauge() {
         use futures_util::FutureExt;
 

@@ -143,6 +143,10 @@ pub(super) async fn unread_replies_before_registration() {
     let (mut rd, mut wr) = tokio::io::split(&mut b);
     let write = async {
         // The server stops reading once it closes the connection
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "The flood deliberately races the server disconnect; a failed write is expected."
+        )]
         let _ = wr.write_all(flood.as_bytes()).await;
     };
     let wait_closed = async {

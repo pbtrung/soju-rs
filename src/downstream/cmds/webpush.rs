@@ -229,6 +229,10 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                     let res = crate::user::send_web_push(&sender, &new_sub, &test)
                         .await
                         .map_err(|e| e.to_string());
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "The user stopped during the check; dropping the undelivered event releases its check guard."
+                    )]
                     let _ = tx.send(Event::WebPushTested {
                         dc_id,
                         label,
@@ -306,6 +310,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
+    #[expect(
+        clippy::panic,
+        reason = "Unexpected user events must fail this cancellation fixture."
+    )]
     async fn duplicate_and_cancelled_checks_share_the_running_limit() {
         for unregister in [false, true] {
             let srv = Server::new(db::Database::open_in_memory().unwrap(), Logger::new(false));

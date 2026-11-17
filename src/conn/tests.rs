@@ -131,6 +131,10 @@ async fn stream_parse_error_does_not_replay_failed_line() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::panic,
+    reason = "Unexpected WebSocket frames must fail this protocol fixture."
+)]
 async fn websocket_wire_format() {
     let (a, b) = tokio::io::duplex(4096);
     let ws = |io: tokio::io::DuplexStream, role| {
@@ -376,5 +380,79 @@ fn line_parsing() {
             .unwrap()
             .to_string(),
         "PRIVMSG #a x"
+    );
+}
+
+#[test]
+fn failed_writer_enqueue_releases_accounting_and_closes_connection() {
+    for shutdown in [false, true] {
+        // Model a writer that exited between checking closed and sending.
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(rx);
+        let conn = Conn {
+            shared: Arc::new(Shared {
+                tx,
+                queued: AtomicUsize::new(0),
+                queued_bytes: AtomicUsize::new(0),
+                closed: AtomicBool::new(false),
+                cancel: CancellationToken::new(),
+                logger: Logger::new(false),
+            }),
+            view: None,
+        };
+        if shutdown {
+            conn.shutdown();
+        } else {
+            conn.send_message(crate::msg!("PRIVMSG", "#a", "undeliverable"));
+        }
+        assert!(conn.is_closed());
+        assert!(conn.shared.cancel.is_cancelled());
+        assert_eq!(conn.queued(), 0);
+        assert_eq!(conn.queued_bytes(), 0);
+        conn.send_message(crate::msg!("PING", "closed"));
+        assert_eq!(conn.queued(), 0);
+        assert_eq!(conn.queued_bytes(), 0);
+    }
+}
+
+#[tokio::test]
+async fn transport_close_preserves_shutdown_errors() {
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    struct BrokenShutdown;
+    impl AsyncRead for BrokenShutdown {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl AsyncWrite for BrokenShutdown {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            data: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(data.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
+        }
+    }
+    let io: BoxIo = Box::new(BrokenShutdown);
+    let (_, write) = tokio::io::split(io);
+    let mut writer = Writer::Stream(BufWriter::new(write));
+    let err = writer.close().await.unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::BrokenPipe
     );
 }

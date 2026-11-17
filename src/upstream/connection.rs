@@ -178,6 +178,10 @@ impl UpstreamConn {
         let (net_id, conn_id) = (self.net_id, self.id);
         let task = tokio::spawn(async move {
             tokio::time::sleep(delay).await;
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "The user event loop has stopped; timer notifications are no longer needed."
+            )]
             let _ = tx.send(Event::TryRegainNick {
                 net_id,
                 conn_id,
@@ -197,6 +201,7 @@ impl UpstreamConn {
         let name = uch.name.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep_until(deadline).await;
+            #[expect(clippy::let_underscore_must_use, reason = "The user event loop has stopped; timer notifications are no longer needed.")]
             let _ = tx.send(Event::ChannelDetach {
                 net_id,
                 conn_id,

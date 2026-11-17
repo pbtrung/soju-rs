@@ -202,7 +202,11 @@ impl Conn {
                 }
             }
             c.close();
-            let _ = tokio::time::timeout(WRITE_TIMEOUT, writer.close()).await;
+            match tokio::time::timeout(WRITE_TIMEOUT, writer.close()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => debugf!(c.shared.logger, "failed to close connection: {e}"),
+                Err(_) => debugf!(c.shared.logger, "timed out closing connection"),
+            }
             debugf!(c.shared.logger, "connection closed");
         });
 
@@ -310,7 +314,12 @@ impl Conn {
             return;
         }
         self.shared.queued.fetch_add(1, Ordering::Relaxed);
-        let _ = self.shared.tx.send(Outgoing::Line(line));
+        if self.shared.tx.send(Outgoing::Line(line)).is_err() {
+            // The writer can exit between the closed check and enqueue.
+            self.shared.queued.fetch_sub(1, Ordering::Relaxed);
+            self.shared.queued_bytes.fetch_sub(size, Ordering::Relaxed);
+            self.close_shared();
+        }
     }
 
     /// The number of messages queued and not written yet, e.g. because the
@@ -335,7 +344,9 @@ impl Conn {
         if self.is_closed() {
             return;
         }
-        let _ = self.shared.tx.send(Outgoing::Shutdown);
+        if self.shared.tx.send(Outgoing::Shutdown).is_err() {
+            self.close_shared();
+        }
     }
 }
 

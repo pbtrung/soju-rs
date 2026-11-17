@@ -67,6 +67,10 @@ async fn setup() -> Env {
 }
 
 /// Like setup, with saved channels, and caps enabled on both connections.
+#[expect(
+    clippy::panic,
+    reason = "Unexpected CAP replies must fail the fake upstream handshake."
+)]
 async fn setup_with(channels: Vec<db::Channel>, caps: &str) -> Env {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
@@ -388,4 +392,72 @@ async fn sasl_cap_nak_ends_capability_negotiation() {
     upstream.send(msg!("CAP", "*", "NAK", req.params[1].clone()));
     assert_eq!(upstream.expect("CAP").await.params, ["END"]);
     srv.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsupported_pending_command_is_rejected_without_queueing() {
+    let mut env = setup().await;
+    let handle = env.srv.get_user(USERNAME).unwrap();
+    let (done, result) = tokio::sync::oneshot::channel();
+    assert!(handle.send(crate::user::Event::Run(Box::new(move |user| {
+        let dc_id = user.downstreams[0].id;
+        let uc = user.networks[0].conn.as_mut().unwrap();
+        let queued: usize = uc.pending_cmds.values().map(Vec::len).sum();
+        let command = super::enqueue_command(
+            uc,
+            dc_id,
+            String::new(),
+            msg!("PRIVMSG", "#channel", "secret test payload"),
+        )
+        .expect_err("unsupported commands must be returned to the caller");
+        assert_eq!(
+            uc.pending_cmds.values().map(Vec::len).sum::<usize>(),
+            queued
+        );
+        assert!(!uc.pending_cmds.contains_key("PRIVMSG"));
+        super::abort_pending_commands(
+            &mut user.downstreams,
+            std::collections::HashMap::from([("PRIVMSG".to_owned(), vec![*command])]),
+        );
+        done.send(()).unwrap();
+    }))));
+    tokio::time::timeout(TIMEOUT, result)
+        .await
+        .unwrap()
+        .unwrap();
+    let reply = env.downstream.expect("421").await;
+    assert_eq!(
+        reply.params,
+        [USERNAME, "PRIVMSG", "Unsupported pending command"]
+    );
+    env.srv.shutdown().await;
+}
+
+#[tokio::test]
+async fn duplicate_regain_nick_start_preserves_running_retry() {
+    let env = setup().await;
+    let handle = env.srv.get_user(USERNAME).unwrap();
+    let (done, result) = tokio::sync::oneshot::channel();
+    assert!(handle.send(crate::user::Event::Run(Box::new(move |user| {
+        user.record.nick = "desired-nickname".to_owned();
+        super::users::start_regain_nick_timer(user, 0);
+        let first = user.networks[0]
+            .conn
+            .as_ref()
+            .unwrap()
+            .regain_nick_timer
+            .as_ref()
+            .unwrap()
+            .id();
+        super::users::start_regain_nick_timer(user, 0);
+        let uc = user.networks[0].conn.as_ref().unwrap();
+        assert_eq!(uc.regain_nick_timer.as_ref().unwrap().id(), first);
+        assert!(uc.regain_nick_backoff.is_some());
+        done.send(()).unwrap();
+    }))));
+    tokio::time::timeout(TIMEOUT, result)
+        .await
+        .unwrap()
+        .unwrap();
+    env.srv.shutdown().await;
 }

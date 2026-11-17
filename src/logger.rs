@@ -50,6 +50,10 @@ impl Logger {
         let now = jiff::ZonedDateTime::now();
         let now = now.strftime(TIME_FORMAT);
         let line = format!("{now} {}{args}\n", self.prefix);
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "Stderr is the final log sink; reporting its failure would recurse or panic during shutdown."
+        )]
         let _ = std::io::stderr().lock().write_all(line.as_bytes());
     }
 }
@@ -77,6 +81,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::panic,
+        reason = "An unexpected child-process timezone must fail the fixture."
+    )]
     fn configured_local_time_and_dst() {
         const CHILD: &str = "SOJU_TEST_LOG_TIME_ZONE";
         if std::env::var_os(CHILD).is_some() {

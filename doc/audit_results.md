@@ -160,12 +160,12 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 #### LINT-001 — Required correctness policy is absent and fails when trialled
 
 - **Severity / classification:** Medium; confirmed policy gap/diagnostics, not thousands of verified bugs.
-- **Location:** `Cargo.toml` (no lint tables), `src/conn/reader.rs:49`, `src/upstream/mod.rs:35–39`, protocol handlers, tests and BARE/message-ID conversions.
-- **Problem:** Default Clippy passes; enabling pedantic plus requested restriction lints fails. The trial reported 1,773 errors for the library and 2,453 for the lib-test target; these overlap and must not be summed as unique defects. Examples include indexing, unwrap/expect, unchecked casts, missing contracts and oversized functions.
+- **Location at discovery:** `Cargo.toml` (no lint tables), `src/conn/reader.rs:49`, `src/upstream/mod.rs:35–39`, protocol handlers, tests and BARE/message-ID conversions.
+- **Problem at discovery:** Default Clippy passes; enabling pedantic plus requested restriction lints fails. The trial reported 1,773 errors for the library and 2,453 for the lib-test target; these overlap and must not be summed as unique defects. Examples include indexing, unwrap/expect, unchecked casts, missing contracts and oversized functions.
 - **Impact:** Desired invariants are not mechanically enforced. Many diagnostics represent checked local invariants/test assertions and need a reasoned disposition, not arbitrary fallback values.
 - **Recommended fix:** Stage explicit Cargo rust/Clippy policies; use checked conversion/borrowed-state APIs and typed variants; document small unavoidable invariant/test exceptions with precise `expect` reasons. Never enable all restriction lints. Include unused-must-use and unsafe prohibition from the prompt.
 - **Verification:** Full all-target Clippy command with the final manifest policy and `-D warnings`; check exception reasons and unfulfilled expectations on Rust 1.100. Re-run behavior tests after each logical group.
-- **Status:** Not Started.
+- **Status:** In Progress. STEP-008 installs the core compiler/Clippy policy and passes on GNU/musl, with narrow reasoned exceptions for cancelled deliveries, the final stderr sink, fixture cleanup and intentional test panics. No production panic exceptions or module/crate-wide suppressions were added. Numeric/indexing, unwrap/expect, pedantic and error-mapping lints remain STEP-009–011; the full requested policy is not yet complete.
 
 #### PANIC-001 — Fallible setup and state invariants use panicking APIs
 
@@ -584,13 +584,13 @@ This is the authoritative checklist for the **next implementation execution**. P
 
 ### Phase 4 — Compiler and Clippy
 
-- [ ] **STEP-008 (P1): Add compiler and core correctness lint policy.**
+- [x] **STEP-008 (P1): Add compiler and core correctness lint policy.**
   - Findings: LINT-001. Objective: enforce high-value checks without an unreviewable all-at-once rewrite.
   - Files: `Cargo.toml`, affected production modules and focused test scopes.
   - Instructions: add prompt rust policy and Clippy all plus panic/todo/unimplemented/dbg/must-use/future checks; handle each diagnostic and ignored send/error by contract. Enable only a set whose violations are resolved in this step.
   - Dependencies: STEP-006. Risks: changing intentional shutdown error handling.
-  - Verification: fmt/check/Clippy/tests; inspect lint exception reasons.
-  - Acceptance/status: enabled policy passes on all targets and does not suppress production errors; **Not Started**.
+  - Verification: fmt/check/Clippy/tests; inspect lint exception reasons. Completed with 223 tests per GNU/musl target and strict all-target Clippy on both; reader smoke/doc tests pass. External Go/gamja compatibility remains not run; in-process protocol coverage passes. Error-mapping lint review is deferred with the remaining policy rather than changing credential-safe protocol errors in this step.
+  - Acceptance/status: enabled policy passes on all targets and does not suppress production errors; **Completed**.
 
 - [ ] **STEP-009 (P1): Replace numeric/indexing hazards at external boundaries.**
   - Findings: NUM-001, LINT-001. Objective: make decoding/query/resource arithmetic explicit.
@@ -819,6 +819,7 @@ they do not imply completion of later hardening phases.
 | STEP-005 compatible updates | PASS | 213 GNU/musl tests, releases, static linkage and CLI smoke |
 | STEP-006 rusqlite migration | PASS | 214 GNU/musl tests, file-backed schema-30→35 reopen/FTS/FK/cursor/ID regression, native releases and static-link/CLI checks |
 | STEP-007 reduced features | PASS | 214 GNU/musl tests, fmt/check/Clippy, reader smoke/doc tests, both releases and static-link/CLI checks |
+| STEP-008 core lint policy | PASS | fmt/check, strict all-target Clippy on GNU/musl, 223 tests per target, reader smoke/doc tests; four new operational boundary regressions; rustdoc retains 13 existing warnings |
 | STEP-030 Jiff migration | PASS | fmt/check/strict Clippy; 219 tests per GNU/musl target plus reader smoke/doc tests; legacy TEXT/schema/FTS/cursor/ID preservation; timezone/DST and temporal boundary fixtures; both optimized releases/static-link/CLI; rustdoc with 13 existing warnings |
 | Live registry dry run after upgrades | PASS | `cargo update --dry-run`: zero compatible updates |
 | Current advisory scan | PASS | STEP-030: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
@@ -846,7 +847,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 **Remaining high-priority work:** CI-001 test-before-release enforcement, MEM-001 aggregate history growth and ASYNC-001 unbounded task admission. REL-001 is fixed in STEP-002. No critical defect was confirmed.
 
-**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, default rustdoc warnings, missing strict lint policy and unchecked numeric library boundaries. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 is resolved by the verified STEP-030 Jiff migration. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
+**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, default rustdoc warnings, remaining numeric/unwrap/pedantic lint stages and unchecked numeric library boundaries. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 is resolved by the verified STEP-030 Jiff migration. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
 
 **Potential risks needing targeted measurement/validation:** accepted-session saturation, single-runtime DB stalls under contention, receipt-cache cardinality, provider metadata trust configurations, failure/poison paths, native/advisory exposure. Do not label these all exploitable vulnerabilities.
 
@@ -854,7 +855,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 **Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. STEP-030 removes chrono and the full cargo-deny policy passes without advisory ignores; duplicate-major warnings remain visible. cargo-outdated/Miri/fuzz tooling and native sanitizer coverage remain unavailable/not configured; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
 
-**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3, the STEP-030 migration, and commit/push after each step. Other later phases remain outside the current request. Mark findings Completed only after implementation and verification.
+**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3, STEP-008, the STEP-030 migration, and commit/push after each step. Other later phases remain outside the current request. Mark findings Completed only after implementation and verification.
 
 ## 15. Implementation Progress Log
 
@@ -872,11 +873,12 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-006 | Migrated rusqlite 0.42 to 0.43 without changing libsqlite3-sys 0.40.0, SQLite 3.54.1 or schema 35. New file-backed migration/reopen/ID/cursor/foreign-key/FTS regression passes. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests, release/static-link/CLI checks pass. Audit finds no known vulnerabilities; deny preview fails on unsuppressed DEPS-002. Added the user-requested jiff migration as planning-only STEP-030. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-007 | Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-030 | Replaced chrono with Jiff 1.0.0 across timestamp APIs, persistence, elapsed intervals and local logs. Preserved millisecond TEXT/schema 35, nanosecond input, pre-epoch Unix topic rounding, history/future clocks and IDs/cursors/FTS. Documented the intentional leap-second normalization and narrower date range. Added compatibility, timezone/DST, storage and duration-overflow regressions. fmt/check/strict Clippy, 219 tests on each GNU/musl target, reader smoke/doc tests, both optimized releases/static-link/CLI checks pass. Rustdoc builds with 13 existing warnings. Fresh audit has no vulnerabilities or advisory warnings; full deny and machete pass without ignores. Registry dry run finds no compatible updates. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-008 | Enforced the core Rust compiler policy and Clippy all/panic/todo/unimplemented/dbg/must-use/future checks plus allow-attribute rejection. Resolved explicit production panic sites, handled operational results and documented narrow cancellation/cleanup/test exceptions. Failed writer enqueue now rolls back queue accounting and closes the physical connection; transport shutdown errors are preserved. Added four regressions for failed sends, close errors, unsupported pending commands and duplicate nickname retry timers. fmt/check, strict GNU/musl all-target Clippy, 223 tests per target, reader smoke and doc tests pass. Rustdoc builds with the 13 existing warnings. LINT-001 remains In Progress for STEP-009–011; no dependency, schema or workflow change. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
-The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. Next, address the planned strict lint policy and resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
+The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. STEP-008 now enforces the core compiler/Clippy policy. Next, finish the staged numeric, unwrap/expect, pedantic and error-mapping policy and address resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
 
 This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.
