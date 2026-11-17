@@ -3,6 +3,10 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn users() {
     let db = db();
     let mut u = User::new("alice");
@@ -46,6 +50,10 @@ fn users() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn networks_channels() {
     let db = db();
     let mut u = User::new("alice");

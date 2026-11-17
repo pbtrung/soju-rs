@@ -3,6 +3,10 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn message_ids_not_reused() {
     let db = db();
     let mut u = User::new("alice");
@@ -55,6 +59,10 @@ fn message_ids_not_reused() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn delete_messages_in_chunks() {
     let db = db();
     let mut u = User::new("alice");
@@ -79,6 +87,11 @@ fn delete_messages_in_chunks() {
 }
 
 #[test]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn delete_messages_vacuum() {
     let dir = std::env::temp_dir().join(format!("soju-rs-vacuum-{}", std::process::id()));
     std::fs::remove_dir_all(&dir)
@@ -123,6 +136,10 @@ fn delete_messages_vacuum() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn invalid_message_batch_rolls_back_rows_targets_and_id_reservations() {
     let db = db();
     let mut user = User::new("atomic");
@@ -142,6 +159,10 @@ fn invalid_message_batch_rolls_back_rows_targets_and_id_reservations() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn message_id_exhaustion_is_atomic() {
     let db = db();
     let mut user = User::new("ids");
@@ -171,6 +192,10 @@ fn message_id_exhaustion_is_atomic() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn expiry_rejects_zero_chunks_and_honors_preexisting_cancellation() {
     let db = db();
     assert!(
@@ -182,4 +207,35 @@ fn expiry_rejects_zero_chunks_and_honors_preexisting_cancellation() {
             .unwrap(),
         0
     );
+}
+
+#[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "SQLite fixture setup and assertions must fail on unexpected errors."
+)]
+#[expect(
+    clippy::panic,
+    reason = "An injected unwind verifies SQLite transaction rollback before poison recovery."
+)]
+fn poisoned_sqlite_connection_recovers_only_after_transaction_rollback() {
+    let db = db();
+    db.conn()
+        .execute_batch("CREATE TABLE PoisonProbe(value INTEGER)")
+        .unwrap();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut conn = db.conn();
+            let tx = conn.transaction().unwrap();
+            tx.execute("INSERT INTO PoisonProbe VALUES (1)", [])
+                .unwrap();
+            panic!("injected transaction failure");
+        }))
+        .is_err()
+    );
+    let count: i64 = db
+        .conn()
+        .query_row("SELECT count(*) FROM PoisonProbe", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
 }

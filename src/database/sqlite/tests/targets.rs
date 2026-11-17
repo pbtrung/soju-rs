@@ -3,6 +3,10 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn target_unread_and_mentions() {
     let db = db();
     let mut u = User::new("alice");
@@ -95,6 +99,10 @@ fn target_unread_and_mentions() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn flagging_an_existing_target() {
     let db = db();
     let mut u = User::new("alice");

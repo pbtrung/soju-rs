@@ -283,6 +283,10 @@ mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn parse(input: &[u8]) -> (Option<Header>, Vec<u8>) {
         let (h, mut rest) = read_header(input).await.unwrap();
         let mut out = Vec::new();
@@ -301,6 +305,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn v1() {
         let (h, rest) = parse(b"PROXY TCP4 1.2.3.4 5.6.7.8 1111 6667\r\nNICK a\r\n").await;
         let h = h.unwrap();
@@ -311,6 +319,10 @@ mod tests {
         assert_eq!(h.unwrap().source, None);
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn v2_input(command: u8, family: u8, body: &[u8]) -> Vec<u8> {
         let mut input = V2_SIGNATURE.to_vec();
         input.extend_from_slice(&[0x20 | command, family]);
@@ -371,6 +383,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn v2() {
         let cert = b"fake-der";
         let mut ssl = vec![0x01, 0, 0, 0, 0];

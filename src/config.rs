@@ -31,8 +31,15 @@ impl IpSet {
 }
 
 /// The loopback networks 127.0.0.0/8 and ::1/128.
+#[expect(
+    clippy::expect_used,
+    reason = "Both literal loopback CIDRs are audited constants and cannot fail to parse."
+)]
 fn loopback_ips() -> Vec<IpNet> {
-    vec!["127.0.0.0/8".parse().unwrap(), "::1/128".parse().unwrap()]
+    vec![
+        "127.0.0.0/8".parse().expect("literal loopback CIDR"),
+        "::1/128".parse().expect("literal loopback CIDR"),
+    ]
 }
 
 fn parse_duration(s: &str) -> Result<Duration> {
@@ -484,6 +491,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn full_config() {
         let cfg = parse(
             r#"
@@ -545,6 +556,10 @@ client-cert-auth true
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn defaults() {
         let cfg = parse("").unwrap();
         assert_eq!(cfg.db.driver, "sqlite3");
@@ -573,6 +588,10 @@ client-cert-auth true
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn durations() {
         assert_eq!(parse_duration("0d").unwrap(), Duration::ZERO);
         assert_eq!(parse_duration("1.5d").unwrap(), Duration::from_secs(129600));
@@ -584,12 +603,20 @@ client-cert-auth true
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn log_alias() {
         let cfg = parse("log memory").unwrap();
         assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Memory);
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn fs_message_store_unsupported() {
         for c in [
             "message-store fs /tmp/logs",

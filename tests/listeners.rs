@@ -8,6 +8,10 @@ use soju::server::Server;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn websocket_handshake_validates_keys_before_upgrading() {
     let server = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     let address = spawn_listener(
@@ -70,6 +74,11 @@ async fn websocket_handshake_validates_keys_before_upgrading() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn websocket_disconnect_releases_the_user_and_allows_reconnection() {
     use futures_util::{SinkExt, StreamExt};
     use soju::irc::Message;

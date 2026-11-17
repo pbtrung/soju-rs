@@ -85,6 +85,10 @@ mod tests {
         clippy::panic,
         reason = "An unexpected child-process timezone must fail the fixture."
     )]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn configured_local_time_and_dst() {
         const CHILD: &str = "SOJU_TEST_LOG_TIME_ZONE";
         if std::env::var_os(CHILD).is_some() {

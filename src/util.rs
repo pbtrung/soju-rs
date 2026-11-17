@@ -43,7 +43,7 @@ pub async fn cpu_work<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
                 bail!("server busy, try again later");
             }
             let _waiting = Waiting(&w.waiting);
-            w.sem.acquire().await.expect("semaphore is never closed")
+            w.sem.acquire().await?
         }
     };
     tokio::task::spawn_blocking(move || {

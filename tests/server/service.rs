@@ -3,6 +3,10 @@
 use super::*;
 
 /// BouncerServ commands waiting on another user's event loop.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn service_other_user() {
     let env = setup_with(db_store(), |db, user| {
         user.admin = true;
@@ -52,6 +56,10 @@ pub(super) async fn service_other_user() {
 
 /// BouncerServ commands doing CPU-heavy work (key generation, password
 /// hashing) off the event loop, then applying it.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn service_blocking_work() {
     let env = setup_with(db_store(), |_, user| user.admin = true).await;
     let mut uc = accept_upstream(&env).await;
@@ -104,6 +112,10 @@ pub(super) async fn service_blocking_work() {
 
 /// Identical nicknames, network names and channel names must not mix live
 /// traffic or history, either between users or between a user's networks.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn user_network_channel_isolation() {
     let db = Database::open_in_memory().unwrap();
     let mut scopes = Vec::new();

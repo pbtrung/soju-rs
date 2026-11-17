@@ -93,7 +93,9 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let ni = upstream_for_command(u, i, &msg.command)?;
 
     // Check if we have the reply cached
-    let uc = u.networks[ni].upstream().unwrap();
+    let uc = u.networks[ni]
+        .upstream()
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if let Some(l) = uc.get_cached_who(&mask, &fields) {
         let multi_prefix = u.downstreams[i].caps.is_enabled("multi-prefix");
         let mut replies = Vec::new();
@@ -301,7 +303,9 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
                         dc!(u, i).send_message(msg!(RPL_MONONLINE, nick.clone(), target));
                         continue;
                     }
-                    let uc = u.networks[ni].upstream().unwrap();
+                    let uc = u.networks[ni].upstream().ok_or_else(|| {
+                        anyhow::anyhow!("required user or connection state is unavailable")
+                    })?;
                     if let Some(&online) = uc.monitored.get(target) {
                         let cmd = if online {
                             RPL_MONONLINE
@@ -332,7 +336,9 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
             // TODO: be less lazy and pack the lists
             let names: Vec<String> = dc!(u, i).monitored.keys().map(str::to_owned).collect();
             for target in names {
-                let uc = u.networks[ni].upstream().unwrap();
+                let uc = u.networks[ni].upstream().ok_or_else(|| {
+                    anyhow::anyhow!("required user or connection state is unavailable")
+                })?;
                 let mut cmd = if uc.monitored.get(&target).copied().unwrap_or(false) {
                     RPL_MONONLINE
                 } else {

@@ -71,6 +71,10 @@ mod tests {
     use super::*;
     use hyper::header::HeaderValue;
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn forwarded() {
         let mut h = hyper::HeaderMap::new();
         h.insert(

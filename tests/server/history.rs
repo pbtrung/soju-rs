@@ -10,6 +10,10 @@ pub(super) async fn chat_history_db() {
     .await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn chat_history_params() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -76,6 +80,10 @@ pub(super) async fn chat_history_params() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn upstream_clock_skew() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -188,6 +196,10 @@ pub(super) async fn chat_history_limit() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn chat_history(msg_store: MsgStore) {
     let env = setup(msg_store).await;
     let mut uc = accept_upstream(&env).await;

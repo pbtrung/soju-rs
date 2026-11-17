@@ -364,6 +364,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn user_modes_non_ascii() {
         let mut m = UserModes::default();
         m.apply("+iw\u{e9}").unwrap();
@@ -425,6 +429,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn assert_split(input: &str, expected: &[&str]) {
         assert_eq!(split_words(input).unwrap(), expected, "{input:?}");
     }
@@ -455,6 +463,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn user_modes() {
         let mut m = UserModes::default();
         m.apply("+iw-i+o").unwrap();
@@ -463,6 +475,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn channel_modes() {
         let avail = std_memberships();
         let chmodes = std_channel_modes();

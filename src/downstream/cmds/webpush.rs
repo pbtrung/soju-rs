@@ -314,6 +314,10 @@ mod tests {
         clippy::panic,
         reason = "Unexpected user events must fail this cancellation fixture."
     )]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn duplicate_and_cancelled_checks_share_the_running_limit() {
         for unregister in [false, true] {
             let srv = Server::new(db::Database::open_in_memory().unwrap(), Logger::new(false));

@@ -256,8 +256,33 @@ impl UpstreamUser {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingCommandKind {
+    List,
+    Who,
+    Whois,
+    Authenticate,
+    Register,
+    Verify,
+    Unsupported,
+}
+impl PendingCommandKind {
+    fn parse(command: &str) -> Self {
+        match command {
+            "LIST" => Self::List,
+            "WHO" => Self::Who,
+            "WHOIS" => Self::Whois,
+            "AUTHENTICATE" => Self::Authenticate,
+            "REGISTER" => Self::Register,
+            "VERIFY" => Self::Verify,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingCommand {
+    kind: PendingCommandKind,
     pub downstream_id: u64,
     pub downstream_label: String,
     pub msg: Message,

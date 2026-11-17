@@ -17,13 +17,19 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
             "Upstream network authentication not supported"
         )));
     }
-    let ni = ni.unwrap();
+    let ni =
+        ni.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
 
     let Some(credentials) = u.downstreams[i].handle_authenticate(msg)? else {
         return Ok(());
     };
 
-    if u.networks[ni].upstream().unwrap().sasl_client.is_some() {
+    if u.networks[ni]
+        .upstream()
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
+        .sasl_client
+        .is_some()
+    {
         dc!(u, i).end_sasl(Some(msg!(
             ERR_SASLFAIL,
             nick,
@@ -34,7 +40,9 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
 
     match credentials.mechanism.as_str() {
         "PLAIN" => {
-            let plain = credentials.plain.clone().unwrap();
+            let plain = credentials.plain.clone().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             if !plain.identity.is_empty() && plain.identity != plain.username {
                 dc!(u, i).end_sasl(Some(msg!(
                     ERR_SASLFAIL,
@@ -43,7 +51,9 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
                 )));
                 return Ok(());
             }
-            let uc = u.networks[ni].upstream_mut().unwrap();
+            let uc = u.networks[ni].upstream_mut().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             logf!(
                 uc.logger,
                 "starting post-registration SASL PLAIN authentication with username {:?}",

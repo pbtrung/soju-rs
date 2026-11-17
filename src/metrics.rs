@@ -39,6 +39,10 @@ impl Metrics {
     pub fn render(&self, users: usize) -> String {
         let mut s = String::new();
         let mut gauge = |name: &str, help: &str, v: f64| {
+            #[expect(
+                clippy::expect_used,
+                reason = "Formatting primitive metric values into String is infallible."
+            )]
             writeln!(s, "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {v}")
                 .expect("writing metrics into a String cannot fail");
         };
@@ -90,6 +94,10 @@ impl Metrics {
             ),
         ];
         for (name, help, v) in counters {
+            #[expect(
+                clippy::expect_used,
+                reason = "Formatting primitive metric values into String is infallible."
+            )]
             writeln!(
                 s,
                 "# HELP {name} {help}\n# TYPE {name} counter\n{name} {}",
@@ -123,6 +131,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn cancelling_downstream_restores_gauge() {
         let srv = crate::server::Server::new(
             crate::database::Database::open_in_memory().unwrap(),

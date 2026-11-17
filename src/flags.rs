@@ -217,6 +217,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn parse() {
         let fs = FlagSet::new()
             .string("addr")
@@ -253,6 +257,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn errors() {
         let fs = FlagSet::new()
             .string("addr")

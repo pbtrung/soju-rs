@@ -137,6 +137,10 @@ pub fn parse_listen_uri(listen: &str) -> Result<Listener> {
 mod tests {
     use super::*;
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn uris() {
         let l = parse_listen_uri("ircs://").unwrap();
         assert_eq!(

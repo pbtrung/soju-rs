@@ -397,6 +397,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn parse_basic() {
         let m = Message::parse(":nick!user@host PRIVMSG #chan :hello world\r\n").unwrap();
         assert_eq!(m.prefix, Some(Prefix::full("nick", "user", "host")));
@@ -406,6 +410,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn parse_tags() {
         let m = Message::parse("@a=b\\sc;d;e=\\:\\\\x\\ :srv cmd  x  y").unwrap();
         assert_eq!(m.tags.get("a"), Some("b c"));
@@ -446,6 +454,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn format_trailing() {
         assert_eq!(msg!("CMD", "a", "").to_string(), "CMD a :");
         assert_eq!(msg!("CMD", ":x").to_string(), "CMD ::x");

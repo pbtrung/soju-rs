@@ -175,7 +175,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Harder operational diagnosis/recovery; invalid internal transitions can terminate a user or process. Guarded fixed-length cryptographic conversions are different and should not be described as reachable parser bugs.
 - **Recommended fix:** Propagate setup errors, encode pending command kinds and registration/upstream phases in types where useful, borrow validated state once, and explicitly choose poison recovery/fail-stop policy per lock. Preserve real errors. Keep constant-size crypto invariant exceptions narrow.
 - **Verification:** Failure-injection setup tests, malformed/state-transition tests, Clippy, and existing certificate/SASL/authorization integration tests. No blanket panic-catching or defaulting credentials.
-- **Status:** Not Started.
+- **Status:** Completed. Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-011.
 
 #### DEPS-001 — Current patch and semver-breaking dependency updates exist
 
@@ -600,13 +600,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: boundary regressions, Go-compatible ID vectors, parser/database tests, selected cast/index lints.
   - Acceptance/status: no unchecked untrusted numeric conversion; each intentional cast/invariant justified; **Completed**.
 
-- [ ] **STEP-010 (P1): Propagate setup failures and model validated state.**
+- [x] **STEP-010 (P1): Propagate setup failures and model validated state.**
   - Findings: PANIC-001, LINT-001. Objective: remove meaningful panic paths, not substitute defaults.
   - Files: `src/auth.rs`, `webpush.rs`, `bin/soju.rs`, `server/configuration.rs`, downstream registration and upstream command/state APIs.
   - Instructions: Result-returning HTTP/TLS/signal/runtime construction; typed pending-command kinds; consolidate borrowed validated registration/upstream state; choose per-lock poison policy. Use narrow documented expectations for unreachable constant-size crypto failures only after review.
   - Dependencies: STEP-009. Risks: internal API propagation and state-machine behavior.
   - Verification: failure injection and invalid transition tests; SASL/cert/auth integration suite; unwrap/expect/panic lints.
-  - Acceptance/status: fallible setup errors reach application boundary; no blanket exceptions or fabricated defaults; **Not Started**.
+  - Acceptance/status: fallible setup errors reach application boundary; no blanket exceptions or fabricated defaults; **Completed**.
 
 - [ ] **STEP-011 (P2): Complete pedantic policy and repair documentation.**
   - Findings: LINT-001, DOC-001, ARCH-001. Objective: enforce the final requested practical baseline.
@@ -875,6 +875,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-030 | Replaced chrono with Jiff 1.0.0 across timestamp APIs, persistence, elapsed intervals and local logs. Preserved millisecond TEXT/schema 35, nanosecond input, pre-epoch Unix topic rounding, history/future clocks and IDs/cursors/FTS. Documented the intentional leap-second normalization and narrower date range. Added compatibility, timezone/DST, storage and duration-overflow regressions. fmt/check/strict Clippy, 219 tests on each GNU/musl target, reader smoke/doc tests, both optimized releases/static-link/CLI checks pass. Rustdoc builds with 13 existing warnings. Fresh audit has no vulnerabilities or advisory warnings; full deny and machete pass without ignores. Registry dry run finds no compatible updates. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-008 | Enforced the core Rust compiler policy and Clippy all/panic/todo/unimplemented/dbg/must-use/future checks plus allow-attribute rejection. Resolved explicit production panic sites, handled operational results and documented narrow cancellation/cleanup/test exceptions. Failed writer enqueue now rolls back queue accounting and closes the physical connection; transport shutdown errors are preserved. Added four regressions for failed sends, close errors, unsupported pending commands and duplicate nickname retry timers. fmt/check, strict GNU/musl all-target Clippy, 223 tests per target, reader smoke and doc tests pass. Rustdoc builds with the 13 existing warnings. LINT-001 remains In Progress for STEP-009–011; no dependency, schema or workflow change. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-009 | Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; remaining internal indexing policy is staged for STEP-011. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-010 | Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-011. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

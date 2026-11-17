@@ -131,7 +131,9 @@ impl DownstreamConn {
             .max(64);
         let mut lines: Vec<String> = vec![String::new()];
         for cap in caps {
-            let line = lines.last_mut().unwrap();
+            let Some(line) = lines.last_mut() else {
+                return;
+            };
             if self.cap_version >= 302 && !line.is_empty() && line.len() + 1 + cap.len() > max {
                 lines.push(cap.clone());
             } else {

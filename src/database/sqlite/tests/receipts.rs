@@ -3,6 +3,10 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn legacy_timestamp_text_remains_readable_and_writes_milliseconds() {
     let db = db();
     let mut user = User::new("timestamps");
@@ -56,6 +60,10 @@ fn legacy_timestamp_text_remains_readable_and_writes_milliseconds() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn receipts_targets_webpush_certs() {
     let db = db();
     let mut u = User::new("alice");
@@ -150,6 +158,10 @@ fn receipts_targets_webpush_certs() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn unchanged_records_and_receipts_do_not_write() {
     let db = db();
     let mut user = User::new("cost-test");

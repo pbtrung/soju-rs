@@ -4,7 +4,9 @@
 use super::*;
 
 pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let is_text = msg.command == "PRIVMSG" || msg.command == "NOTICE";
     need_params(msg, if is_text { 2 } else { 1 })?;
     let text = if is_text {
@@ -108,7 +110,9 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         }
 
         let ni = upstream_for_command(u, i, &msg.command)?;
-        let uc = u.networks[ni].upstream().unwrap();
+        let uc = u.networks[ni]
+            .upstream()
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         // Remove STATUSMSG sigils from the target used locally (logging,
         // auto-detach). The message itself keeps them: "@#chan" only
         // reaches channel operators.
@@ -135,7 +139,9 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         } else {
             String::new()
         };
-        let uc = u.networks[ni].upstream_mut().unwrap();
+        let uc = u.networks[ni]
+            .upstream_mut()
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         uc.send_message_labeled(
             dc_id,
             &label,
@@ -146,7 +152,9 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         // when it is echoed from the upstream. Otherwise, produce/log it
         // here because it's the last time we'll see it.
         if !echo_supported {
-            let uc = u.networks[ni].upstream().unwrap();
+            let uc = u.networks[ni].upstream().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             let mut etags = tags.clone();
             etags.set("time", xirc::format_server_time(Timestamp::now()));
             if !uc.account.is_empty() {

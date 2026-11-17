@@ -465,6 +465,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn network_url() {
         let n = Network::new("irc.libera.chat");
         let u = n.url().unwrap();
@@ -486,6 +490,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn host_port() {
         assert_eq!(
             split_host_port("a:1").unwrap(),
@@ -501,6 +509,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn password() {
         let mut u = User::new("a");
         u.set_password("secret").unwrap();

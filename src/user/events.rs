@@ -470,7 +470,9 @@ impl User {
 
         self.num_downstream_conns.fetch_add(1, Ordering::SeqCst);
 
-        let i = self.dc_index(dc_id).unwrap();
+        let Some(i) = self.dc_index(dc_id) else {
+            return;
+        };
         if let Some(net_id) = self.downstreams[i].network_id
             && let Some(ni) = self.net_index(net_id)
             && let Some(err) = self.networks[ni].last_error.clone()

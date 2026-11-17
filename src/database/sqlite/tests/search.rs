@@ -10,6 +10,10 @@ fn fts_quote() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn message_text_index_query_plans() {
     let db = db();
     let conn = db.conn();
@@ -104,6 +108,10 @@ fn message_text_index_query_plans() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn sparse_fts_preserves_updates_and_event_history_ordering() {
     let db = db();
     let mut user = User::new("fts-test");

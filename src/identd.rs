@@ -45,13 +45,13 @@ impl Identd {
 
     pub fn store(&self, remote_addr: &str, local_addr: &str, ident: &str) {
         if let Some(k) = new_ident_key(remote_addr, local_addr) {
-            self.entries.write().unwrap().insert(k, ident.to_owned());
+            crate::state_lock::write(&self.entries).insert(k, ident.to_owned());
         }
     }
 
     pub fn delete(&self, remote_addr: &str, local_addr: &str) {
         if let Some(k) = new_ident_key(remote_addr, local_addr) {
-            self.entries.write().unwrap().remove(&k);
+            crate::state_lock::write(&self.entries).remove(&k);
         }
     }
 
@@ -84,7 +84,7 @@ impl Identd {
                     remote_port,
                     local_port,
                 };
-                let ident = self.entries.read().unwrap().get(&key).cloned();
+                let ident = crate::state_lock::read(&self.entries).get(&key).cloned();
                 match ident {
                     // UNKNOWN is from RFC 1340; IRC servers may reject OTHER.
                     Some(ident) => (format!("{query} : USERID : UNKNOWN : {ident}\r\n"), true),
@@ -112,6 +112,11 @@ mod tests {
     use super::*;
 
     #[tokio::test(start_paused = true)]
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn stalled_reply_times_out() {
         let identd = Identd::new();
         identd.store("10.0.0.1:2", "10.0.0.2:1", "user");
@@ -126,6 +131,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn truncated_query_is_not_processed() {
         let identd = Identd::new();
         identd.store("10.0.0.1:2", "10.0.0.2:1", "user");
@@ -143,6 +152,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn query() {
         let identd = Identd::new();
         identd.store("10.0.0.1:6667", "10.0.0.2:40000", "abcdef");

@@ -147,7 +147,9 @@ impl User {
         if was_attached {
             self.handle_upstream_disconnected(ni);
         }
-        let mut uc = self.networks[ni].conn.take().unwrap();
+        let Some(mut uc) = self.networks[ni].conn.take() else {
+            return;
+        };
         uc.conn.close();
         uc.stop_timers();
 

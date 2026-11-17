@@ -5,10 +5,14 @@ use super::*;
 
 /// Sends the welcome burst to a newly registered connection.
 pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     {
         let dc = &mut u.downstreams[i];
-        assert!(dc.registered, "tried to welcome an unregistered connection");
+        if !dc.registered {
+            anyhow::bail!("cannot welcome an unregistered connection");
+        }
         dc.logger = u.srv.logger.with_prefix(format!(
             "user {:?}: downstream {:?}: ",
             u.record.username, dc.info.remote_addr
@@ -17,12 +21,16 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
 
     load_network(u, dc_id)?;
 
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     u.downstreams[i].registration = None;
 
     update_supported_caps(u, dc_id);
 
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
     let nick = current_nick(u, net_idx);
     let cfg = u.srv.config();
@@ -50,7 +58,9 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
         ));
     }
     update_isupport(u, dc_id);
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if let Some(ni) = net_idx
         && let Some(uc) = u.networks[ni].upstream()
     {
@@ -67,7 +77,9 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
     let cm = net_idx
         .map(|ni| u.networks[ni].casemap)
         .unwrap_or(xirc::CASEMAPPING_ASCII);
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     u.downstreams[i].update_casemapping(cm);
 
     {
@@ -151,7 +163,9 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 if last_delivered.is_empty() {
                     continue;
                 }
-                let i = u.dc_index(dc_id).unwrap();
+                let i = u.dc_index(dc_id).ok_or_else(|| {
+                    anyhow::anyhow!("required user or connection state is unavailable")
+                })?;
                 send_target_backlog(u, i, ni, &target, &last_delivered);
 
                 // Fast-forward history to last message
@@ -161,7 +175,9 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 match store.last_msg_id(&net.record, &target_cm) {
                     Ok(last_id) => net.delivered.store_id(&target, &client, &last_id),
                     Err(e) => {
-                        let i = u.dc_index(dc_id).unwrap();
+                        let i = u.dc_index(dc_id).ok_or_else(|| {
+                            anyhow::anyhow!("required user or connection state is unavailable")
+                        })?;
                         logf!(
                             u.downstreams[i].logger,
                             "failed to get last message ID: {e}"

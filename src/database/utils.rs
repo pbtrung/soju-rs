@@ -3,6 +3,10 @@ fn starts_hex_color(s: &[u8]) -> bool {
 }
 
 /// Strips IRC formatting characters from a string.
+#[expect(
+    clippy::expect_used,
+    reason = "Only ASCII control bytes and their ASCII arguments are removed from valid UTF-8."
+)]
 pub fn strip_ansi(s: &str) -> String {
     const FORMAT_CHARS: &[char] = &[
         '\x02', '\x1D', '\x1F', '\x1E', '\x11', '\x16', '\x0F', '\x03', '\x04',

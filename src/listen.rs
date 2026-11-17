@@ -329,6 +329,10 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn unix_binding_preserves_live_sockets_and_regular_files() {
         let path = std::env::temp_dir().join(format!(
             "soju-listener-{}-{}",

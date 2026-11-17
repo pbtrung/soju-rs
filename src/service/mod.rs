@@ -604,6 +604,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn lookup() {
         let w = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
         let words = w("net crea -addr x");
@@ -640,6 +644,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn durations() {
         use std::time::Duration;
         assert_eq!(parse_go_duration("0"), Some(Duration::ZERO));

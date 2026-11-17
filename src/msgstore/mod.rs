@@ -236,6 +236,10 @@ mod tests {
 
     // Reference IDs produced by upstream Go soju
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn go_compat() {
         assert_eq!(
             memory::format_memory_msg_id(42, "#soju", 1234567),
@@ -269,6 +273,10 @@ mod tests {
         assert!(parse_msg_id("").is_err());
     }
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn database_ids_reject_values_outside_signed_storage_range() {
         assert!(db::format_db_msg_id(1, "#a", -1).is_err());
         let huge = format_msg_id(1, "#a", MSG_ID_DB, |w| w.uint(u64::MAX));

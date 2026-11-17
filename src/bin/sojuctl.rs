@@ -137,10 +137,16 @@ fn main() -> ExitCode {
         }
     };
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("failed to start the async runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to start the async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let result = rt.block_on(run(&cfg, &args));
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -156,6 +162,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn quoting() {
         let words: Vec<String> = ["user", "create", "-password", "a \"b\"\\"]
             .iter()
@@ -170,6 +180,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn quoting_roundtrip() {
         for word in [
             "a\tb",

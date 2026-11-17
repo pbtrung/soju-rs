@@ -15,9 +15,11 @@ pub fn abort_pending_commands(
                 continue;
             };
             let nick = dc.nick.clone();
-            match cmd.msg.command.as_str() {
-                "LIST" => dc.send_message(msg!(RPL_LISTEND, nick, "Command aborted")),
-                "WHO" => {
+            match cmd.kind {
+                PendingCommandKind::List => {
+                    dc.send_message(msg!(RPL_LISTEND, nick, "Command aborted"))
+                }
+                PendingCommandKind::Who => {
                     let mask = cmd
                         .msg
                         .params
@@ -26,18 +28,18 @@ pub fn abort_pending_commands(
                         .unwrap_or_else(|| "*".to_owned());
                     dc.send_message(msg!(RPL_ENDOFWHO, nick, mask, "Command aborted"));
                 }
-                "WHOIS" => {
+                PendingCommandKind::Whois => {
                     let target = cmd.msg.params.last().cloned().unwrap_or_default();
                     dc.send_message(msg!(RPL_ENDOFWHOIS, nick, target, "Command aborted"));
                 }
-                "AUTHENTICATE" => {
+                PendingCommandKind::Authenticate => {
                     dc.end_sasl(Some(msg!(
                         ERR_SASLABORTED,
                         nick,
                         "SASL authentication aborted"
                     )));
                 }
-                "REGISTER" | "VERIFY" => {
+                PendingCommandKind::Register | PendingCommandKind::Verify => {
                     let account = cmd
                         .msg
                         .params
@@ -52,7 +54,7 @@ pub fn abort_pending_commands(
                         "Command aborted"
                     ));
                 }
-                _ => dc.send_message(msg!(
+                PendingCommandKind::Unsupported => dc.send_message(msg!(
                     ERR_UNKNOWNCOMMAND,
                     nick,
                     cmd.msg.command.clone(),
@@ -92,14 +94,14 @@ pub fn enqueue_command(
     msg: Message,
 ) -> Result<(), Box<PendingCommand>> {
     let pending = PendingCommand {
+        kind: PendingCommandKind::parse(&msg.command),
         downstream_id: dc_id,
         downstream_label: label,
         msg,
         sent_at: None,
     };
-    match pending.msg.command.as_str() {
-        "LIST" | "WHO" | "WHOIS" | "AUTHENTICATE" | "REGISTER" | "VERIFY" => {}
-        _ => return Err(Box::new(pending)),
+    if pending.kind == PendingCommandKind::Unsupported {
+        return Err(Box::new(pending));
     }
     let cmd = pending.msg.command.clone();
     let l = uc.pending_cmds.entry(cmd.clone()).or_default();

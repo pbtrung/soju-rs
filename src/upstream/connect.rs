@@ -17,6 +17,10 @@ pub struct RunnerParams {
 /// until the network is stopped.
 pub async fn run_network(p: RunnerParams) {
     let mut last_try: Option<Instant> = None;
+    #[expect(
+        clippy::expect_used,
+        reason = "The constant positive backoff bounds are ordered and validated at construction."
+    )]
     let mut backoff = Backoffer::new(
         crate::user::RETRY_CONNECT_MIN_DELAY,
         crate::user::RETRY_CONNECT_MAX_DELAY,
@@ -34,7 +38,7 @@ pub async fn run_network(p: RunnerParams) {
         let elapsed = last_try.map(|t| t.elapsed()).unwrap_or(Duration::MAX);
         if delay > elapsed {
             let delay = delay - elapsed;
-            let addr = p.record.lock().unwrap().addr.clone();
+            let addr = crate::state_lock::lock(&p.record).addr.clone();
             logf!(
                 p.logger,
                 "waiting {}s before trying to reconnect to {addr:?}",
@@ -48,7 +52,7 @@ pub async fn run_network(p: RunnerParams) {
         }
         last_try = Some(Instant::now());
 
-        let record = p.record.lock().unwrap().clone();
+        let record = crate::state_lock::lock(&p.record).clone();
         let net_id = record.id;
         let res = metrics::with_gauge(&p.srv.metrics.upstreams, run_conn(&p, &record)).await;
 

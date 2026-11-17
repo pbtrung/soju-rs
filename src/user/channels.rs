@@ -47,7 +47,9 @@ impl User {
                 String::new()
             }
         };
-        net.channels.get_mut(name).unwrap().detached_internal_msg_id = id;
+        if let Some(channel) = net.channels.get_mut(name) {
+            channel.detached_internal_msg_id = id;
+        }
 
         if let Some(uc) = net.upstream_mut()
             && let Some(uch) = uc.channels.get_mut(&ch_name)
@@ -131,7 +133,7 @@ impl User {
         net.casemap = cm;
         net.channels.set_casemapping(cm);
         net.delivered.m.set_casemapping(cm);
-        net.push_targets.lock().unwrap().set_casemapping(cm);
+        crate::state_lock::lock(&net.push_targets).set_casemapping(cm);
         if let Some(uc) = &mut net.conn {
             uc.channels.set_casemapping(cm);
             for uch in uc.channels.values_mut() {

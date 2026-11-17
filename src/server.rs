@@ -107,13 +107,13 @@ impl Server {
     }
 
     pub fn config(&self) -> Arc<ServerConfig> {
-        self.config.read().unwrap().clone()
+        crate::state_lock::read(&self.config).clone()
     }
 
     pub fn set_config(&self, cfg: ServerConfig) {
         self.client_cert_auth
             .store(cfg.basic.client_cert_auth, Ordering::Relaxed);
-        *self.config.write().unwrap() = Arc::new(cfg);
+        *crate::state_lock::write(&self.config) = Arc::new(cfg);
     }
 
     /// Applies a reloaded configuration. The message store can't be
@@ -169,7 +169,7 @@ impl Server {
 
         let users = self.db.list_users()?;
         {
-            let mut map = self.users.lock().unwrap();
+            let mut map = crate::state_lock::lock(&self.users);
             for user in users {
                 self.add_user_locked(&mut map, user);
             }
@@ -226,15 +226,16 @@ impl Server {
                     .map_err(|e| anyhow!("failed to store Web push config: {e}"))?;
                 config
             }
-            1 => configs.into_iter().next().unwrap(),
+            1 => configs.into_iter().next().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?,
             n => bail!("expected zero or one Web push config, got {n}"),
         };
-        self.web_push.get_or_init(|| {
-            Arc::new(webpush::Sender::new(
-                &config.vapid_public,
-                &config.vapid_private,
-            ))
-        });
+        let sender = Arc::new(webpush::Sender::new(
+            &config.vapid_public,
+            &config.vapid_private,
+        )?);
+        self.web_push.get_or_init(|| sender);
         Ok(())
     }
 
@@ -243,7 +244,10 @@ impl Server {
         logf!(self.logger, "shutting down server");
         self.stop.cancel();
         self.shutdown.store(true, Ordering::SeqCst);
-        let handles: Vec<UserHandle> = self.users.lock().unwrap().values().cloned().collect();
+        let handles: Vec<UserHandle> = crate::state_lock::lock(&self.users)
+            .values()
+            .cloned()
+            .collect();
         for h in &handles {
             h.send(Event::Stop);
         }
@@ -292,7 +296,7 @@ impl Server {
                 logf!(srv.logger, "panic serving user {username:?}: {e}");
                 crate::metrics::inc(&srv.metrics.worker_panics_total);
             }
-            srv.users.lock().unwrap().remove(&username);
+            crate::state_lock::lock(&srv.users).remove(&username);
             done.cancel();
         });
         handle
@@ -300,17 +304,17 @@ impl Server {
 
     /// Creates a user in the database and starts it.
     pub fn create_user(self: &Arc<Self>, mut record: db::User) -> Result<UserHandle> {
-        let _creating = self.user_creation.lock().unwrap();
+        let _creating = crate::state_lock::lock(&self.user_creation);
         if self.is_shutting_down() {
             bail!("server is shutting down");
         }
-        if self.users.lock().unwrap().contains_key(&record.username) {
+        if crate::state_lock::lock(&self.users).contains_key(&record.username) {
             bail!("user {:?} already exists", record.username);
         }
         self.db
             .store_user(&mut record)
             .map_err(|e| anyhow!("could not create user in db: {e}"))?;
-        let mut users = self.users.lock().unwrap();
+        let mut users = crate::state_lock::lock(&self.users);
         // The database write may have overlapped shutdown. Hold the same lock
         // used by its snapshot: either this handle is included or none starts.
         if self.is_shutting_down() {
@@ -320,11 +324,14 @@ impl Server {
     }
 
     pub fn get_user(&self, name: &str) -> Option<UserHandle> {
-        self.users.lock().unwrap().get(name).cloned()
+        crate::state_lock::lock(&self.users).get(name).cloned()
     }
 
     pub fn for_each_user(&self, mut f: impl FnMut(&UserHandle)) {
-        let handles: Vec<UserHandle> = self.users.lock().unwrap().values().cloned().collect();
+        let handles: Vec<UserHandle> = crate::state_lock::lock(&self.users)
+            .values()
+            .cloned()
+            .collect();
         for h in &handles {
             f(h);
         }
@@ -332,9 +339,7 @@ impl Server {
 
     /// Copies of the records of all running users.
     pub fn user_records(&self) -> Vec<db::User> {
-        self.users
-            .lock()
-            .unwrap()
+        crate::state_lock::lock(&self.users)
             .values()
             .map(|h| h.record())
             .collect()
@@ -355,7 +360,7 @@ impl Server {
             let loaded = tokio::task::spawn_blocking(move || {
                 // A concurrent creator may have committed its DB row while
                 // still registering the running handle.
-                let _creating = srv.user_creation.lock().unwrap();
+                let _creating = crate::state_lock::lock(&srv.user_creation);
                 srv.get_user(&name)
             })
             .await?;
@@ -389,14 +394,15 @@ impl Server {
 
     pub fn stats(&self) -> ServerStats {
         ServerStats {
-            users: self.users.lock().unwrap().len(),
+            users: crate::state_lock::lock(&self.users).len(),
             downstreams: self.metrics.downstreams.load(Ordering::Relaxed),
             upstreams: self.metrics.upstreams.load(Ordering::Relaxed),
         }
     }
 
     pub fn render_metrics(&self) -> String {
-        self.metrics.render(self.users.lock().unwrap().len())
+        self.metrics
+            .render(crate::state_lock::lock(&self.users).len())
     }
 }
 

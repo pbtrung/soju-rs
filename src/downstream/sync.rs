@@ -120,7 +120,11 @@ pub fn forward_channel(
     net_id: i64,
     cm: CaseMapping,
 ) {
-    assert!(ch.complete, "Tried to forward a partial channel");
+    if !ch.complete {
+        logf!(dc.logger, "cannot forward an incomplete channel state");
+        dc.conn.close();
+        return;
+    }
 
     // RPL_NOTOPIC shouldn't be sent on JOIN
     if !ch.topic.is_empty() {
@@ -323,6 +327,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn topic_unix_seconds_preserve_pre_epoch_rounding() {
         for (input, seconds) in [
             ("1969-12-31T23:59:58.999999999Z", -2),

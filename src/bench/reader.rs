@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn sample(payload: usize, messages: usize) -> Duration {
+async fn sample(payload: usize, messages: usize) -> anyhow::Result<Duration> {
     let line = format!(
         ":nick!user@host PRIVMSG #channel :{}\r\n",
         "x".repeat(payload)
@@ -23,27 +23,28 @@ async fn sample(payload: usize, messages: usize) -> Duration {
     let (conn, mut reader) = Conn::new_stream(Box::new(a), Logger::new(false), None);
     let producer = tokio::spawn(async move {
         for _ in 0..messages / 128 {
-            b.write_all(chunk.as_bytes()).await.unwrap();
+            b.write_all(chunk.as_bytes()).await?;
         }
-        b.shutdown().await.unwrap();
+        b.shutdown().await?;
+        Ok::<(), std::io::Error>(())
     });
     let start = Instant::now();
     let mut received = 0;
     let mut bytes = 0;
-    while let Some((message, permit)) = reader.read_message_limited().await.unwrap() {
+    while let Some((message, permit)) = reader.read_message_limited().await? {
         bytes += black_box(&message).param(1).len();
         received += 1;
         drop(permit);
     }
     let elapsed = start.elapsed();
-    producer.await.unwrap();
+    producer.await??;
     conn.close();
     assert_eq!(received, messages);
     assert_eq!(bytes, messages * payload);
-    elapsed
+    Ok(elapsed)
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--layout") {
         use std::mem::size_of;
         for (name, size) in [
@@ -61,32 +62,32 @@ fn main() {
         ] {
             println!("{name:20} {size:5} bytes");
         }
-        return;
+        return Ok(());
     }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .unwrap();
+        .build()?;
     rt.block_on(async {
         for (payload, messages) in [(32, 65536), (256, 65536), (4096, 8192)] {
             // Cargo also executes custom benchmarks in `test --all-targets`.
             // Verify each workload in debug builds; measure optimized builds.
             if cfg!(debug_assertions) {
-                sample(payload, 128).await;
+                sample(payload, 128).await?;
                 continue;
             }
-            sample(payload, 1024).await;
-            let mut samples = Vec::new();
-            for _ in 0..7 {
-                samples.push(sample(payload, messages).await);
+            sample(payload, 1024).await?;
+            let mut samples = [Duration::ZERO; 7];
+            for slot in &mut samples {
+                *slot = sample(payload, messages).await?;
             }
             samples.sort();
             println!(
                 "payload={payload:4} bytes: median={:.1} ns/message, range={:.1}..{:.1}",
-                samples[3].as_nanos() as f64 / messages as f64,
-                samples[0].as_nanos() as f64 / messages as f64,
-                samples[6].as_nanos() as f64 / messages as f64,
+                samples[3].as_secs_f64() * 1e9 / f64::from(u32::try_from(messages)?),
+                samples[0].as_secs_f64() * 1e9 / f64::from(u32::try_from(messages)?),
+                samples[6].as_secs_f64() * 1e9 / f64::from(u32::try_from(messages)?),
             );
         }
-    });
+        Ok(())
+    })
 }

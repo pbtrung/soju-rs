@@ -121,6 +121,11 @@ pub(super) async fn labeled_response_ack() {
 
 /// A peer sending commands before registration without reading their
 /// replies is disconnected, rather than having them buffered.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn unread_replies_before_registration() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let env = setup(db_store()).await;
@@ -189,6 +194,10 @@ pub(super) async fn monitor_invalid_targets() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn setname_survives_network_update() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

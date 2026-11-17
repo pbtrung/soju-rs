@@ -94,6 +94,10 @@ pub(super) async fn sasl_chunk_boundaries() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn disabled_admin_impersonation() {
     use base64::Engine;
     let env = setup_with(

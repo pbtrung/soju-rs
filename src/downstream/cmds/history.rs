@@ -181,7 +181,11 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                 }
                 // There are no messages before, subtract an arbitrary amount
                 // of time to make the bound inclusive
-                None => bounds[0].unwrap() - jiff::SignedDuration::from_secs(1),
+                None => {
+                    bounds[0].ok_or_else(|| {
+                        anyhow::anyhow!("required user or connection state is unavailable")
+                    })? - jiff::SignedDuration::from_secs(1)
+                }
             };
             let after = store.load_after_time(
                 Some(after_bound),
@@ -410,7 +414,7 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 
     let mut push = false;
     {
-        let mut pt = u.networks[ni].push_targets.lock().unwrap();
+        let mut pt = crate::state_lock::lock(&u.networks[ni].push_targets);
         if broadcast && pt.has(&target) {
             // TODO: only broadcast if draft/read-marker has been negotiated
             if let (Some(rt), Some(&t)) = (r.timestamp, pt.get(&target))

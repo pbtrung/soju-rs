@@ -88,6 +88,19 @@ pub fn chathistory_error(subcommand: &str, target: &str) -> anyhow::Error {
     ))
 }
 
+impl DownstreamConn {
+    pub(crate) fn registration_state(&self) -> Result<&Registration> {
+        self.registration
+            .as_ref()
+            .ok_or_else(|| anyhow!("connection is already registered"))
+    }
+    pub(crate) fn registration_state_mut(&mut self) -> Result<&mut Registration> {
+        self.registration
+            .as_mut()
+            .ok_or_else(|| anyhow!("connection is already registered"))
+    }
+}
+
 /// Checks that a message has at least n parameters.
 pub fn need_params(msg: &Message, n: usize) -> Result<()> {
     if msg.params.len() < n {
@@ -384,7 +397,9 @@ fn multiline_limits(u: &User, i: usize) -> Option<xirc::MultilineLimits> {
 /// Handles a client-initiated batch. Only draft/multiline batches are
 /// supported: once complete, they are handled as a single message.
 fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let tag = msg.param(0);
     if let Some(r) = tag.strip_prefix('+') {
         let dc = &mut u.downstreams[i];
@@ -478,7 +493,9 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
 /// Handles a message from a registered downstream connection.
 pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     metrics::inc(&u.srv.metrics.downstream_in_messages_total);
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if msg.command == "BATCH" {
         return handle_batch(u, dc_id, msg);
     }
@@ -496,7 +513,9 @@ pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
 
 /// Handles a message, replying with a labeled-response if requested.
 fn handle_message_labeled(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     begin_message(&mut u.downstreams[i], msg);
     let res = match msg.command.as_str() {
         "QUIT" => {
@@ -636,7 +655,15 @@ pub async fn serve(
         }
     }
 
-    let username = dc.registration.as_ref().unwrap().auth_username.clone();
+    let Some(registration) = dc.registration.as_ref() else {
+        logf!(
+            dc.logger,
+            "registration state was lost before user attachment"
+        );
+        conn.close();
+        return;
+    };
+    let username = registration.auth_username.clone();
     let user = match srv.get_or_create_user(&username).await {
         Ok(u) => u,
         Err(e) => {
@@ -715,6 +742,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn network_attrs_roundtrip() {
         let mut n = db::Network::new("irc+insecure://irc.example.org:6667");
         let mut attrs = Tags::new();
@@ -729,5 +760,20 @@ mod tests {
         assert!(update_network_attrs(&mut n, &Tags::parse("bogus=1"), "X").is_err());
         let mut n = db::Network::new("");
         assert!(update_network_attrs(&mut n, &Tags::parse("port=1"), "ADDNETWORK").is_err());
+    }
+    #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "The in-memory registration fixture must initialize successfully."
+    )]
+    async fn missing_registration_is_an_error() {
+        let server = Server::new(db::Database::open_in_memory().unwrap(), Logger::new(false));
+        let (io, _peer) = tokio::io::duplex(1024);
+        let (conn, _reader) = Conn::new_stream(Box::new(io), Logger::new(false), None);
+        let mut dc = DownstreamConn::new(server, conn, ConnInfo::default(), 1, Logger::new(false));
+        dc.registration = None;
+        assert!(dc.registration_state().is_err());
+        assert!(dc.registration_state_mut().is_err());
+        dc.conn.close();
     }
 }

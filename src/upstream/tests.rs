@@ -9,6 +9,10 @@ fn errno_messages() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn labels() {
     assert_eq!(parse_label("").unwrap(), (0, String::new()));
     assert_eq!(

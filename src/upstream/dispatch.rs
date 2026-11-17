@@ -79,7 +79,14 @@ fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline>
         if let Some(r) = tag.strip_prefix('-')
             && uc.batches.get(r).is_some_and(|b| b.multiline.is_some())
         {
-            let batch = uc.batches.remove(r).unwrap().multiline.unwrap();
+            let batch = uc
+                .batches
+                .remove(r)
+                .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
+                .multiline
+                .ok_or_else(|| {
+                    anyhow::anyhow!("required user or connection state is unavailable")
+                })?;
             return match batch.finish() {
                 Ok(m) => Ok(Multiline::Complete(m)),
                 Err(e) => {

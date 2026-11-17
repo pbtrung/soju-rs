@@ -45,8 +45,16 @@ impl Backoffer {
 
         if !self.jitter.is_zero() {
             let j = rand::rng().random_range(0..self.jitter.as_nanos());
+            #[expect(
+                clippy::expect_used,
+                reason = "A sample below Duration::MAX fits the seconds range."
+            )]
             let secs = u64::try_from(j / 1_000_000_000)
                 .expect("a sample below a Duration fits its seconds range");
+            #[expect(
+                clippy::expect_used,
+                reason = "The remainder is strictly below one billion and fits u32."
+            )]
             let nanos = u32::try_from(j % 1_000_000_000)
                 .expect("nanosecond remainder is below one billion");
             d = d.saturating_add(Duration::new(secs, nanos));
@@ -97,6 +105,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn backoff() {
         let mut b = Backoffer::new(
             Duration::from_secs(1),
@@ -120,6 +132,10 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn limiter() {
         let mut rl = RateLimiter::new(Duration::from_secs(2), 3).unwrap();
         let start = Instant::now();
@@ -133,6 +149,10 @@ mod tests {
         assert!(start.elapsed() >= Duration::from_secs(4));
     }
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn invalid_rates_and_large_jitter_are_checked() {
         assert!(RateLimiter::new(Duration::ZERO, 1).is_err());
         assert!(RateLimiter::new(Duration::from_secs(1), 0).is_err());

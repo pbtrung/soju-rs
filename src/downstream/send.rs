@@ -201,7 +201,9 @@ impl DownstreamConn {
                 self.raw_send(m);
             }
         }
-        let label = self.label.as_mut().unwrap();
+        let Some(label) = self.label.as_mut() else {
+            return;
+        };
         if !label.batch.is_empty() {
             // send the current reply in the batch
             if reply[0].tags.get_or_empty("batch").is_empty() {

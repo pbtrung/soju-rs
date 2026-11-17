@@ -46,7 +46,7 @@ impl ConnReader {
             &self.input
         };
         let permit = tokio::select! {
-            p = input.clone().acquire_owned() => Some(p.expect("semaphore is never closed")),
+            p = input.clone().acquire_owned() => Some(p?),
             _ = self.cancel.cancelled() => return Ok(None),
         };
         Ok(self.pending.take().map(|msg| (msg, permit)))

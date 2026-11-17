@@ -154,7 +154,7 @@ impl UserHandle {
     }
 
     pub fn record(&self) -> db::User {
-        self.record.lock().unwrap().clone()
+        crate::state_lock::lock(&self.record).clone()
     }
 
     /// Stops the user and waits for its event loop to exit.
@@ -325,7 +325,7 @@ impl User {
         };
         res.map_err(|e| anyhow!("failed to update user {:?}: {e}", self.record.username))?;
         self.record = record;
-        *self.handle_record.lock().unwrap() = self.record.clone();
+        *crate::state_lock::lock(&self.handle_record) = self.record.clone();
 
         if nick_updated {
             for net in &mut self.networks {
@@ -398,7 +398,7 @@ impl User {
             return;
         }
         self.record.downstream_interacted_at = Some(now);
-        self.handle_record.lock().unwrap().downstream_interacted_at = Some(now);
+        crate::state_lock::lock(&self.handle_record).downstream_interacted_at = Some(now);
     }
 }
 
@@ -449,6 +449,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn local_addr() {
         let nets: Vec<ipnet::IpNet> = vec![
             "192.168.0.0/30".parse().unwrap(),

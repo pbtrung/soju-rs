@@ -153,6 +153,10 @@ mod tests {
     use crate::msg;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn ring() {
         let net = Network {
             id: 1,
@@ -199,6 +203,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn delete_network() {
         let mut s = MemoryStore::new();
         for id in [1, 2] {
@@ -212,6 +220,10 @@ mod tests {
         assert_eq!(s.buffers.keys().map(|k| k.0).collect::<Vec<_>>(), [2]);
     }
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn exhausted_sequence_and_zero_capacity_do_not_mutate_history() {
         let mut ring = RingBuffer::new(1);
         ring.append(msg!("PRIVMSG", "#a", "retained")).unwrap();

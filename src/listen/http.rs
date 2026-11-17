@@ -292,7 +292,15 @@ fn handle_websocket(
     h.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
     h.insert(
         header::SEC_WEBSOCKET_ACCEPT,
-        HeaderValue::from_str(&accept).unwrap(),
+        match HeaderValue::from_str(&accept) {
+            Ok(value) => value,
+            Err(_) => {
+                return response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid WebSocket accept value\n",
+                );
+            }
+        },
     );
     if let Some(p) = subprotocol
         && let Ok(v) = HeaderValue::from_str(&p)
@@ -326,6 +334,10 @@ mod tests {
     use super::*;
     /// Lines bigger than the WebSocket buffers still go through, both ways.
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn websocket_large_lines() {
         let (a, b) = tokio::io::duplex(1 << 16);
         let logger = crate::logger::Logger::new(false);

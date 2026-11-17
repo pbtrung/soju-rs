@@ -80,9 +80,11 @@ failures separately and use the available approval mechanism to rerun them.
 unsafe prohibition and must-use/future checks. Keep exceptions on the specific
 statement or test that needs them, using `#[expect(..., reason = "...")]`.
 Current exceptions cover delivery after receiver cancellation, the final stderr
-log sink, fixture cleanup and deliberate test failures. Operational errors must
-be handled or propagated. Numeric cast checks are enforced after STEP-009. Remaining internal indexing,
-unwrap/expect, pedantic and error-mapping policy is staged in STEP-010–011; passing the core policy does not close
+log sink, fixed UTF-8/constants, fail-closed poisoned state locks, fixture cleanup
+and deliberate test failures. `src/state_lock.rs` defines actor/auth poison policy;
+SQLite separately recovers after transaction rollback, with regression coverage. Operational errors must
+be handled or propagated. Numeric cast checks are enforced after STEP-009. Unwrap/expect checks are enforced after STEP-010. Remaining internal indexing,
+pedantic and error-mapping policy is staged in STEP-011; passing the core policy does not close
 the full LINT-001 finding.
 
 - Rustdoc changes: run `cargo doc --workspace --all-features --no-deps --locked`.

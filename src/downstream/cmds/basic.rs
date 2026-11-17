@@ -163,7 +163,9 @@ pub(super) fn handle_join(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             dc!(u, i).send_message(msg!(ERR_BADCHANMASK, nick, name, "Invalid channel name"));
             continue;
         }
-        let uc = u.networks[ni].upstream().unwrap();
+        let uc = u.networks[ni]
+            .upstream()
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         if !uc.is_channel(&name) {
             dc!(u, i).send_message(msg!(ERR_NOSUCHCHANNEL, nick, name, "Not a channel name"));
             continue;
@@ -251,7 +253,7 @@ pub(super) fn handle_part(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             if let Err(e) = u.delete_channel(ni, &name) {
                 logf!(dc!(u, i).logger, "failed to delete channel {name:?}: {e}");
             }
-            u.networks[ni].push_targets.lock().unwrap().del(&name);
+            crate::state_lock::lock(&u.networks[ni].push_targets).del(&name);
         }
     }
     Ok(())
@@ -278,7 +280,9 @@ pub(super) fn handle_mode(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     }
 
     let ni = upstream_for_command(u, i, &msg.command)?;
-    let uc = u.networks[ni].upstream().unwrap();
+    let uc = u.networks[ni]
+        .upstream()
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if !uc.is_channel(&name) {
         return Err(irc_error(msg!(
             ERR_USERSDONTMATCH,

@@ -51,7 +51,9 @@ fn internal_error(cmd: &str, context: &str) -> anyhow::Error {
 }
 
 pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     match msg.command.as_str() {
         "CAP" => return u.downstreams[i].handle_cap(msg),
         "PING" => {
@@ -103,7 +105,9 @@ pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Res
                 send_upstream_labeled(u, i, ni, msg!("TOPIC", name, msg.params[1].clone()));
             } else {
                 // getting topic
-                let uc = u.networks[ni].upstream().unwrap();
+                let uc = u.networks[ni].upstream().ok_or_else(|| {
+                    anyhow::anyhow!("required user or connection state is unavailable")
+                })?;
                 match uc.channels.get(&name) {
                     // we're not on that channel, pass command to upstream
                     None => send_upstream_labeled(u, i, ni, msg.clone()),
@@ -129,7 +133,9 @@ pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Res
                 dc!(u, i).drop_label();
             }
             for name in channels {
-                let uc = u.networks[ni].upstream().unwrap();
+                let uc = u.networks[ni].upstream().ok_or_else(|| {
+                    anyhow::anyhow!("required user or connection state is unavailable")
+                })?;
                 match uc.channels.get(&name) {
                     Some(ch) => send_names(&mut u.downstreams[i], ch),
                     None => send_upstream_labeled(u, i, ni, msg!("NAMES", name)),
@@ -160,8 +166,12 @@ pub fn handle_message_registered(u: &mut User, dc_id: u64, msg: &Message) -> Res
                     "Upstream network account registration not supported",
                 ]));
             }
-            let ni = ni.unwrap();
-            let uc = u.networks[ni].upstream().unwrap();
+            let ni = ni.ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
+            let uc = u.networks[ni].upstream().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             logf!(
                 uc.logger,
                 "starting {} with account name {}",

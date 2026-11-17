@@ -38,6 +38,10 @@ PRAGMA user_version = 1;
 ";
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn migrations() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(SQLITE_V0_SCHEMA).unwrap();
@@ -64,6 +68,10 @@ fn migrations() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn message_text_index_migration() {
     for manual_index in [false, true] {
         // Build the previous schema using its original migrations.
@@ -164,6 +172,10 @@ fn message_text_index_migration() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn newer_schema_rejected() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA user_version = 999").unwrap();
@@ -172,6 +184,10 @@ fn newer_schema_rejected() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn repeated_migration_after_another_initializer_is_a_noop() {
     let mut connection = Connection::open_in_memory().unwrap();
     Database::run_migrations(&mut connection).unwrap();

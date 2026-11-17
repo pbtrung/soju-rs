@@ -4,6 +4,10 @@ use crate::{msg, xirc};
 use jiff::Timestamp;
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn oversized_maintenance_durations_return_errors() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     for duration in [Duration::MAX, Duration::from_secs(20_000 * 366 * 86400)] {
@@ -17,6 +21,10 @@ async fn oversized_maintenance_durations_return_errors() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn vacuum_requires_25_percent_free_and_maintenance_request() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     let mut cfg = ServerConfig::default();
@@ -60,6 +68,10 @@ fn vacuum_requires_25_percent_free_and_maintenance_request() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn create_user_on_auth_concurrently() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     let mut cfg = ServerConfig::default();
@@ -77,6 +89,10 @@ async fn create_user_on_auth_concurrently() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn msg_store_not_reloaded() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     srv.set_config(ServerConfig::default());
@@ -92,6 +108,10 @@ fn msg_store_not_reloaded() {
 /// A reload changing message-expiry applies it right away, and a user
 /// listed by start() and created meanwhile runs once.
 #[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn expiry_reload_and_duplicate_users() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     srv.set_config(ServerConfig::default());
@@ -143,6 +163,10 @@ async fn expiry_reload_and_duplicate_users() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn user_creation_is_rejected_after_shutdown() {
     let server = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     server.start().unwrap();
@@ -153,6 +177,11 @@ async fn user_creation_is_rejected_after_shutdown() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn concurrent_creation_cannot_escape_the_shutdown_snapshot() {
     for _ in 0..16 {
         let server = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));

@@ -98,6 +98,8 @@ impl Database {
         Ok(db)
     }
 
+    // rusqlite transactions roll back on drop, including unwinding. Recovery
+    // keeps SQLite authoritative rather than recovering partially changed actor state.
     pub(super) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }

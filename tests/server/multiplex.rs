@@ -32,6 +32,10 @@ pub(super) async fn multiplex_not_attached_label() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn multiplex() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

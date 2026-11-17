@@ -255,7 +255,9 @@ impl UpstreamConn {
         if let Some(uu) = self.users.get_mut(nick) {
             uu.update_from(&info);
             if !info.nickname.is_empty() && nick != info.nickname {
-                let uu = self.users.del(nick).unwrap();
+                let Some(uu) = self.users.del(nick) else {
+                    return;
+                };
                 let new_nick = uu.nickname.clone();
                 self.users.set(&new_nick, uu);
             }

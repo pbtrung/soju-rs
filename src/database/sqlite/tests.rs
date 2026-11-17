@@ -6,6 +6,10 @@ use crate::irc::Message;
 use crate::msg;
 use rusqlite::Connection;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn db() -> Database {
     Database::open_in_memory().unwrap()
 }

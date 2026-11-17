@@ -168,6 +168,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn roundtrip() {
         let info = WhoxInfo {
             token: "42".into(),

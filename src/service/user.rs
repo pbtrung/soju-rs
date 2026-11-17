@@ -197,7 +197,8 @@ pub(super) fn handle_user_update(
             Ok(())
         });
     } else {
-        let u = u.unwrap();
+        let u =
+            u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         if admin.is_some() {
             bail!("cannot update -admin of own user");
         }

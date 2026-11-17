@@ -29,7 +29,7 @@ pub(super) fn handle_certfp_generate(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(
         &FlagSet::new()
             .string("network")
@@ -86,7 +86,7 @@ pub(super) fn handle_certfp_fingerprints(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
@@ -106,7 +106,7 @@ pub(super) fn handle_sasl_status(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
@@ -136,7 +136,7 @@ pub(super) fn handle_sasl_set_plain(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     if p.args.len() != 2 {
         bail!("expected exactly 2 arguments");
@@ -158,7 +158,7 @@ pub(super) fn handle_sasl_reset(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
@@ -192,7 +192,7 @@ pub(super) fn handle_device_cert_status(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if !params.is_empty() {
         bail!("expected no argument");
     }
@@ -227,7 +227,7 @@ pub(super) fn handle_device_cert_create(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if !ctx.srv.config().basic.client_cert_auth {
         bail!("client certification authentication is disabled");
     }
@@ -275,7 +275,7 @@ pub(super) fn handle_device_cert_delete(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }

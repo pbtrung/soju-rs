@@ -5,6 +5,10 @@ use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn stream_roundtrip() {
     let (a, b) = tokio::io::duplex(4096);
     let logger = Logger::new(false);
@@ -23,6 +27,10 @@ async fn stream_roundtrip() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn rate_limited() {
     tokio::time::pause();
     let (a, b) = tokio::io::duplex(4096);
@@ -52,6 +60,10 @@ fn tagged_message() -> Message {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn queued_line() {
     let msg = tagged_message();
     let line = format_line(&msg);
@@ -67,6 +79,10 @@ fn queued_line() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn stream_wire_format() {
     use tokio::io::AsyncReadExt;
     let (a, mut b) = tokio::io::duplex(4096);
@@ -84,6 +100,10 @@ async fn stream_wire_format() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn stream_lines_preserve_message_boundaries() {
     let (a, mut b) = tokio::io::duplex(1 << 16);
     let (_c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -118,6 +138,10 @@ async fn stream_lines_preserve_message_boundaries() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn stream_parse_error_does_not_replay_failed_line() {
     let (a, mut b) = tokio::io::duplex(4096);
     let (_c, mut r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -134,6 +158,10 @@ async fn stream_parse_error_does_not_replay_failed_line() {
 #[expect(
     clippy::panic,
     reason = "Unexpected WebSocket frames must fail this protocol fixture."
+)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
 async fn websocket_wire_format() {
     let (a, b) = tokio::io::duplex(4096);
@@ -170,6 +198,10 @@ fn outgoing_credentials_are_redacted() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn websocket_rejects_oversized_frames_without_listener_configuration() {
     let (a, b) = tokio::io::duplex(1 << 17);
     let server = WebSocketStream::from_raw_socket(
@@ -218,6 +250,10 @@ async fn queue_budget() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn input_in_flight() {
     let (a, b) = tokio::io::duplex(1 << 20);
     let (ca, _ra) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -244,6 +280,10 @@ async fn input_in_flight() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn cancelled_read_preserves_partial_line_and_length_limit() {
     for oversized in [false, true] {
         let (a, mut b) = tokio::io::duplex(1 << 16);
@@ -278,6 +318,10 @@ async fn cancelled_read_preserves_partial_line_and_length_limit() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn keepalive_flood_has_a_separate_bounded_backlog() {
     let (a, b) = tokio::io::duplex(1 << 16);
     let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -311,6 +355,10 @@ async fn keepalive_flood_has_a_separate_bounded_backlog() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn full_queue_closes_physical_connection_from_view() {
     for notify in [false, true] {
         let (a, _b) = tokio::io::duplex(4096);
@@ -331,6 +379,10 @@ async fn full_queue_closes_physical_connection_from_view() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn view() {
     let (a, b) = tokio::io::duplex(4096);
     let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -372,6 +424,10 @@ async fn view() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn line_parsing() {
     assert!(parse_line("").unwrap().is_none());
     assert_eq!(
@@ -416,6 +472,10 @@ fn failed_writer_enqueue_releases_accounting_and_closes_connection() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn transport_close_preserves_shutdown_errors() {
     use std::{
         pin::Pin,

@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn multiline() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

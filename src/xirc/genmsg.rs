@@ -243,6 +243,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn names() {
         let members: Vec<String> = (0..200).map(|i| format!("@nick{i}")).collect();
         let msgs = generate_names_reply("#chan", ChannelStatus::Public, &members);

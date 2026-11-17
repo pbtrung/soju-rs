@@ -351,6 +351,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn assemble() {
         let opener = Message::parse("@label=x;+reply=1 :a BATCH +r draft/multiline #c").unwrap();
         let mut b = MultilineBatch::new(opener);
@@ -388,6 +392,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn errors() {
         let opener = msg!("BATCH", "+r", "draft/multiline", "#c");
         let mut b = MultilineBatch::new(opener.clone());

@@ -164,7 +164,7 @@ pub(super) fn handle_message(
                     if subs.is_empty() {
                         return;
                     }
-                    push_targets.lock().unwrap().set(&buffer, timestamp);
+                    crate::state_lock::lock(&push_targets).set(&buffer, timestamp);
                     crate::user::send_web_push_to(&srv, subs, &logger, &m).await;
                 });
             }
@@ -376,7 +376,7 @@ const MENTION_FLUSH_DELAY: Duration = Duration::from_secs(1);
 /// task per network along with the others of the period.
 fn record_mention(u: &mut User, ni: usize, target_cm: String, time: Timestamp) {
     let net = &u.networks[ni];
-    let mut pending = net.pending_mentions.lock().unwrap();
+    let mut pending = crate::state_lock::lock(&net.pending_mentions);
     let first = pending.is_empty();
     let t = pending.entry(target_cm).or_insert(time);
     *t = (*t).max(time);
@@ -390,7 +390,7 @@ fn record_mention(u: &mut User, ni: usize, target_cm: String, time: Timestamp) {
     let net_id = net.id();
     tokio::spawn(async move {
         tokio::time::sleep(MENTION_FLUSH_DELAY).await;
-        let mentions = std::mem::take(&mut *pending.lock().unwrap());
+        let mentions = std::mem::take(&mut *crate::state_lock::lock(&pending));
         let r = db::run(&srv.db, move |db| {
             for (target, time) in &mentions {
                 db.store_message_target_highlight(net_id, target, *time)?;

@@ -124,10 +124,13 @@ fn main() -> ExitCode {
     } else {
         tokio::runtime::Builder::new_multi_thread()
     };
-    let rt = builder
-        .enable_all()
-        .build()
-        .expect("failed to start the async runtime");
+    let rt = match builder.enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to start the async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     rt.block_on(run(args))
 }
 
@@ -135,7 +138,10 @@ async fn run(args: Args) -> ExitCode {
     let logger = Logger::new(args.debug);
     logf!(logger, "starting soju-rs v{}", soju::VERSION);
     // Before starting: the default action of SIGHUP would kill us
-    let signals = Signals::new();
+    let signals = match Signals::new() {
+        Ok(signals) => signals,
+        Err(e) => return fatal(&logger, e),
+    };
 
     let mut raw = match load_config(&args.config_path) {
         Ok(c) => c,
@@ -216,13 +222,21 @@ struct Signals {
 
 #[cfg(unix)]
 impl Signals {
-    fn new() -> Signals {
-        use tokio::signal::unix::{SignalKind, signal};
-        Signals {
-            hup: signal(SignalKind::hangup()).expect("failed to install SIGHUP handler"),
-            term: signal(SignalKind::terminate()).expect("failed to install SIGTERM handler"),
-            int: signal(SignalKind::interrupt()).expect("failed to install SIGINT handler"),
-        }
+    fn new() -> std::io::Result<Signals> {
+        Self::install(tokio::signal::unix::signal)
+    }
+
+    fn install(
+        register: fn(
+            tokio::signal::unix::SignalKind,
+        ) -> std::io::Result<tokio::signal::unix::Signal>,
+    ) -> std::io::Result<Signals> {
+        use tokio::signal::unix::SignalKind;
+        Ok(Signals {
+            hup: register(SignalKind::hangup())?,
+            term: register(SignalKind::terminate())?,
+            int: register(SignalKind::interrupt())?,
+        })
     }
 
     /// Reloads the configuration on SIGHUP, until SIGTERM or SIGINT.
@@ -248,8 +262,8 @@ struct Signals;
 
 #[cfg(not(unix))]
 impl Signals {
-    fn new() -> Signals {
-        Signals
+    fn new() -> std::io::Result<Signals> {
+        Ok(Signals)
     }
 
     async fn wait(self, srv: &Arc<Server>, _args: &Args, _certs: &Arc<tls::CertStore>) {
@@ -269,4 +283,14 @@ async fn reload(args: &Args, certs: &Arc<tls::CertStore>) -> Result<server::Serv
         certs.set(key);
     }
     Ok(cfg)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn signal_installation_failure_is_returned() {
+        let result = Signals::install(|_| Err(std::io::ErrorKind::PermissionDenied.into()));
+        assert!(matches!(result, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+    }
 }

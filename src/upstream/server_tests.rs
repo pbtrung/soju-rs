@@ -30,6 +30,10 @@ impl TestConn {
         self.conn.send_message(msg);
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn read(&mut self) -> Message {
         tokio::time::timeout(TIMEOUT, self.reader.read_message())
             .await
@@ -70,6 +74,10 @@ async fn setup() -> Env {
 #[expect(
     clippy::panic,
     reason = "Unexpected CAP replies must fail the fake upstream handshake."
+)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
 async fn setup_with(channels: Vec<db::Channel>, caps: &str) -> Env {
     let database = Database::open_in_memory().unwrap();
@@ -292,6 +300,10 @@ async fn auto_detach() {
 /// A labeled response is relayed in a single labeled batch, batches nested
 /// in it included.
 #[tokio::test]
+#[expect(
+    clippy::expect_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn labeled_nested_batch() {
     let mut env = setup_with(Vec::new(), "batch labeled-response message-tags").await;
     env.downstream
@@ -329,6 +341,10 @@ async fn labeled_nested_batch() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn registration_timeout() {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
@@ -361,6 +377,10 @@ async fn registration_timeout() {
 
 /// CAP LS holds back CAP END while SASL is requested: a NAK must release it.
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn sasl_cap_nak_ends_capability_negotiation() {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
@@ -395,6 +415,11 @@ async fn sasl_cap_nak_ends_capability_negotiation() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn unsupported_pending_command_is_rejected_without_queueing() {
     let mut env = setup().await;
     let handle = env.srv.get_user(USERNAME).unwrap();
@@ -434,6 +459,10 @@ async fn unsupported_pending_command_is_rejected_without_queueing() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 async fn duplicate_regain_nick_start_preserves_running_retry() {
     let env = setup().await;
     let handle = env.srv.get_user(USERNAME).unwrap();

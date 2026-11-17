@@ -9,7 +9,9 @@ pub fn register(u: &mut User, ni: usize) {
     let username = get_username(&u.record, Some(&net.record)).to_owned();
     let realname = get_realname(&u.record, Some(&net.record)).to_owned();
     let pass = net.record.pass.clone();
-    let uc = net.conn.as_mut().unwrap();
+    let Some(uc) = net.conn.as_mut() else {
+        return;
+    };
     uc.nick = nick.clone();
     uc.username = username.clone();
     uc.realname = realname.clone();
@@ -28,7 +30,9 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     let net = &mut u.networks[ni];
     let commands = net.record.connect_commands.clone();
     let mechanism = net.record.sasl.mechanism.clone();
-    let uc = net.conn.as_mut().unwrap();
+    let Some(uc) = net.conn.as_mut() else {
+        return;
+    };
 
     let mut connect_msgs = Vec::new();
     for command in &commands {
@@ -122,7 +126,12 @@ pub(super) fn handle_message(
                     if sub_params.is_empty() {
                         return Err(downstream::need_more_params(&msg.command).into());
                     }
-                    let caps = sub_params.last().unwrap().clone();
+                    let caps = sub_params
+                        .last()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("required user or connection state is unavailable")
+                        })?
+                        .clone();
                     let uc = uc!(u, ni);
                     uc.handle_supported_caps(&caps);
                     if cap_ls_continued(&sub_params) {
@@ -472,7 +481,7 @@ fn request_sasl(u: &User, ni: usize) -> bool {
     if mech.is_empty() {
         return false;
     }
-    net.conn.as_ref().unwrap().supports_sasl(mech)
+    net.conn.as_ref().is_some_and(|uc| uc.supports_sasl(mech))
 }
 
 fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {

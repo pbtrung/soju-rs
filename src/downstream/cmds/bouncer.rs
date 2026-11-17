@@ -4,7 +4,9 @@
 use super::*;
 
 pub(super) fn handle_bouncer(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     need_params(msg, 1)?;
     let subcommand = msg.params[0].clone();
     match subcommand.to_uppercase().as_str() {
@@ -41,7 +43,9 @@ pub(super) fn handle_bouncer(u: &mut User, dc_id: u64, msg: &Message) -> Result<
                 }
             };
             let id = u.networks[ni].id();
-            let i = u.dc_index(dc_id).unwrap();
+            let i = u.dc_index(dc_id).ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             dc!(u, i).send_message(msg!("BOUNCER", "ADDNETWORK", id.to_string()));
         }
         "CHANGENETWORK" => {

@@ -76,7 +76,9 @@ pub fn attach_network(u: &mut User, parent_id: u64, net_id: i64) {
     if let Some(old) = find_attached(u, parent_id, net_id) {
         detach_network(u, old);
     }
-    let i = u.dc_index(parent_id).unwrap();
+    let Some(i) = u.dc_index(parent_id) else {
+        return;
+    };
     let id = u.srv.next_downstream_id();
     let tx = u.tx.clone();
     let parent = &u.downstreams[i];

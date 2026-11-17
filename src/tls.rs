@@ -52,13 +52,13 @@ pub struct CertStore {
 
 impl CertStore {
     pub fn set(&self, key: CertifiedKey) {
-        *self.key.write().unwrap() = Some(Arc::new(key));
+        *crate::state_lock::write(&self.key) = Some(Arc::new(key));
     }
 }
 
 impl ResolvesServerCert for CertStore {
     fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        self.key.read().unwrap().clone()
+        crate::state_lock::read(&self.key).clone()
     }
 }
 
@@ -249,6 +249,10 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
         let (key, cert) = crate::certfp::generate_certfp("ed25519", 0).unwrap();
         (
@@ -259,6 +263,11 @@ mod tests {
 
     /// Runs a handshake against a server presenting chain (signed with key)
     /// while the client pins pinned. Returns whether it succeeded.
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn handshake(
         chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,

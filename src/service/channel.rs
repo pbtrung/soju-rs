@@ -15,7 +15,7 @@ pub(super) fn handle_channel_status(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let default_name = ctx
         .network_id
         .and_then(|id| u.net_index(id))
@@ -139,7 +139,7 @@ pub(super) fn handle_channel_create(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.is_empty() {
         bail!("expected at least one argument");
     }
@@ -183,7 +183,7 @@ pub(super) fn handle_channel_update(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.is_empty() {
         bail!("expected at least one argument");
     }
@@ -206,7 +206,10 @@ pub(super) fn handle_channel_update(
     }
     crate::upstream::update_channel_auto_detach(u, ni, &name);
     let net_id = u.networks[ni].id();
-    let ch = u.networks[ni].channels.get_mut(&name).unwrap();
+    let ch = u.networks[ni]
+        .channels
+        .get_mut(&name)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     ctx.srv
         .db
         .store_channel(net_id, ch)
@@ -220,7 +223,7 @@ pub(super) fn handle_channel_delete(
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.unwrap();
+    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }

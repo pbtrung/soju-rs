@@ -66,6 +66,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn generate_all() {
         for (kt, bits) in [("ecdsa", 0), ("ed25519", 0), ("rsa", 2048)] {
             let (key, cert) = generate_certfp(kt, bits).unwrap();

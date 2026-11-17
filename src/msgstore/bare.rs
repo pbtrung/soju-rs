@@ -71,6 +71,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn roundtrip() {
         let mut w = Writer::default();
         w.uint(0);
@@ -89,6 +93,10 @@ mod tests {
         assert!(r.uint().is_err());
     }
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn integer_boundaries_and_malformed_lengths() {
         for value in [i64::MIN, -1, 0, 1, i64::MAX] {
             let mut writer = Writer::default();

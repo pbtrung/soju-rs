@@ -45,20 +45,23 @@ pub fn auth_error_reason(err: &anyhow::Error) -> String {
     }
 }
 
-pub fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .use_preconfigured_tls(rustls_client_config())
+pub fn http_client() -> Result<reqwest::Client> {
+    http_client_with_builder(reqwest::Client::builder())
+}
+
+fn http_client_with_builder(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+    Ok(builder
+        .use_preconfigured_tls(rustls_client_config()?)
         .timeout(Duration::from_secs(30))
-        .build()
-        .expect("failed to build HTTP client")
+        .build()?)
 }
 
 /// A TLS client configuration for HTTP/1.1 clients.
-pub(crate) fn rustls_client_config() -> rustls::ClientConfig {
-    let cfg = crate::tls::client_config("", None).expect("failed to build TLS config");
+pub(crate) fn rustls_client_config() -> Result<rustls::ClientConfig> {
+    let cfg = crate::tls::client_config("", None)?;
     let mut cfg = (*cfg).clone();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-    cfg
+    Ok(cfg)
 }
 
 fn set_forwarded(req: reqwest::RequestBuilder, addr: &str) -> reqwest::RequestBuilder {
@@ -104,7 +107,7 @@ impl Authenticator {
                 AuthDriver::Http => (
                     Some(PlainAuthenticator::Http {
                         url: a.source.clone(),
-                        client: http_client(),
+                        client: http_client()?,
                     }),
                     None,
                 ),
@@ -288,7 +291,7 @@ impl OAuth2 {
             .trim_end_matches('/')
             .to_owned();
         let discovery_url = format!("{}://{}{}", u.scheme, u.host, path);
-        let client = http_client();
+        let client = http_client()?;
         let server =
             tokio::time::timeout(Duration::from_secs(10), discover(&client, &discovery_url))
                 .await
@@ -385,6 +388,10 @@ mod tests {
     use crate::database::User;
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn internal() {
         let db = Arc::new(Database::open_in_memory().unwrap());
         let mut u = User::new("alice");
@@ -400,6 +407,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn password_upgrade_kept() {
         let db = Arc::new(Database::open_in_memory().unwrap());
         let mut u = User::new("alice");
@@ -429,6 +440,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     async fn http_auth() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let ln = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -456,7 +471,7 @@ mod tests {
         let db = Arc::new(Database::open_in_memory().unwrap());
         let a = PlainAuthenticator::Http {
             url: format!("http://{addr}/auth"),
-            client: http_client(),
+            client: http_client().unwrap(),
         };
         a.auth_plain(&db, "alice", "pw", "1.2.3.4:5678")
             .await
@@ -466,5 +481,10 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(auth_error_reason(&err), "Invalid credentials");
+    }
+    #[test]
+    fn http_client_setup_failure_is_returned() {
+        let builder = reqwest::Client::builder().user_agent("invalid\nheader");
+        assert!(http_client_with_builder(builder).is_err());
     }
 }

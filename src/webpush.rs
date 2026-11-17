@@ -87,11 +87,12 @@ fn decode_vapid_key(key: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("illegal base64 data: {e}"))
 }
 
-fn hkdf_expand(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Vec<u8> {
+fn hkdf_expand(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Result<Vec<u8>> {
     let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
     let mut okm = vec![0u8; len];
-    hk.expand(info, &mut okm).expect("valid HKDF length");
-    okm
+    hk.expand(info, &mut okm)
+        .map_err(|e| anyhow!("HKDF output length is invalid: {e}"))?;
+    Ok(okm)
 }
 
 /// Encrypts a message for a subscription, producing an aes128gcm body with
@@ -127,10 +128,10 @@ fn encrypt_with(
     let mut prk_info = b"WebPush: info\x00".to_vec();
     prk_info.extend_from_slice(&dh);
     prk_info.extend_from_slice(&local_public);
-    let ikm = hkdf_expand(&auth_secret, shared, &prk_info, 32);
+    let ikm = hkdf_expand(&auth_secret, shared, &prk_info, 32)?;
 
-    let cek = hkdf_expand(salt, &ikm, b"Content-Encoding: aes128gcm\x00", 16);
-    let nonce = hkdf_expand(salt, &ikm, b"Content-Encoding: nonce\x00", 12);
+    let cek = hkdf_expand(salt, &ikm, b"Content-Encoding: aes128gcm\x00", 16)?;
+    let nonce = hkdf_expand(salt, &ikm, b"Content-Encoding: nonce\x00", 12)?;
 
     let mut record = salt.to_vec();
     record.extend_from_slice(&RECORD_SIZE.to_be_bytes());
@@ -146,8 +147,8 @@ fn encrypt_with(
     }
     data.resize(max_pad_len, 0);
 
-    let cipher = Aes128Gcm::new_from_slice(&cek).expect("valid AES key length");
-    let nonce = Nonce::try_from(&nonce[..]).expect("valid nonce length");
+    let cipher = Aes128Gcm::new_from_slice(&cek)?;
+    let nonce = Nonce::try_from(&nonce[..])?;
     let ciphertext = cipher
         .encrypt(&nonce, data.as_slice())
         .map_err(|_| anyhow!("encryption failed"))?;
@@ -281,8 +282,8 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn new(vapid_public: &str, vapid_private: &str) -> Sender {
-        let tls = crate::auth::rustls_client_config();
+    pub fn new(vapid_public: &str, vapid_private: &str) -> Result<Sender> {
+        let tls = crate::auth::rustls_client_config()?;
         // Internal addresses are rejected: hostnames by the resolver, IP
         // literals in the endpoint and in redirects by check_external_url
         let redirect = reqwest::redirect::Policy::custom(|attempt| {
@@ -303,13 +304,12 @@ impl Sender {
             .no_proxy()
             .user_agent("soju")
             .timeout(Duration::from_secs(15))
-            .build()
-            .expect("failed to build HTTP client");
-        Sender {
+            .build()?;
+        Ok(Sender {
             vapid_public: vapid_public.to_owned(),
             vapid_private: vapid_private.to_owned(),
             client,
-        }
+        })
     }
 
     /// Sends a notification. Fails with [`SubscriptionExpired`] if the
@@ -368,6 +368,10 @@ mod tests {
     use p256::ecdsa::signature::Verifier;
 
     /// Decrypts a message as a user agent would (RFC 8291 section 3.4).
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn decrypt(body: &[u8], ua_secret: &SecretKey, auth: &[u8]) -> Vec<u8> {
         let salt = &body[..16];
         let rs = u32::from_be_bytes(body[16..20].try_into().unwrap());
@@ -381,9 +385,9 @@ mod tests {
         let mut info = b"WebPush: info\x00".to_vec();
         info.extend_from_slice(&ua_public);
         info.extend_from_slice(as_public);
-        let ikm = hkdf_expand(auth, shared.raw_secret_bytes(), &info, 32);
-        let cek = hkdf_expand(salt, &ikm, b"Content-Encoding: aes128gcm\x00", 16);
-        let nonce = hkdf_expand(salt, &ikm, b"Content-Encoding: nonce\x00", 12);
+        let ikm = hkdf_expand(auth, shared.raw_secret_bytes(), &info, 32).unwrap();
+        let cek = hkdf_expand(salt, &ikm, b"Content-Encoding: aes128gcm\x00", 16).unwrap();
+        let nonce = hkdf_expand(salt, &ikm, b"Content-Encoding: nonce\x00", 12).unwrap();
         let cipher = Aes128Gcm::new_from_slice(&cek).unwrap();
         let mut plain = cipher
             .decrypt(&Nonce::try_from(&nonce[..]).unwrap(), ciphertext)
@@ -396,6 +400,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn encrypt_roundtrip() {
         let ua = SecretKey::generate_from_rng(&mut rand::rng());
         let auth = [9u8; 16];
@@ -412,6 +420,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn vapid() {
         let (private, public) = generate_vapid_keys();
         assert_eq!(URL_SAFE_NO_PAD.decode(&public).unwrap().len(), 65);
@@ -437,6 +449,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn internal_ips() {
         for ip in [
             "127.0.0.1",
@@ -475,6 +491,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn external_url() {
         // Hosts which the URL parser normalizes to internal IP addresses
         for u in [
@@ -501,5 +521,9 @@ mod tests {
         assert!(is_expired_status(410));
         assert!(!is_expired_status(201));
         assert!(!is_expired_status(429));
+    }
+    #[test]
+    fn hkdf_invalid_output_length_is_returned() {
+        assert!(hkdf_expand(b"salt", b"input", b"info", 255 * 32 + 1).is_err());
     }
 }

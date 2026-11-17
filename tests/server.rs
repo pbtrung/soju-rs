@@ -88,6 +88,10 @@ impl TestConn {
         self.conn.send_message(msg);
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     async fn read(&mut self) -> Message {
         tokio::time::timeout(TIMEOUT, self.reader.read_message())
             .await
@@ -134,6 +138,10 @@ async fn setup(msg_store: MsgStore) -> Env {
 }
 
 /// Like setup, with f customizing the test user and database first.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn setup_with(msg_store: MsgStore, f: impl FnOnce(&Database, &mut database::User)) -> Env {
     let db = Database::open_in_memory().unwrap();
     let mut user = database::User::new(TEST_USERNAME);
@@ -161,6 +169,11 @@ async fn setup_with(msg_store: MsgStore, f: impl FnOnce(&Database, &mut database
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn accept_upstream(env: &Env) -> TestConn {
     let (s, _) = tokio::time::timeout(TIMEOUT, env.upstream.accept())
         .await
@@ -285,6 +298,10 @@ async fn register_downstream_caps(
 
 /// Reads a CAP LS 302 reply, possibly split over several lines, each of
 /// which must fit in an IRC message. Returns the capabilities.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn read_cap_ls(c: &mut TestConn) -> Vec<String> {
     let mut caps = Vec::new();
     loop {
@@ -334,6 +351,10 @@ async fn register_upstream_caps(c: &mut TestConn, caps: &str) -> String {
 }
 
 /// Reads a draft/multiline batch, returning its opener and lines.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn read_multiline(c: &mut TestConn) -> (Message, Vec<Message>) {
     let opener = read_until(c, "BATCH").await;
     assert_eq!(opener.params[1], "draft/multiline", "{opener}");

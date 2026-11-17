@@ -244,7 +244,9 @@ pub(super) fn handle_message(
                 return Ok(true);
             }
             let status = ChannelStatus::parse(&status_str).map_err(|e| anyhow!(e))?;
-            let ch = uc.channels.get_mut(&name).unwrap();
+            let ch = uc.channels.get_mut(&name).ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             ch.status = status;
             for s in members.split(' ').filter(|s| !s.is_empty()) {
                 let (ms, nick) = parse_membership_prefix(&uc.available_memberships, s);
@@ -266,7 +268,17 @@ pub(super) fn handle_message(
             ch.complete = true;
             if !u.networks[ni].is_detached(&name) {
                 let net = &u.networks[ni];
-                let uch = net.conn.as_ref().unwrap().channels.get(&name).unwrap();
+                let uch = net
+                    .conn
+                    .as_ref()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("required user or connection state is unavailable")
+                    })?
+                    .channels
+                    .get(&name)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("required user or connection state is unavailable")
+                    })?;
                 for dc in u
                     .downstreams
                     .iter_mut()

@@ -186,7 +186,9 @@ pub fn replace_all(s: &str, pairs: &[(&str, &str)]) -> String {
                 continue 'outer;
             }
         }
-        let c = s[i..].chars().next().unwrap();
+        let Some(c) = s.get(i..).and_then(|s| s.chars().next()) else {
+            break;
+        };
         out.push(c);
         i += c.len_utf8();
     }
@@ -201,6 +203,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn server_time() {
         let t = "2024-01-02T03:04:05Z".parse::<Timestamp>().unwrap()
             + jiff::SignedDuration::from_millis(678);
@@ -222,6 +228,11 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn server_time_compatibility() {
         for (input, output) in [
             ("0000-01-01T00:00:00Z", "0000-01-01T00:00:00.000Z"),

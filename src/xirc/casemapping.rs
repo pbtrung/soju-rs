@@ -4,6 +4,10 @@ use indexmap::IndexMap;
 /// case-mapping.
 pub type CaseMapping = fn(&str) -> String;
 
+#[expect(
+    clippy::expect_used,
+    reason = "All callers rewrite ASCII bytes to ASCII bytes and leave UTF-8 continuation bytes unchanged."
+)]
 fn map_bytes(name: &str, f: impl Fn(u8) -> u8) -> String {
     let bytes: Vec<u8> = name.bytes().map(f).collect();
     // Only ASCII bytes are rewritten to other ASCII bytes, so the result is

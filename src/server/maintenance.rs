@@ -52,7 +52,7 @@ impl Server {
 
         // Filter out users with active downstream connections
         let users: Vec<(String, UserHandle)> = {
-            let map = self.users.lock().unwrap();
+            let map = crate::state_lock::lock(&self.users);
             usernames
                 .into_iter()
                 .filter_map(|name| {

@@ -109,7 +109,7 @@ impl Network {
     }
 
     pub fn sync_snapshot(&self) {
-        *self.record_snapshot.lock().unwrap() = self.record.clone();
+        *crate::state_lock::lock(&self.record_snapshot) = self.record.clone();
     }
 
     /// Our current nickname on this network.
@@ -241,7 +241,7 @@ impl User {
         let id = network.id();
         self.networks.push(network);
         self.networks.sort_by_key(|n| n.id());
-        let i = self.net_index(id).unwrap();
+        let i = self.networks.partition_point(|network| network.id() < id);
         self.start_network(i);
         i
     }
@@ -348,7 +348,8 @@ impl User {
         let i = self.add_network(network);
         let attrs = self.network_attrs(i);
         self.notify_bouncer_network_state(id, &attrs);
-        Ok(self.net_index(id).unwrap())
+        self.net_index(id)
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))
     }
 
     pub fn update_network(
@@ -373,7 +374,7 @@ impl User {
         self.check_network(&record)?;
         let i = self
             .net_index(record.id)
-            .expect("tried updating a non-existing network");
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         self.srv.db.store_network(self.record.id, &mut record)?;
 
         // Most network changes require us to re-connect to the upstream
@@ -423,13 +424,14 @@ impl User {
         // TODO: only broadcast attributes that have changed
         let attrs = self.network_attrs(i);
         self.notify_bouncer_network_state(id, &attrs);
-        Ok(self.net_index(id).unwrap())
+        self.net_index(id)
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))
     }
 
     pub fn delete_network(&mut self, id: i64) -> Result<()> {
         let i = self
             .net_index(id)
-            .expect("tried deleting a non-existing network");
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         self.srv.db.delete_network(id)?;
         self.msg_store.delete_network(id);
         let net = self.remove_network(i);

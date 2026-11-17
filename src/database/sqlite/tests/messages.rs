@@ -3,6 +3,10 @@
 use super::*;
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn messages() {
     let db = db();
     let mut u = User::new("alice");
@@ -118,6 +122,10 @@ fn messages() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn messages_same_time() {
     let db = db();
     let mut u = User::new("alice");
@@ -159,6 +167,10 @@ fn messages_same_time() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn message_last_id_insertion_order() {
     let db = db();
     let mut u = User::new("alice");
@@ -173,6 +185,10 @@ fn message_last_id_insertion_order() {
 }
 
 #[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
 fn messages_invalid_utf8() {
     let db = db();
     let mut u = User::new("alice");

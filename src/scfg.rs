@@ -157,6 +157,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn basic() {
         let b = parse(
             "# comment\nlisten ircs://\n\ntls \"cert file.pem\" key.pem\nblock a {\n  child \
@@ -173,6 +177,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn quoting() {
         assert_eq!(
             split_words(r#"a "b c" 'd' "" e\ f"#).unwrap(),

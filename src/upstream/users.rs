@@ -441,6 +441,10 @@ pub(super) fn start_regain_nick_timer(u: &mut User, ni: usize) {
     if is_our_nick(cm, uc, &want_nick) {
         return;
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "The constant positive backoff bounds are ordered and validated at construction."
+    )]
     let mut backoff = Backoffer::new(
         Duration::from_secs(15),
         Duration::from_secs(600),

@@ -4,6 +4,11 @@ use super::*;
 
 /// A disconnected client can read messages received while it was away,
 /// without interrupting another client or duplicating subsequent live input.
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn disconnected_client_history() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -64,6 +69,10 @@ pub(super) async fn disconnected_client_history() {
 
 /// Reopen an actual SQLite file with a new server: messages and read markers
 /// must remain available, and new messages must extend the old history.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn sqlite_history_survives_restart() {
     let dir = TestDatabaseDir::new();
     let path = dir.0.join("history.db");
@@ -127,6 +136,10 @@ pub(super) async fn sqlite_history_survives_restart() {
 struct TestDatabaseDir(std::path::PathBuf);
 
 impl TestDatabaseDir {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn new() -> Self {
         let path =
             std::env::temp_dir().join(format!("soju-history-{:032x}", rand::random::<u128>()));

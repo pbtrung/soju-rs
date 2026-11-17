@@ -33,3 +33,5 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub async fn metrics_guard<F: std::future::Future>(srv: &server::Server, f: F) -> F::Output {
     metrics::with_gauge(&srv.metrics.downstreams, f).await
 }
+
+mod state_lock;

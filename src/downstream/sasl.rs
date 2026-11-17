@@ -224,7 +224,10 @@ impl DownstreamConn {
             }
         }
 
-        let sasl = self.sasl.as_mut().unwrap();
+        let sasl = self
+            .sasl
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
         match sasl.next(resp.as_deref())? {
             None => Ok(Some(sasl.clone())),
             Some(challenge) => {
@@ -242,7 +245,9 @@ impl DownstreamConn {
 
     pub(super) fn set_auth_username(&mut self, username: &str, client: &str, network: &str) {
         self.client_name = client.to_owned();
-        let r = self.registration.as_mut().unwrap();
+        let Some(r) = self.registration.as_mut() else {
+            return;
+        };
         r.auth_username = username.to_owned();
         r.network_name = network.to_owned();
     }
@@ -253,6 +258,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn oauth_failure_acknowledgement_is_exactly_one_control_byte() {
         for response in [&b"\x01"[..], b"x", b"\x01x", b"", b"xx"] {
             let mut sasl = DownstreamSasl {
@@ -277,6 +286,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
     fn sasl_mechanisms() {
         let mut s = DownstreamSasl {
             kind: SaslServerKind::Plain,

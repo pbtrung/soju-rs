@@ -44,7 +44,7 @@ pub async fn run_until_registered(
             return Ok(false);
         }
 
-        let r = dc.registration.as_ref().unwrap();
+        let r = dc.registration_state()?;
         if r.auth_failures >= MAX_AUTH_FAILURES {
             let p = dc.srv.prefix();
             dc.send_message(msg!("ERROR", "Too many authentication failures").with_prefix(p));
@@ -101,15 +101,15 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
     match msg.command.as_str() {
         "NICK" => {
             need_params(msg, 1)?;
-            dc.registration.as_mut().unwrap().nick = msg.params[0].clone();
+            dc.registration_state_mut()?.nick = msg.params[0].clone();
         }
         "USER" => {
             need_params(msg, 4)?;
-            dc.registration.as_mut().unwrap().username = msg.params[0].clone();
+            dc.registration_state_mut()?.username = msg.params[0].clone();
         }
         "PASS" => {
             need_params(msg, 1)?;
-            dc.registration.as_mut().unwrap().pass = msg.params[0].clone();
+            dc.registration_state_mut()?.pass = msg.params[0].clone();
         }
         "CAP" => return dc.handle_cap(msg),
         "AUTHENTICATE" => {
@@ -118,12 +118,17 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
             };
             match authenticate(dc, &credentials).await {
                 Err(e) => {
-                    dc.registration.as_mut().unwrap().auth_failures += 1;
+                    dc.registration_state_mut()?.auth_failures += 1;
                     logf!(
                         dc.logger,
                         "SASL {} authentication error for nick {:?}: {e}",
                         credentials.mechanism,
-                        dc.registration.as_ref().unwrap().nick
+                        dc.registration
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!(
+                                "required user or connection state is unavailable"
+                            ))?
+                            .nick
                     );
                     let nick = dc.nick.clone();
                     dc.end_sasl(Some(msg!(
@@ -153,7 +158,7 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
             match subcommand.to_uppercase().as_str() {
                 "BIND" => {
                     need_params(msg, 2)?;
-                    if dc.registration.as_ref().unwrap().auth_username.is_empty() {
+                    if dc.registration_state()?.auth_username.is_empty() {
                         return Err(irc_error(msg!(
                             "FAIL",
                             "BOUNCER",
@@ -163,7 +168,7 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
                         )));
                     }
                     let id = parse_bouncer_net_id(&subcommand, &msg.params[1])?;
-                    dc.registration.as_mut().unwrap().network_id = id;
+                    dc.registration_state_mut()?.network_id = id;
                 }
                 _ => {
                     return Err(irc_error(msg!(
@@ -214,7 +219,9 @@ async fn authenticate(
     let remote_addr = dc.info.remote_addr.clone();
     match credentials.mechanism.as_str() {
         "PLAIN" => {
-            let plain = credentials.plain.as_ref().unwrap();
+            let plain = credentials.plain.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("required user or connection state is unavailable")
+            })?;
             let (mut username, mut client, mut network) = unmarshal_username(&plain.username);
             let Some(auth) = &cfg.auth.plain else {
                 bail!("SASL PLAIN not supported");
@@ -307,7 +314,7 @@ async fn register(dc: &mut DownstreamConn) -> Result<()> {
     }
 
     let srv = dc.srv.clone();
-    let r = dc.registration.as_mut().unwrap();
+    let r = dc.registration_state_mut()?;
     let password = std::mem::take(&mut r.pass);
     let reg_username = r.username.clone();
     if r.auth_username.is_empty() {
@@ -365,7 +372,7 @@ async fn register(dc: &mut DownstreamConn) -> Result<()> {
         )));
     }
 
-    let r = dc.registration.as_mut().unwrap();
+    let r = dc.registration_state_mut()?;
     if r.network_name.is_empty() {
         r.network_name = fallback_network;
     } else if !fallback_network.is_empty() && r.network_name != fallback_network {
@@ -376,8 +383,9 @@ async fn register(dc: &mut DownstreamConn) -> Result<()> {
         )));
     }
 
+    let auth_username = r.auth_username.clone();
     dc.registered = true;
-    dc.username = r.auth_username.clone();
+    dc.username = auth_username;
     logf!(
         dc.logger,
         "registration complete for user {:?}",
@@ -414,7 +422,7 @@ pub(super) async fn check_new_network(
     user: &crate::user::UserHandle,
     dc: &mut DownstreamConn,
 ) -> Result<()> {
-    let r = dc.registration.as_mut().unwrap();
+    let r = dc.registration_state()?;
     if r.network_id != 0 || r.network_name.is_empty() || r.network_name == "*" {
         return Ok(());
     }
@@ -439,14 +447,19 @@ pub(super) async fn check_new_network(
             format!("Failed to connect to {:?}", r.network_name)
         )));
     }
-    r.server_checked = true;
+    dc.registration_state_mut()?.server_checked = true;
     Ok(())
 }
 
 pub(super) fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let dc = &u.downstreams[i];
-    let r = dc.registration.clone().unwrap();
+    let r = dc
+        .registration
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let nick = dc.nick.clone();
     if r.network_id != 0 {
         if u.net_index(r.network_id).is_none() {
@@ -517,7 +530,9 @@ pub(super) fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
         }
     };
     let net_id = u.networks[ni].id();
-    let i = u.dc_index(dc_id).unwrap();
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     u.downstreams[i].network_id = Some(net_id);
     Ok(())
 }
