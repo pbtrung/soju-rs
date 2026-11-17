@@ -55,9 +55,10 @@ automatically require a full audit for every task.
 
 ## Build and verification
 
-Use Rust 1.100.0 or newer, the minimum declared in `Cargo.toml`. Distro Rust is supported;
-do not assume rustup is installed. Native dependencies build bundled SQLite,
-AWS-LC and mimalloc and require a C compiler plus CMake, Make and Perl.
+Use Rust 1.100.0 or newer, the minimum declared in `Cargo.toml`. Distro Rust
+is supported; do not assume rustup is installed. Native dependencies build
+bundled SQLite, AWS-LC and mimalloc and require a C compiler plus CMake, Make
+and Perl.
 
 For Rust, manifest or lockfile changes, run:
 
@@ -90,6 +91,11 @@ failures separately and use the available approval mechanism to rerun them.
   builder is `scripts/build-release.sh`; it checks musl ELF static linkage.
   Set `CC_x86_64_unknown_linux_musl=musl-gcc` and
   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc` as in CI when needed.
+- Dependency review: run cargo audit, `cargo deny --all-features --locked check`
+  and `cargo machete --with-metadata` when available. The full deny policy
+  currently fails on unmaintained chrono; the planned jiff migration is
+  STEP-030 in the audit. Do not suppress that advisory. See
+  [dependency maintenance](doc/dependencies.md) for constraints and results.
 
 CI currently has separate manually dispatched Tests and Build and Release
 workflows. Do not assume that publishing implies tests passed. Consult the

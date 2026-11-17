@@ -1,0 +1,27 @@
+[advisories]
+# Keep chrono's unmaintained advisory failing until STEP-030 replaces it.
+# No vulnerability, maintenance or yanked-package exceptions are configured.
+yanked = "deny"
+unmaintained = "all"
+
+[licenses]
+include-dev = true
+allow = [
+    "AGPL-3.0-only",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+# Parent crates require different major versions; report rather than override.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

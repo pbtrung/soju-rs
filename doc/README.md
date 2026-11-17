@@ -23,8 +23,10 @@ For installation, supported builds and differences from upstream, see the
 - [Compatibility tests](../tests/compat/README.md): IRCv3, Go soju, listener
   plumbing and gamja checks.
 
-## Audit and implementation planning
+## Development and audit
 
+- [Dependency maintenance](dependencies.md): completed upgrades, selected
+  features, dependency policy and remaining advisories/parent constraints.
 - [Audit results and implementation checklist](audit_results.md): findings,
   verification evidence and planned work from 2026-11-17. Planned fixes remain
   unimplemented unless their status explicitly says otherwise.

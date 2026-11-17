@@ -17,7 +17,7 @@ The original execution was **audit and planning only**, as required by [audit_pr
 
 The baseline is healthy: formatting, all-target checking, default Clippy with warnings denied, and 210 tests pass on GNU; the same 210 tests pass on musl. Edition 2024 is already in use. Rust 1.100.0 is installed and its official release is verified. Default documentation generation succeeds with 13 warnings; documentation with warnings denied fails. The requested expanded lint policy fails with thousands of diagnostics and requires staged remediation.
 
-Prioritize the broken release dispatch, missing automatic/test-before-release gates, unlimited history target retention, and unlimited notification task admission. Two smaller lifecycle defects were reproduced without changing the repository: cancellation leaks the downstream metric increment, and dropping connection handles leaves the writer/stream alive. The dependency inventory found `rand` 0.10.4 and `rusqlite` 0.43.0 newer than the declared/locked versions. No critical vulnerability, reachable undefined behavior, authentication bypass, or database corruption was established by this audit.
+The original priorities were broken release dispatch, missing automatic/test-before-release gates, unlimited history target retention, and unlimited notification task admission. Two smaller lifecycle defects were reproduced without changing the repository: cancellation leaks the downstream metric increment, and dropping connection handles leaves the writer/stream alive. The dependency inventory found `rand` 0.10.4 and `rusqlite` 0.43.0 newer than the declared/locked versions. No critical vulnerability, reachable undefined behavior, authentication bypass, or database corruption was established by this audit.
 
 Scope and assurance: repository-wide inventory, static searches, compiler/Clippy analysis, targeted source tracing across security/resource/persistence paths, existing tests, release builds, and authoritative dependency research. This is not an exhaustive proof of every branch, dependency's internals, memory safety, or long-duration stability. Potential risks and optional improvements are explicitly identified. The prior [archived review](archive/code-audit.md) describes previous fixes; it is historical context, not evidence that this execution fixed anything.
 
@@ -185,7 +185,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Missed maintenance fixes; SQLite wrapper updates carry behavioral/native/FTS compatibility risk and need dedicated verification.
 - **Recommended fix:** Separate rand/compatible lock refresh from rusqlite 0.43 migration. Read release notes, keep bundled SQLite and review native versions/features. Upgrade parent crates for constrained transitives; do not force incompatible transitive versions with patches.
 - **Verification:** Current registry refresh, `cargo tree -e features`, `cargo audit`, `cargo deny`, GNU/musl tests/releases; schema 35 migration/reopen/FTS/ID-exhaustion tests. No schema bump solely for a wrapper upgrade.
-- **Status:** In Progress. Compatible updates are in STEP-005; rusqlite and parent/feature assessment remain for STEP-006–007.
+- **Status:** Completed. Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030.
 
 #### DEPS-002 — Replace unmaintained chrono with jiff
 
@@ -300,6 +300,10 @@ Proposed policy: explicitly document the support floor, test stable/MSRV, and le
 
 ## 5. Dependency Upgrade Assessment
 
+The completed upgrade/feature review and all 34 retained parent-version
+constraints are documented in [dependency maintenance](dependencies.md).
+The original dated inventory below remains for comparison.
+
 STEP-006 migration review: rusqlite 0.43.0 changes empty/comment-only statement
 handling and fixes optional APIs described in its upstream release notes.
 No application API adaptation is required. Bundled `libsqlite3-sys` remains
@@ -321,7 +325,7 @@ known vulnerabilities and the informational unmaintained-chrono advisory
 `RUSTSEC-2026-0543`. No advisory is suppressed. STEP-007 assesses the migration
 needed to replace chrono; a passing audit exit code does not mean no warnings.
 
-All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied.
+All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied during the original audit; implementation updates are recorded above.
 
 Source for each row: `https://crates.io/api/v1/crates/<crate>` (linked below). The full raw query snapshot is temporarily in `/tmp/soju-audit-deps.json`; this report preserves actionable version differences so that implementation does not depend on that temporary file.
 
@@ -412,7 +416,7 @@ All remaining locked-to-latest differences (excluding direct crates already abov
 
 Compatible candidates include bumpalo, cc, errno, mio, rustls-webpki and zeroize patch updates. Parent-constrained breaking lines include parking_lot/lock_api, tower-http, nom, syn, ASN.1/Windows/WASI dependencies and older getrandom/untrusted. Some entries are platform-only or optional rather than part of the tested Linux feature graph. Upgrade parents where supported, or document the constraint; do not require every package to share its global latest release. Default active-target `cargo tree --duplicates` reports only `untrusted` 0.7.1 (AWS-LC) and 0.9.0 (webpki); neither duplication alone establishes waste or a vulnerability.
 
-`cargo update --dry-run --offline` found zero updates using the **cached index**. This does not contradict the live API: it shows why a refreshed index is required before the implementation refresh. Neither Cargo.lock nor manifests changed. `cargo outdated`, `cargo audit`, `cargo deny`, and `cargo machete` are not installed. No RustSec clean bill of health or unused-dependency removal is claimed. Direct source usage was reviewed; no dependency was proven safely removable. Tokio's broad `full` feature merits a later feature audit, not an untested feature reduction.
+`cargo update --dry-run --offline` found zero updates using the **cached index**. This does not contradict the live API: it shows why a refreshed index is required before the implementation refresh. Neither Cargo.lock nor manifests changed during that original dry run. At audit time `cargo outdated`, `cargo audit`, `cargo deny`, and `cargo machete` were unavailable. Current implementation results are in §12: audit/deny/machete were subsequently installed; cargo-outdated remains absent. No memory-safety proof or advisory suppression is claimed. Direct source usage was reviewed; no dependency was proven safely removable. Tokio's broad `full` feature merits a later feature audit, not an untested feature reduction.
 
 Native assessment: application code has no unsafe/FFI calls to justify bypassing safety checks. Native code remains in SQLite, AWS-LC and mimalloc. Both deployment targets must retain native build/static-link checks. Keep the current allocator until representative memory measurements justify a change. Dependency freshness is not a substitute for an advisory/native security review.
 
@@ -493,13 +497,13 @@ Other >100-line candidates: welcome, PRIVMSG, BOUNCER, READ, WHO/WHOIS, CLIENTCE
 
 ## 10. Testing and CI Assessment
 
-Preserve the 152 library tests, two sojuctl tests, two listener integrations and 54 server integrations (27 scenarios run on both Tokio runtimes): **210 passing tests per GNU/musl run**. There are currently zero doctests. `--all-targets` additionally smoke-runs the custom reader harness. Existing coverage includes malformed PROXY/TLS/cert pinning, SASL chunks, credential redaction, stream cancellation, queues, multiline, migration/reopen/FTS, high-water IDs, user isolation, deferred service operations and dual-runtime behavior.
+The original baseline contained 152 library tests, two sojuctl tests, two listener integrations and 54 server integrations (27 scenarios run on both Tokio runtimes): **210 passing tests per GNU/musl run**. These tests are preserved; implementation adds four Rust regressions, bringing the current total to 214 per target. There are currently zero doctests. `--all-targets` additionally smoke-runs the custom reader harness. Existing coverage includes malformed PROXY/TLS/cert pinning, SASL chunks, credential redaction, stream cancellation, queues, multiline, migration/reopen/FTS, high-water IDs, user isolation, deferred service operations and dual-runtime behavior.
 
 Shell syntax checks and Python AST parsing pass for the release/compatibility/benchmark scripts. These do **not** detect REL-001's missing workflow or prove script operational behavior.
 
 Compatibility tooling is present for Go soju, ergo, IRCv3, plumbing and Chromium/gamja. It was reviewed but **not executed** in this run: it needs external checkouts/builds, Node/browser setup and multiple local services. No claim of transcript equivalence is made. Pin baseline revisions, retain a scheduled latest-upstream lane, and run those tools before completing protocol-affecting implementation steps.
 
-Missing automation: pull-request/push triggers, lint/doc gates, tested-commit release dependency, advisory/license/banned-crate checks, parser fuzz corpus, appropriate native sanitizer jobs, controlled load/resource benchmarks. Cargo audit/deny/machete/outdated/fuzz/Miri are absent; installing/running them is planned, not silently treated as passing. Use [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html), [Miri](https://github.com/rust-lang/miri) and [Tokio task shutdown guidance](https://tokio.rs/tokio/topics/shutdown) as implementation references; platform/native exclusions must be explicit.
+Missing automation: pull-request/push triggers, lint/doc gates, tested-commit release dependency, advisory/license/banned-crate checks, parser fuzz corpus, appropriate native sanitizer jobs, controlled load/resource benchmarks. At audit time cargo audit/deny/machete/outdated/fuzz/Miri were absent. Audit/deny/machete have since run with actual results in §12; the other tools remain unavailable, not silently treated as passing. Use [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html), [Miri](https://github.com/rust-lang/miri) and [Tokio task shutdown guidance](https://tokio.rs/tokio/topics/shutdown) as implementation references; platform/native exclusions must be explicit.
 
 ## 11. Step-by-Step Implementation Plan
 
@@ -559,13 +563,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: all database tests, old/current schema file reopens, integrity/foreign-key/FTS checks; GNU/musl tests/releases/static ELF checks.
   - Acceptance/status: upgrade passes storage/protocol suite without a schema bump or documented blocker; **Completed**.
 
-- [ ] **STEP-007 (P2): Resolve constrained transitives and unnecessary features.**
+- [x] **STEP-007 (P2): Resolve constrained transitives and unnecessary features.**
   - Findings: DEPS-001, CI-002. Objective: maintain the dependency graph without force-breaking parent crates.
   - Files: manifests/lock, dependency usage sites only where parent upgrades require it; dependency policy file if introduced.
   - Instructions: classify §5 differences by selected target/parent constraint; read release notes for each breaking parent migration; evaluate Tokio full and optional HTTP/platform features; run machete or compiler-supported unused-dependency diagnostics. Remove only proven-unused requirements.
   - Dependencies: STEP-006. Risks: feature unification differences across tests/targets.
   - Verification: `cargo tree --target all -e features`, cargo audit/deny/machete, all-target tests and cross-target builds.
-  - Acceptance/status: each remaining older line has a parent/compatibility reason; no unsupported patch overrides or untested removals; **Not Started**.
+  - Acceptance/status: each remaining older line has a parent/compatibility reason; no unsupported patch overrides or untested removals; **Completed**.
 
 - [ ] **STEP-030 (P1 follow-up): Replace chrono with jiff.**
   - Findings: DEPS-002. Objective: remove the unmaintained timestamp dependency and make the advisory gate pass without suppressions.
@@ -799,6 +803,31 @@ These results concern the **unchanged baseline**, not the proposed fixes. PASS m
 | Long-running memory/FD/task soak | NOT RUN | Finite probes and bounded-queue tests do not replace a soak |
 | Before/after performance | NOT RUN | Audit-only: no changed binary to compare |
 
+### Implementation verification for phases 1–3
+
+These rows supersede the original tooling-availability/freshness blockers;
+they do not imply completion of later hardening phases.
+
+| Check | Actual result | Evidence / limit |
+| --- | --- | --- |
+| STEP-002 release script tests | PASS | Six unittest methods with git/gh stubs; no release actions executed |
+| STEP-002 bash syntax and GNU/musl release builds | PASS | All three shell scripts parse; both native builds succeed |
+| STEP-003 fmt/check/Clippy, full tests and doc tests | PASS | 213 tests and reader smoke; rustdoc builds with 13 existing warnings |
+| STEP-004 declared Rust 1.100 floor | PASS | Installed stable 1.100; 213 GNU/musl tests and required compiler checks |
+| STEP-005 compatible updates | PASS | 213 GNU/musl tests, releases, static linkage and CLI smoke |
+| STEP-006 rusqlite migration | PASS | 214 GNU/musl tests, file-backed schema-30→35 reopen/FTS/FK/cursor/ID regression, native releases and static-link/CLI checks |
+| STEP-007 reduced features | PASS | 214 GNU/musl tests, fmt/check/Clippy, reader smoke/doc tests, both releases and static-link/CLI checks |
+| Live registry dry run after upgrades | PASS | `cargo update --dry-run`: zero compatible updates |
+| Current advisory scan | PASS | cargo-audit 0.23.0: zero known vulnerabilities; unsuppressed RUSTSEC-2026-0543 for chrono |
+| Full dependency policy | FAIL | cargo-deny 0.21.0 rejects unmaintained chrono; no advisory ignored |
+| License/source/duplicate policy subset | PASS | `cargo deny --all-features --locked check bans licenses sources`; parent-owned duplicates remain warnings |
+| Unused direct dependency analysis | PASS | cargo-machete 0.10.1 with metadata finds no unused direct requirements |
+
+Tool installation and registry-fetch failures under the restricted sandbox
+were retried with approved access. Tools live under `/tmp/soju-audit-tools`;
+registry/analysis logs use `/tmp/soju-step-<step>-*.log` and advisory JSON files.
+The chrono-to-jiff follow-up is planned only; the full advisory gate is not green.
+
 Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, `soju-audit-all-targets.log`, `soju-audit-musl.log`, `soju-audit-doc.log`, `soju-audit-strict-doc.log`, `soju-audit-strict-clippy.log`, `soju-audit-release.log`, `soju-audit-musl-release.log`, `soju-audit-update-dry-run.log`. Paths after the first share `/tmp/`. Temporary files are convenience evidence, not durable repository artifacts; key outcomes are recorded here.
 
 ## 13. Compatibility and Performance Risks
@@ -812,15 +841,15 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 ## 14. Remaining Issues and Blockers
 
-**Confirmed high-priority work:** REL-001 and CI-001 delivery defects; MEM-001 aggregate history growth; ASYNC-001 unbounded task admission. Fix these before calling the service hardened. No critical defect was confirmed.
+**Remaining high-priority work:** CI-001 test-before-release enforcement, MEM-001 aggregate history growth and ASYNC-001 unbounded task admission. REL-001 is fixed in STEP-002. No critical defect was confirmed.
 
-**Confirmed medium/low behavior:** ASYNC-004 abandoned-writer retention, ASYNC-005 metric cancellation, PROTO-001 enqueue-only expiry, default rustdoc warnings, missing toolchain/lint policy, dependency freshness and unchecked numeric library boundaries. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
+**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, default rustdoc warnings, missing strict lint policy and unchecked numeric library boundaries. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 tracks the still-unresolved chrono maintenance advisory and planned jiff replacement. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
 
 **Potential risks needing targeted measurement/validation:** accepted-session saturation, single-runtime DB stalls under contention, receipt-cache cardinality, provider metadata trust configurations, failure/poison paths, native/advisory exposure. Do not label these all exploitable vulnerabilities.
 
 **Optional improvements:** cohesive function/module extraction, measured receipt deduplication, feature pruning and reproducibility refinements. None justify speculative architecture/allocator rewrites.
 
-**Verification blockers:** missing audit/deny/machete/outdated/Miri/fuzz tools; no established native sanitizer target; external compatibility environment and long-running soak not run. A current advisory scan is still required. Cached Cargo index is stale relative to the live API inventory. No approval rejection prevented an action; socket/network access used approved escalation where necessary.
+**Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. cargo-deny fails on the unsuppressed chrono maintenance advisory (DEPS-002); replacing it with jiff is the user-requested planning-only STEP-030. cargo-outdated/Miri/fuzz tooling and native sanitizer coverage remain unavailable/not configured; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
 
 **Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3 and commit/push after each step. Later phases remain outside the current request. Mark findings Completed only after implementation and verification.
 
@@ -838,11 +867,12 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-004 | Declared rust-version 1.100 with Edition 2024 unchanged; README and AGENTS now document the floor and distro/rustup support. Installed stable 1.100 passes fmt, check, Clippy and 213 tests on both GNU and musl, plus reader smoke and doc tests. CI Cargo commands enforce the manifest floor. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-005 | Applied seven compatible stable upgrades from the refreshed registry, including rand 0.10.4. fmt/check/Clippy, 213 GNU and musl tests, reader smoke/doc tests, both release builds and musl static linkage/CLI smoke pass. cargo-audit finds no known vulnerabilities and reports the unsuppressed chrono maintenance warning; graph downloads required network escalation. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-006 | Migrated rusqlite 0.42 to 0.43 without changing libsqlite3-sys 0.40.0, SQLite 3.54.1 or schema 35. New file-backed migration/reopen/ID/cursor/foreign-key/FTS regression passes. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests, release/static-link/CLI checks pass. Audit finds no known vulnerabilities; deny preview fails on unsuppressed DEPS-002. Added the user-requested jiff migration as planning-only STEP-030. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-007 | Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks pass; full deny FAILS on unsuppressed DEPS-002. Jiff migration remains planning-only STEP-030. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
-Start with STEP-002's safe release automation repair and STEP-003's small verified metric fix; establish the toolchain/dependency baseline, then remove resource/lifecycle hazards with focused regressions before broad refactoring. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
+The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. Next, address the planned strict lint policy and resource/lifecycle hazards with focused regressions before broad refactoring. Complete the user-requested chrono-to-jiff follow-up in STEP-030 to resolve the remaining advisory gate failure. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
 
 This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.

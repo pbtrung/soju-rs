@@ -205,12 +205,13 @@ fn file_backed_history_survives_migration_and_reopen() -> anyhow::Result<()> {
         }
     }
 
-    let directory = TestDirectory(std::env::temp_dir().join(format!(
+    let directory = std::env::temp_dir().join(format!(
         "soju-rs-migration-{}-{}",
         std::process::id(),
         rand::random::<u64>()
-    )));
-    std::fs::create_dir(&directory.0)?;
+    ));
+    std::fs::create_dir(&directory)?;
+    let directory = TestDirectory(directory);
     let path = directory.0.join("history.db");
     let source = path
         .to_str()
