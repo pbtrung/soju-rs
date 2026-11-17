@@ -185,7 +185,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Missed maintenance fixes; SQLite wrapper updates carry behavioral/native/FTS compatibility risk and need dedicated verification.
 - **Recommended fix:** Separate rand/compatible lock refresh from rusqlite 0.43 migration. Read release notes, keep bundled SQLite and review native versions/features. Upgrade parent crates for constrained transitives; do not force incompatible transitive versions with patches.
 - **Verification:** Current registry refresh, `cargo tree -e features`, `cargo audit`, `cargo deny`, GNU/musl tests/releases; schema 35 migration/reopen/FTS/ID-exhaustion tests. No schema bump solely for a wrapper upgrade.
-- **Status:** Not Started.
+- **Status:** In Progress. Compatible updates are in STEP-005; rusqlite and parent/feature assessment remain for STEP-006–007.
 
 #### ARCH-001 — Cohesive files still contain oversized multi-responsibility handlers
 
@@ -288,6 +288,19 @@ The code already uses let chains, let-else, `Option::is_some_and`/`is_none_or`, 
 Proposed policy: explicitly document the support floor, test stable/MSRV, and leave production stable-only. Read the exact target release notes before selecting APIs. Reference: [Edition 2024 guide](https://doc.rust-lang.org/edition-guide/rust-2024/index.html).
 
 ## 5. Dependency Upgrade Assessment
+
+Implementation follow-up (STEP-005): a live `cargo update --dry-run` refreshed
+the index and identified seven compatible stable updates, now applied for
+verification: bumpalo 3.20.4, cc 1.11.2, errno 0.3.15, mio 1.2.5,
+rand 0.10.4, rustls-webpki 0.103.17 and zeroize 1.9.2. The tables below retain
+the original audit snapshot; §15 records verified implementation outcomes.
+The rusqlite 0.43 migration is deliberately isolated in STEP-006.
+
+The first live RustSec scan (cargo-audit 0.23.0, database commit
+`233155b4025b854c68a4b199c0e32d7fd53291a2`, 1,527 advisories) reports zero
+known vulnerabilities and the informational unmaintained-chrono advisory
+`RUSTSEC-2026-0543`. No advisory is suppressed. STEP-007 assesses the migration
+needed to replace chrono; a passing audit exit code does not mean no warnings.
 
 All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied.
 
@@ -511,13 +524,13 @@ This is the authoritative checklist for the **next implementation execution**. P
 
 ### Phase 3 — Dependency Upgrades
 
-- [ ] **STEP-005 (P1): Refresh compatible dependencies against a current index.**
+- [x] **STEP-005 (P1): Refresh compatible dependencies against a current index.**
   - Findings: DEPS-001, CI-002. Objective: incorporate stable compatible fixes with a reviewable lock change.
   - Files: `Cargo.toml` rand requirement if desired, `Cargo.lock`, this report.
   - Instructions: rerun live inventory; use refreshed `cargo update --dry-run`, then update compatible releases; inspect every resolved change and target-specific graph. Do not treat the offline zero-update result as current.
   - Dependencies: STEP-004. Risks: transitive behavior/native changes despite semver compatibility.
   - Verification: `cargo tree --duplicates`, `cargo tree -e features`, check/Clippy/test for GNU/musl; audit/deny once tools available.
-  - Acceptance/status: rand >=0.10.4 and compatible stable updates resolved or individually justified; lock stable under `--locked`; **Not Started**.
+  - Acceptance/status: rand >=0.10.4 and compatible stable updates resolved or individually justified; lock stable under `--locked`; **Completed**.
 
 - [ ] **STEP-006 (P1): Migrate rusqlite across the 0.43 boundary.**
   - Findings: DEPS-001. Objective: incorporate upstream fixes while preserving SQLite behavior/schema.
@@ -795,6 +808,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-003 | Downstream and upstream counts now use one RAII guard; regressions cover completion, operational error, cancellation and unwind. fmt, check, default Clippy, 213 tests, reader smoke and doc tests pass. Rustdoc builds with the 13 pre-existing warnings. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-004 | Declared rust-version 1.100 with Edition 2024 unchanged; README and AGENTS now document the floor and distro/rustup support. Installed stable 1.100 passes fmt, check, Clippy and 213 tests on both GNU and musl, plus reader smoke and doc tests. CI Cargo commands enforce the manifest floor. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-005 | Applied seven compatible stable upgrades from the refreshed registry, including rand 0.10.4. fmt/check/Clippy, 213 GNU and musl tests, reader smoke/doc tests, both release builds and musl static linkage/CLI smoke pass. cargo-audit finds no known vulnerabilities and reports the unsuppressed chrono maintenance warning; graph downloads required network escalation. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
