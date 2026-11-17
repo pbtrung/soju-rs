@@ -60,8 +60,10 @@ initial user:
 
     sojuctl -config /etc/soju/config user create -username <soju username> -password <password> -admin
 
-soju-rs uses the same database as upstream soju: an existing `soju.db` can be
-reused as is.
+soju-rs can migrate an existing upstream SQLite database on startup. Back it up
+before opening it: the current schema is 35, and upstream soju and older
+soju-rs versions cannot open the upgraded database. See
+[database upgrades and compatibility](message-text-index.md#upgrades-and-compatibility).
 
 ## Client side
 
@@ -100,3 +102,5 @@ and a workstation, you can setup each client to use the respective usernames
 [releases page]: https://github.com/pbtrung/soju-rs/releases
 [README]: ../README.md
 [gamja]: https://codeberg.org/emersion/gamja
+
+[Documentation index](README.md) · [Configuration reference](soju.1.scd)

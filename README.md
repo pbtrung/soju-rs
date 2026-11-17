@@ -6,14 +6,17 @@ multiple users and networks, detached channels, chat history playback, and
 numerous [IRCv3] extensions.
 
 soju-rs aims to behave exactly like upstream soju (v0.11): same
-configuration file, same database (an existing `soju.db` can be reused as is,
-older schema versions are migrated), same BouncerServ commands and the same
-protocol extensions. It works with [gamja] and other soju-aware clients.
+configuration file, migration of existing SQLite databases, same BouncerServ
+commands and the same protocol extensions. It works with [gamja] and other
+soju-aware clients.
+Database upgrades are one-way: back up before migration. The current schema is
+35; earlier soju-rs versions and upstream soju cannot open an upgraded database.
 
 ## Usage
 
 * [Getting started](doc/getting-started.md)
 * [Man page](doc/soju.1.scd) ([sojuctl](doc/sojuctl.1.scd))
+* [Documentation index](doc/README.md)
 
 ```
 soju -config /etc/soju/config
@@ -44,38 +47,21 @@ the installed native toolchains directly and verifies both musl executables
 are fully static. Set `DIST_DIR` to choose a
 different archive directory.
 
-To build on GitHub, open **Actions → CI and release → Run workflow** and
-select the ref to build. After the tests pass, the run produces both x86_64
-archives and `SHA256SUMS` as a downloadable artifact. Enable **Publish the
+To build on GitHub, open **Actions → Build and Release → Run workflow** and
+select the ref to build. The run produces both x86_64 archives and
+`SHA256SUMS` as a downloadable artifact. Enable **Publish the
 archives as a GitHub Release** to publish those files under the
 `v<version>` tag from `Cargo.toml`. The workflow creates the tag at the
-tested commit if needed. Bump the package version and update `Cargo.lock`
+selected commit if needed. Bump the package version and update `Cargo.lock`
 before publishing a new release.
 
-To publish from a clean `main` checkout without running Cargo locally:
-
-```sh
-./scripts/release-new.sh 0.99.26
-```
-
-This updates `Cargo.toml` and the local package entry in `Cargo.lock`,
-commits and pushes the version bump, then starts the publishing workflow.
-It accepts stable `MAJOR.MINOR.PATCH` versions, with an optional `v` prefix,
-and requires Python 3.11+, Git and an authenticated GitHub CLI (`gh`).
-Tests and builds run in GitHub Actions.
-
-To replace the release for the current version in `Cargo.toml`:
-
-```sh
-./scripts/release-replace.sh
-```
-
-This pushes `main`, moves the remote version tag to `HEAD` with an explicit
-lease, deletes an existing release and its assets if present, then starts a
-fresh publishing workflow. It also works when only the tag exists or when
-neither the release nor tag exists. Both scripts reject a dirty checkout,
-a branch other than `main`, or a local branch behind or diverged from the
-remote. Neither script runs Cargo.
+Run the separate **Tests** workflow against the same ref before publishing.
+The release workflow currently does not require that test run. The local
+`release-new.sh` and `release-replace.sh` helpers still dispatch a removed
+`ci.yml`; the replacement helper can delete an existing release before dispatch
+fails. Use the workflow directly until the
+[release automation findings](doc/audit_results.md#rel-001--release-helpers-dispatch-a-nonexistent-workflow)
+are resolved.
 
 ## Differences from upstream soju
 
@@ -139,7 +125,7 @@ Behaviour changes:
   leaves it to the admin)
 - The message table is clustered by target and time, so a client loading
   recent history reads a few consecutive pages per channel instead of rows
-  scattered over the whole file (see [doc/message-text-index.md](doc/message-text-index.md#7-schema-34-clustered-local-messages)).
+  scattered over the whole file (see [message storage](doc/message-text-index.md#current-layout)).
   Sparse FTS and guarded updates reduce unnecessary work. The current
   database schema is version 35; earlier soju-rs and upstream versions
   cannot open the upgraded database

@@ -103,3 +103,9 @@ dropped: they may be late messages for a network just detached.
     C: @soju.im/network=3 PRIVMSG #soju :hello
     S: @soju.im/network=3;time=2026-10-24T12:00:00.000Z :bob!bob@example.org PRIVMSG #soju :hi
     C: BOUNCER DETACH 3
+
+## Related documentation
+
+- [Unread and mention state](unread.md)
+- [Getting started](getting-started.md)
+- [Documentation index](README.md)
