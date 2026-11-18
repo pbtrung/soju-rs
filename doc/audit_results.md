@@ -125,7 +125,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** All connections, timers and shutdown handling can pause while SQLite waits; existing dual-runtime tests do not simulate lock contention or a large database.
 - **Recommended fix:** First measure timer/connection latency with SQLite contention. Choose a documented runtime/worker strategy that keeps blocking database/event work off the only executor thread while preserving serialized user ownership. A multi-thread runtime with constrained worker count is an option; an owned blocking actor is another. Do not attempt `block_in_place` on current-thread.
 - **Verification:** Both-runtime contention tests with a separate DB connection holding a transaction and maintenance active; assert chosen responsiveness bound and ordering. Benchmark normal traffic before/after.
-- **Status:** Not Started.
+- **Status:** Completed. Owned actor handlers execute behind a 16-job blocking admission limit on both runtimes, preserving event serialization and supervision. Tracked maintenance coalesces expiry/VACUUM requests and joins on stop. Both-runtime 600-ms writer-lock regressions preserve independent I/O/10-ms timer responsiveness within 200 ms, order, 1,000-reload task bounds and shutdown cleanup. Optimized same-harness legacy/current comparison measures a current-thread timer at 329.789 ms versus 10.215 ms; handoff and parsed-IRC throughput costs are recorded in resource-limits.md. Final GNU/musl 282-test suites, compiler/strict Clippy/rustdoc, release/static-link/CLI and dependency gates pass.
 
 #### ASYNC-003 — Delayed mention persistence is not drained at shutdown
 
@@ -155,7 +155,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** WHO/WHOIS/LIST/authentication requests can remain pending or disappear without a terminal result. Late upstream replies require careful handling before advancing a serial queue.
 - **Recommended fix:** Add an owned deadline event/timer for the active head, complete affected downstream requests, and specify how late replies are isolated. If isolation is impossible without labels, reconnect or use an explicitly documented recovery policy rather than misroute replies.
 - **Verification:** Paused-time test: enqueue two requests, upstream never replies, no third enqueue; assert bounded completion. Add late-reply, early-error, disconnect and labeled-response cases.
-- **Status:** Not Started.
+- **Status:** Completed. Autonomous actor deadlines expire active serial commands after 30 seconds without another request. Typed kinds, connection IDs and owned command epochs reject stale events; timeout aborts every queue with labeled terminal replies and reconnects to isolate late replies. Paused-time no-third-request, late/label, stale-epoch and 64-entry-cap regressions pass. Combined final GNU/musl suites pass 282 tests each with strict Clippy on both targets, strict rustdoc, release/static-link/CLI checks and dependency policy.
 
 #### LINT-001 — Required correctness policy is absent and fails when trialled
 
@@ -216,7 +216,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Resource and cancellation regressions can pass the current suite; compiler/Clippy success does not validate native allocator/SQLite/AWS-LC behavior.
 - **Recommended fix:** Add finding-specific regressions, property tests for parsers/IDs, separate fuzz targets/corpus, file-backed integrity/rollback/concurrent-initializer cases.
 - **Verification:** Commands/coverage targets in phases 8 and 10. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
-- **Status:** Not Started.
+- **Status:** In Progress. Resource/lifecycle, persistence, timeout and authentication regressions were added and verified through Phase 6; parser properties/fuzz corpus, migration stress and sustained soaks remain in STEP-024–025.
 
 #### AUTH-001 — OAuth discovery requires issuer presence, not equality
 
@@ -226,7 +226,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Misconfigured/misdirected discovery can authenticate against an unintended issuer or send credentials to an unintended endpoint. The audit did not demonstrate interception of a correctly configured HTTPS issuer.
 - **Recommended fix:** Apply the RFC 8414 issuer comparison rules, with carefully defined handling of configured userinfo and paths; explicitly define secure endpoint/redirect policy and any local-test exception. Bound metadata/introspection response bodies. Preserve generic external auth errors and never log client secrets/tokens.
 - **Verification:** Mock discovery with matching/mismatching issuer, wrong endpoint scheme, redirect, oversized JSON, inactive/missing-username tokens. Document compatibility implications for existing providers. Reference: [RFC 8414 §3.3](https://www.rfc-editor.org/rfc/rfc8414#section-3.3).
-- **Status:** Not Started.
+- **Status:** Completed. Bind metadata issuer exactly to the credential-stripped configuration; require HTTPS and certificate validation, reject redirects and unsafe URL components, and bound both response bodies to 64 KiB with 10-second deadlines. Explicit loopback-only HTTP fixtures cannot delegate token posts to another origin. Redact HTTP/decoder and provider-username mismatch diagnostics. Matching/missing/mismatch, TLS/policy/redirect, known/chunked limits, malformed authorities, inactive/external PLAIN and echoed-credential regressions pass. Final GNU/musl 282-test suites, strict compiler/Clippy/rustdoc, release/static-link/CLI and dependency gates pass.
 
 ### 3.4 Low-Priority Issues
 
@@ -499,7 +499,7 @@ Other >100-line candidates: welcome, PRIVMSG, BOUNCER, READ, WHO/WHOIS, CLIENTCE
 
 ## 10. Testing and CI Assessment
 
-The original baseline contained 152 library tests, two sojuctl tests, two listener integrations and 54 server integrations (27 scenarios run on both Tokio runtimes): **210 passing tests per GNU/musl run**. These tests are preserved; implementation adds four Rust regressions, bringing the current total to 214 per target. There are currently zero doctests. `--all-targets` additionally smoke-runs the custom reader harness. Existing coverage includes malformed PROXY/TLS/cert pinning, SASL chunks, credential redaction, stream cancellation, queues, multiline, migration/reopen/FTS, high-water IDs, user isolation, deferred service operations and dual-runtime behavior.
+The original baseline contained 152 library tests, two sojuctl tests, two listener integrations and 54 server integrations (27 scenarios run on both Tokio runtimes): **210 passing tests per GNU/musl run**. These tests are preserved. Implementation through Phase 6 now passes 282 tests per GNU/musl target: 210 library, one server-binary, two admin-binary, five listener and 64 server integration tests (32 scenarios on both Tokio runtimes). There are currently zero doctests. `--all-targets` additionally smoke-runs the custom reader harness. Existing coverage includes malformed PROXY/TLS/cert pinning, SASL chunks, credential redaction, stream cancellation, queues, multiline, migration/reopen/FTS, high-water IDs, user isolation, deferred service operations and dual-runtime behavior.
 
 Shell syntax checks and Python AST parsing pass for the release/compatibility/benchmark scripts. These do **not** detect REL-001's missing workflow or prove script operational behavior.
 
@@ -674,29 +674,29 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: stop-before-delay/reopen regression, injected write failure/recovery, delete-during-flush.
   - Acceptance/status: successful orderly shutdown includes the latest durable mention; errors reported with defined policy; **Completed**.
 
-- [ ] **STEP-018 (P1): Implement autonomous pending-command timeout.**
+- [x] **STEP-018 (P1): Implement autonomous pending-command timeout.**
   - Findings: PROTO-001, PANIC-001. Objective: avoid permanently stuck serial queues and lost terminal replies.
   - Files: `src/upstream/commands.rs`, connection/timer events, `src/user/events.rs`, upstream server tests.
   - Instructions: typed active deadline event keyed by connection/command generation; complete downstream failures, advance or reconnect per late-response policy; stop timers on disconnect/deletion; preserve early-error correlation.
   - Dependencies: STEP-010, STEP-015. Risks: late replies routed to next request.
   - Verification: paused-time no-reply/no-third-request regression; late reply, label, disconnect and queue-cap tests.
-  - Acceptance/status: requests terminate within policy without misrouting; **In Progress**. Implementation written; tests and gates deferred until STEP-020 per user direction.
+  - Acceptance/status: requests terminate within policy without misrouting; **Completed**.
 
-- [ ] **STEP-019 (P1): Resolve current-thread database stalls.**
+- [x] **STEP-019 (P1): Resolve current-thread database stalls.**
   - Findings: ASYNC-002. Objective: keep networking/timers responsive under persistence contention.
   - Files: `src/server.rs`, `src/bin/soju.rs`, `src/user/events.rs`, DB execution boundary and contention integration tests.
   - Instructions: measure the existing stall, then choose the smallest ownership-safe runtime/blocking-worker design; retain event serialization. Ensure started blocking work and shutdown have defined completion semantics.
   - Dependencies: STEP-008. Risks: worker handoff overhead and actor ordering.
   - Verification: current-thread/multi-thread contention, expiry/VACUUM, latency and normal-throughput comparison.
-  - Acceptance/status: stated timer/connection latency bound met under controlled contention; no per-message unbounded spawning; **In Progress**. Implementation written; contention/throughput measurements and gates deferred until STEP-020 per user direction.
+  - Acceptance/status: stated timer/connection latency bound met under controlled contention; no per-message unbounded spawning; **Completed**.
 
-- [ ] **STEP-020 (P1): Validate OAuth discovery trust and body limits.**
+- [x] **STEP-020 (P1): Validate OAuth discovery trust and body limits.**
   - Findings: AUTH-001. Objective: bind provider metadata to the configured issuer.
   - Files: `src/auth.rs`, config/auth docs, mock HTTP auth tests.
   - Instructions: RFC issuer equality validation, secure endpoint/redirect policy and byte-bounded response decoding; retain intentional local testing support only through explicit policy. Preserve token/secret redaction.
   - Dependencies: STEP-010. Risks: provider configurations previously accepted become rejected; document required changes.
   - Verification: matching/mismatch discovery, HTTP/HTTPS/redirect/oversized/error/token cases, external auth integration tests.
-  - Acceptance/status: mismatched issuer cannot authenticate, configured compatibility documented, secrets absent from logs; **In Progress**. Implementation and mock-provider regressions written; final Phase 6 test/gate execution follows.
+  - Acceptance/status: mismatched issuer cannot authenticate, configured compatibility documented, secrets absent from logs; **Completed**.
 
 ### Phase 7 — Architecture Refactoring
 
@@ -791,10 +791,10 @@ These results concern the **unchanged baseline**, not the proposed fixes. PASS m
 | Long-running memory/FD/task soak | NOT RUN | Finite probes and bounded-queue tests do not replace a soak |
 | Before/after performance | NOT RUN | Audit-only: no changed binary to compare |
 
-### Implementation verification for phases 1–3
+### Earlier implementation verification
 
 These rows supersede the original tooling-availability/freshness blockers;
-they do not imply completion of later hardening phases.
+later hardening verification is recorded separately below.
 
 | Check | Actual result | Evidence / limit |
 | --- | --- | --- |
@@ -818,6 +818,31 @@ were retried with approved access. Tools live under `/tmp/soju-audit-tools`;
 registry/analysis logs use `/tmp/soju-step-<step>-*.log` and advisory JSON files.
 The STEP-030 dependency graph removes chrono; the advisory gate now passes without exceptions.
 
+### Final verification through Phase 6
+
+Per user direction, STEP-018–020 implementations preceded the combined final
+checks. The implementation commits kept those steps In Progress until these
+checks and measurements completed. Earlier failed checks are recorded as
+resolved failures rather than counted as passes.
+
+| Check | Actual result | Evidence / limit |
+| --- | --- | --- |
+| Initial combined checks | FAIL, resolved | Added the tokio-util task-tracking lockfile edge without changing versions; fixed strict-lint diagnostics and the timeout fixture's capability setup before the final passing runs |
+| Formatting and locked workspace/all-target/all-feature check | PASS | Final source, plus the benchmark-target smoke rerun after extending its dispatch comparison |
+| Strict Clippy | PASS | All targets/features on GNU and musl; no broad lint suppression |
+| Full GNU/musl suites | PASS | 282 tests per target; both Tokio runtimes; custom reader harness and zero-failure doc tests |
+| Strict rustdoc | PASS | `RUSTDOCFLAGS=-D warnings`, zero warnings |
+| Optimized GNU/musl binaries | PASS | Both binaries; musl has no ELF interpreter or NEEDED entries; version/help CLI smoke succeeds |
+| Advisory, license/source/ban and unused-dependency checks | PASS | cargo audit/deny/machete; duplicate-major warnings remain visible; no new advisory ignore |
+| Controlled resource/ownership/persistence/auth regressions | PASS | History/receipt churn, transport admission, writer teardown, notification saturation, mention draining, command deadlines, SQLite contention and OAuth trust/redaction |
+| Actor contention and normal parsed-IRC comparisons | PASS | Recorded in [resource limits](resource-limits.md#actor-boundary-measurements), including measured handoff/throughput overhead |
+| External Go/ergo/IRCv3/plumbing/gamja comparison | NOT RUN | External environment remains unprovisioned; no transcript-equivalence claim |
+| Sustained resource soak and parser fuzz corpus | NOT RUN | Remain future STEP-024–025 work; finite regressions and benchmarks are not a long soak |
+
+Final check logs use `/tmp/soju-step-phase6-final-check-*.log` and
+`/tmp/soju-phase6-final-*.log`. Benchmarks use fixed finite workload counts;
+their timing values are specific to the measured host and runtime choices.
+
 Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, `soju-audit-all-targets.log`, `soju-audit-musl.log`, `soju-audit-doc.log`, `soju-audit-strict-doc.log`, `soju-audit-strict-clippy.log`, `soju-audit-release.log`, `soju-audit-musl-release.log`, `soju-audit-update-dry-run.log`. Paths after the first share `/tmp/`. Temporary files are convenience evidence, not durable repository artifacts; key outcomes are recorded here.
 
 ## 13. Compatibility and Performance Risks
@@ -826,18 +851,16 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 - **Protocol compatibility:** Preserve IRC framing/redaction, SASL failures, labeled-response ownership, batch/multiline semantics, dual-runtime ordering, multiplexing and future server clocks. Bounded history/push/connection policies introduce explicit operational behavior and require documentation and transcript tests.
 - **Scheduling:** Moving DB work off the single runtime thread may add handoffs. Admission limits may reject legitimate bursts. Choose limits from measurements and test slow-client fairness; do not create unlimited permit-waiting tasks.
 - **Crypto/native:** Keep certificate pinning leaf-only and handshake signature validation; optional client certificates rely on later fingerprint authentication, not CA trust. Do not weaken those intentional trust boundaries during dependency migration. GNU/musl builds are required but do not establish arbitrary-platform support.
-- **Measurement:** Existing reader/performance documents are historical measurements, not results rerun here. This audit made no hot-path change and claims no speedup. New benchmarks must separate parsing, DB lock latency, notification work and whole-server traffic.
+- **Measurement:** Original audit measurements describe the original code. Implementation measurements in [resource limits](resource-limits.md) separate retained-state accounting, enumeration, actor handoffs, parsed-IRC traffic and SQLite lock latency. The worker boundary improves current-thread contention latency while adding uncontended throughput overhead; full production capacity remains unmeasured.
 - **Rollback:** Dependency changes should be isolated/reviewed; schema remains unchanged. Cursor/eviction and new issuer policy changes need explicit compatibility notes. Keep the last verified working state if a major migration cannot be validated.
 
 ## 14. Remaining Issues and Blockers
 
-**Remaining high-priority work:** CI-001 test-before-release enforcement, MEM-001 aggregate history growth and ASYNC-001 unbounded task admission. REL-001 is fixed in STEP-002. No critical defect was confirmed.
+**Remaining CI findings:** CI-001 automatic/test-before-release enforcement and CI-002 reproducibility remain open outside the requested implementation plan. REL-001 is fixed. No critical defect was confirmed.
 
-**Remaining medium/low work:** ASYNC-004 abandoned-writer retention, PROTO-001 enqueue-only expiry, remaining architecture/lifecycle hardening. Compiler/pedantic policy, strict rustdoc and numeric-boundary work are now enforced by STEP-009–011. ASYNC-005 metric cancellation, RUST-001 compiler policy and DEPS-001 version freshness are resolved by their completed steps. DEPS-002 is resolved by the verified STEP-030 Jiff migration. ASYNC-003's lifecycle gap is evident in ownership/shutdown code; the full file-backed loss scenario must become a regression before claiming a completed fix.
+**Remaining architecture and test work:** ARCH-001's cohesive handler/registry extraction, TEST-001's parser properties/fuzz corpus, migration stress and sustained resource soaks remain planned in later phases. Phases 4–6 resolve the verified numeric/lint, history/admission/receipt, writer/push/mention, timeout, current-thread blocking and OAuth issuer issues with the regressions recorded above. TEST-001 is In Progress because those lifecycle regressions are complete while its broader coverage remains pending.
 
-**Potential risks needing targeted measurement/validation:** accepted-session saturation, single-runtime DB stalls under contention, receipt-cache cardinality, provider metadata trust configurations, failure/poison paths, native/advisory exposure. Do not label these all exploitable vulnerabilities.
-
-**Optional improvements:** cohesive function/module extraction, measured receipt deduplication, feature pruning and reproducibility refinements. None justify speculative architecture/allocator rewrites.
+**Limits and further measurement:** memory-only receipt retention remains unchanged and outside the aggregate history/persistent-cache budgets. Blocking actor handoffs have a measured uncontended throughput cost. The documented finite counter/RSS, contention and replay tests do not establish whole-process memory limits, arbitrary-host latency bounds, production capacity or external transcript equivalence.
 
 **Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. STEP-030 removes chrono and the full cargo-deny policy passes without advisory ignores; duplicate-major warnings remain visible. cargo-outdated/fuzz tooling remains unavailable; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
 
@@ -869,13 +892,17 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-015 | Remove writer-owned senders/session owners. Explicit shared ownership keeps clones/views valid, cancels abandonment and rate/write waits, and preserves requested graceful draining. Attachment guards remove actor clones and persist receipts after serving-task abort. Idle/blocked/rate/drain/view and both-runtime abort regressions pass, including the ten-second abandoned-writer close bound. Full GNU/musl checks (254 tests each), strict Clippy/rustdoc and documentation checks pass. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-016 | One bounded/coalescing worker per user admits at most 128 pending conversations/1 MiB and one active job; sender-wide semaphore limits encryption/HTTP to 32 requests. Integrate delayed read checks, MARKREAD, overflow metrics, joined stop, network cancellation and registration-test stop tokens. Recheck scoped subscription snapshots and conditionally delete expiry to protect replacement IDs/keys; invalidate subscription caches. Flood/timing/byte/cancel/expiry/owner/global-cap/25-subscription/four-test-slot regressions pass. Full GNU/musl checks (264 tests each), strict Clippy/rustdoc and documentation checks pass; stale Unix-socket fixture now waits for actual refusal. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-017 | Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-019 remains for handler responsiveness. | Completed; commit/push follows verification |
-
 | 2026-11-17 / scope revision | Removed native instrumentation requirements and the CI-hardening phase; retained resource-soak work, local quality gates and open CI findings. Preserve retired step numbers. Remaining Phase 6 implementation precedes the final test/gate run, per user direction. | Markdown links and whitespace checks pass; Rust tests/gates deferred to final Phase 6 validation |
+| 2026-11-17 / STEP-018 | Autonomous actor deadlines expire active serial commands after 30 seconds without another request. Typed kinds, connection IDs and owned command epochs reject stale events; timeout aborts every queue with labeled terminal replies and reconnects to isolate late replies. Paused-time no-third-request, late/label, stale-epoch and 64-entry-cap regressions pass. Combined final GNU/musl suites pass 282 tests each with strict Clippy on both targets, strict rustdoc, release/static-link/CLI checks and dependency policy. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-019 | Owned actor handlers execute behind a 16-job blocking admission limit on both runtimes, preserving event serialization and supervision. Tracked maintenance coalesces expiry/VACUUM requests and joins on stop. Both-runtime 600-ms writer-lock regressions preserve independent I/O/10-ms timer responsiveness within 200 ms, order, 1,000-reload task bounds and shutdown cleanup. Optimized same-harness legacy/current comparison measures a current-thread timer at 329.789 ms versus 10.215 ms; handoff and parsed-IRC throughput costs are recorded in resource-limits.md. Final GNU/musl 282-test suites, compiler/strict Clippy/rustdoc, release/static-link/CLI and dependency gates pass. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-020 | Bind metadata issuer exactly to the credential-stripped configuration; require HTTPS and certificate validation, reject redirects and unsafe URL components, and bound both response bodies to 64 KiB with 10-second deadlines. Explicit loopback-only HTTP fixtures cannot delegate token posts to another origin. Redact HTTP/decoder and provider-username mismatch diagnostics. Matching/missing/mismatch, TLS/policy/redirect, known/chunked limits, malformed authorities, inactive/external PLAIN and echoed-credential regressions pass. Final GNU/musl 282-test suites, strict compiler/Clippy/rustdoc, release/static-link/CLI and dependency gates pass. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
-The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. STEP-008 now enforces the core compiler/Clippy policy. Next, finish the staged numeric, unwrap/expect, pedantic and error-mapping policy and address resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after in-scope GNU/musl builds, protocol/database compatibility and security/resource checks have recorded actual results. Local quality gates remain required; CI automation findings remain open outside the current implementation plan.
+Phases 1–6 now establish release preflight, current compiler/Clippy policy and warning-clean documentation, reviewed dependencies with the Jiff migration, bounded history/session/push work, a bounded lazy durable-receipt cache, owned writer/mention lifecycles, autonomous command deadlines, blocking actor execution and issuer-bound OAuth metadata. The combined final Phase 6 gates and measured tradeoffs are recorded in §12 and the resource guide.
+
+The later architecture, parser/property/fuzz, migration-stress and resource-soak steps retain their pending statuses. Local quality gates remain required. CI automation findings stay open outside the implementation plan per the user's scope decision. Close the full audit only after the remaining in-scope compatibility and resource checks have actual recorded results.
 
 This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.

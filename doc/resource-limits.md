@@ -89,8 +89,9 @@ each 100-attempt burst kept two admitted sessions, five live Tokio tasks and
 For SQLite message storage, each user's networks share a dirty-receipt cache
 limited to 4,096 target/client entries and 4 MiB of accounted bytes. Accounting
 charges each entry for client/ID bytes, two target spellings and a conservative
-256 bytes of map/string metadata; it is not a process-RSS ceiling. Temporary
-flush copies and SQLite's own page/sort storage are outside that retained-cache
+256 bytes of map/string metadata; it is not a process-RSS ceiling. Map spare
+capacity and allocator bookkeeping are separately bounded by the entry cap.
+Temporary flush copies and SQLite's own page/sort storage are outside that retained-cache
 counter. The existing 10,000-target cap on client-supplied acknowledgments still
 includes durable targets.
 
@@ -243,8 +244,8 @@ occurs externally while it waits for a writer lock. Network updates transfer
 the pending map and deadline together. Regressions verify stop before a future
 coalescing deadline followed by file reopen, transaction rollback, retained
 failure/recovery, monotonic timestamps, deletion during a blocked flush and
-reported permanent shutdown failures. Current-thread actor-handler database
-responsiveness remains the separate STEP-019 work.
+reported permanent shutdown failures. Actor-handler database responsiveness is
+covered by the owned worker boundary below; each user's events remain serialized.
 
 ## Pending upstream commands
 
@@ -265,8 +266,9 @@ command parameters can contain secrets.
 The deadline applies to the active head starting when its upstream send is
 queued; queued requests can wait behind responsive commands. Timer handling
 occurs at actor event boundaries and therefore also depends on the current
-handler's completion. STEP-019 provides the separate blocking-work execution
-boundary. STEP-018 implementation and regressions await the final Phase 6 gates.
+handler's completion. The owned worker boundary below keeps that handler's
+blocking work off async workers. The paused-time no-third-request, labeled/late
+reply, stale-epoch and queue-cap regressions pass in the final Phase 6 suite.
 
 ## Actor database work and maintenance
 
@@ -284,8 +286,8 @@ SQLite mutex/write wait. It does not make SQLite concurrent or remove its
 five-second busy timeout. Handoffs add overhead to light handlers; the controlled
 baseline/worker comparison is `cargo bench --bench reader -- --actor-boundary`.
 The comparison includes a 10-ms timer during a 250-ms SQLite writer lock and
-seven-sample lightweight event-handoff costs on both runtimes. Measurements and
-regression outcomes are deferred to the final Phase 6 gates.
+seven-sample lightweight event-handoff costs and three-sample parsed-IRC pipeline
+costs on both runtimes. Final regressions pass on both GNU and musl.
 
 Expiry reloads coalesce into one tracked maintenance worker with one pending
 request instead of spawning a waiter per reload. Fixed maintenance timers and
@@ -296,6 +298,40 @@ checks independent duplex I/O and a 10-ms timer within 200 ms, preserves event
 order, coalesces 1,000 expiry reloads into at most three tracked tasks and checks
 that shutdown leaves none. This controlled bound does not promise latency under
 arbitrary host load or for a user's own operation waiting on the database.
+
+### Actor boundary measurements
+
+Measured with the optimized GNU/Linux benchmark on 2026-11-17. The harness
+reconstructs the former inline/current-thread and `block_in_place`/multi-thread
+paths alongside the owned worker boundary in one executable. The multi-thread
+runtime uses two workers; the current-thread runtime uses one async worker.
+
+| Runtime | 10-ms timer, former path with 250-ms writer lock | Owned worker path | 2,000 owned counter handoffs, median |
+| --- | ---: | ---: | ---: |
+| Current thread | 329.789 ms | 10.215 ms | 11.375 ms |
+| Multi thread | 11.224 ms | 11.232 ms | 11.798 ms |
+
+Seven-sample inline counter-loop medians were 2.835 µs and 2.995 µs for 2,000
+iterations respectively. The owned handoff costs about 5.7–5.9 µs per tiny
+event in this control workload. SQLite busy backoff explains why the old
+current-thread timer can exceed the writer's 250-ms hold time.
+
+The normal-traffic comparison parses 4,096 IRC messages through a duplex stream
+and the real reader/input-permit path. Both dispatch variants account the same
+payload and release its input permit; values below are three-sample medians.
+
+| Runtime | Payload bytes | Former dispatch path | Owned worker dispatch |
+| --- | ---: | ---: | ---: |
+| Current thread | 32 | 2.290 ms | 32.325 ms |
+| Current thread | 256 | 4.515 ms | 30.601 ms |
+| Multi thread | 32 | 2.376 ms | 23.405 ms |
+| Multi thread | 256 | 3.702 ms | 23.843 ms |
+
+The boundary reduces current-thread lock-induced timer stalls and slows this
+lightweight, uncontended pipeline. These measurements quantify the latency and
+throughput tradeoff. TLS, persistence and full user-state work are outside the
+pipeline workload; production capacity still needs the separately planned
+controlled resource soaks.
 
 ## OAuth metadata and introspection
 
@@ -331,5 +367,5 @@ provides the token-introspection transport and credential-handling context.
 New regression code covers matching/missing/mismatched issuers, exact identity,
 HTTP/HTTPS policy, untrusted TLS certificates, cross-origin local delegation,
 redirects, known/chunked body limits, inactive tokens, external PLAIN wiring,
-client credentials and error redaction. Execution is deferred until the final
-Phase 6 test/gate run.
+client credentials and error redaction, including echoed credentials in a
+provider username mismatch. These pass in the final GNU/musl Phase 6 suite.
