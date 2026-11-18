@@ -145,7 +145,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Orphaned idle writer tasks/sockets. Temporary duplex probe dropped the reader and connection and got a timeout, rather than EOF, when reading the peer. This proves the ownership behavior, not a socket leak on every normal disconnect.
 - **Recommended fix:** Give a session owner/drop guard explicit cancellation responsibility, or remove sender retention from writer-owned state so last external sender drop terminates the writer. Preserve view lifetime semantics and explicit graceful drain.
 - **Verification:** Drop all handles with idle, buffered and blocked writers; peer must close within a defined bound. Abort serving tasks, check cleanup; preserve view and graceful-shutdown regressions.
-- **Status:** Not Started.
+- **Status:** Completed. Remove writer-owned senders/session owners. Explicit shared ownership keeps clones/views valid, cancels abandonment and rate/write waits, and preserves requested graceful draining. Attachment guards remove actor clones and persist receipts after serving-task abort. Idle/blocked/rate/drain/view and both-runtime abort regressions pass, including the ten-second abandoned-writer close bound. Full GNU/musl checks (254 tests each), strict Clippy/rustdoc and documentation checks pass.
 
 #### PROTO-001 — Pending-command expiry occurs only on another enqueue
 
@@ -644,13 +644,13 @@ This is the authoritative checklist for the **next implementation execution**. P
 
 ### Phase 6 — Async and Concurrency
 
-- [ ] **STEP-015 (P1): Repair connection writer ownership.**
+- [x] **STEP-015 (P1): Repair connection writer ownership.**
   - Findings: ASYNC-004. Objective: free the writer/stream when its session is abandoned.
   - Files: `src/conn.rs`, reader/transport if needed, `src/conn/tests.rs`, downstream serve ownership.
   - Instructions: remove writer self-retention or add explicit owned session cancellation; preserve cloned handles/views and graceful queued writes. Clarify what dropping a reader means versus dropping the last session owner; do not use Arc strong-count races as a shutdown protocol.
   - Dependencies: STEP-010. Risks: premature close across clones/views or lost buffered output.
   - Verification: temporary probe converted to regression; idle/blocked/draining writers, serving-task abort, view tests.
-  - Acceptance/status: abandoned sessions close and tasks finish within stated bounds; **Not Started**.
+  - Acceptance/status: abandoned sessions close and tasks finish within stated bounds; **Completed**.
 
 - [ ] **STEP-016 (P1): Add a bounded notification worker.**
   - Findings: ASYNC-001. Objective: constrain notification work before creating tasks.
@@ -880,6 +880,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-012 | Bound per-user memory history to 1,024 targets, 16,384 messages and 16 MiB accounted storage with coherent eviction and incarnation-scoped cursors. Churn/cursor/accounting tests and full GNU/musl checks (235 tests each), strict Clippy/rustdoc pass. Finite 800k-target/40k-large-record experiment plateaus at 1,024 targets / 1,010 large records; RSS measurements and accounting limits documented in resource-limits.md. Receipt-cache portion of MEM-001 remains for STEP-014. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-013 | Global accepted-session admission defaults to 256, is reloadable, rejects before spawning, and follows physical streams through TLS/PROXY/HTTP/WebSocket upgrades. Cancellation closes session writers. Concurrent admission, 300 overload attempts, close/error/upgrade/reload/admin/shutdown/abort regressions pass; full GNU/musl checks (240 tests each), strict Clippy/rustdoc and documentation links pass. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-014 | Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-015 | Remove writer-owned senders/session owners. Explicit shared ownership keeps clones/views valid, cancels abandonment and rate/write waits, and preserves requested graceful draining. Attachment guards remove actor clones and persist receipts after serving-task abort. Idle/blocked/rate/drain/view and both-runtime abort regressions pass, including the ten-second abandoned-writer close bound. Full GNU/musl checks (254 tests each), strict Clippy/rustdoc and documentation checks pass. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

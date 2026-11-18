@@ -458,17 +458,16 @@ fn failed_writer_enqueue_releases_accounting_and_closes_connection() {
         // Model a writer that exited between checking closed and sending.
         let (tx, rx) = mpsc::unbounded_channel();
         drop(rx);
-        let conn = Conn {
-            shared: Arc::new(Shared {
-                tx,
+        let conn = Conn::from_shared(
+            Arc::new(Shared {
                 queued: AtomicUsize::new(0),
                 queued_bytes: AtomicUsize::new(0),
                 closed: AtomicBool::new(false),
                 cancel: CancellationToken::new(),
                 logger: Logger::new(false),
             }),
-            view: None,
-        };
+            tx,
+        );
         if shutdown {
             conn.shutdown();
         } else {
@@ -528,4 +527,176 @@ async fn transport_close_preserves_shutdown_errors() {
         err.downcast_ref::<std::io::Error>().unwrap().kind(),
         std::io::ErrorKind::BrokenPipe
     );
+}
+
+struct TrackedIo {
+    io: tokio::io::DuplexStream,
+    dropped: Arc<AtomicBool>,
+}
+impl Drop for TrackedIo {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+impl AsyncRead for TrackedIo {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+impl AsyncWrite for TrackedIo {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+    }
+}
+fn tracked_stream(
+    capacity: usize,
+    rate: Option<(RateLimit, RateLimitFlag)>,
+) -> (Conn, ConnReader, tokio::io::DuplexStream, Arc<AtomicBool>) {
+    let (io, peer) = tokio::io::duplex(capacity);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let (conn, reader) = Conn::new_stream(
+        Box::new(TrackedIo {
+            io,
+            dropped: dropped.clone(),
+        }),
+        Logger::new(false),
+        rate,
+    );
+    (conn, reader, peer, dropped)
+}
+async fn await_transport_drop(dropped: &AtomicBool) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_an_idle_session_drops_the_writer_and_stream() -> anyhow::Result<()> {
+    let (conn, reader, _peer, dropped) = tracked_stream(4096, None);
+    let state = Arc::downgrade(&conn.shared);
+    drop((conn, reader));
+    await_transport_drop(&dropped).await?;
+    assert!(state.upgrade().is_none(), "writer retained its state");
+    Ok(())
+}
+
+#[tokio::test]
+async fn clones_and_views_own_sessions_independently_of_readers() -> anyhow::Result<()> {
+    use tokio::io::AsyncBufReadExt;
+    let (conn, reader, peer, dropped) = tracked_stream(4096, None);
+    let clone = conn.clone();
+    let view = clone.view("soju.im/network", "1", || {});
+    drop((reader, conn, clone));
+    assert!(!dropped.load(Ordering::SeqCst));
+    view.send_message(crate::msg!("PING", "still-owned"));
+    let mut peer = BufReader::new(peer);
+    let mut line = String::new();
+    tokio::time::timeout(Duration::from_secs(1), peer.read_line(&mut line)).await??;
+    assert_eq!(line, "@soju.im/network=1 PING still-owned\r\n");
+    drop(view);
+    await_transport_drop(&dropped).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_shutdown_drains_queued_output_after_last_owner_drops() -> anyhow::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let (conn, reader, mut peer, dropped) = tracked_stream(64, None);
+    let mut expected = String::new();
+    for i in 0..100 {
+        let line = format!("line-{i}");
+        conn.send_message(crate::msg!("PRIVMSG", "#a", &line));
+        expected.push_str("PRIVMSG #a ");
+        expected.push_str(&line);
+        expected.push_str("\r\n");
+    }
+    conn.shutdown();
+    drop((conn, reader));
+    let mut output = String::new();
+    tokio::time::timeout(Duration::from_secs(2), peer.read_to_string(&mut output)).await??;
+    assert_eq!(output, expected);
+    await_transport_drop(&dropped).await?;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn abandoned_blocked_writer_finishes_within_close_timeout() {
+    let (conn, reader, _peer, dropped) = tracked_stream(1, None);
+    conn.send_message(crate::msg!("PRIVMSG", "#a", "x".repeat(9000)));
+    tokio::task::yield_now().await;
+    drop((conn, reader));
+    tokio::task::yield_now().await;
+    tokio::time::advance(WRITE_TIMEOUT + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert!(dropped.load(Ordering::SeqCst));
+}
+
+#[tokio::test(start_paused = true)]
+async fn abandonment_interrupts_rate_limiter_wait() -> anyhow::Result<()> {
+    let (conn, reader, _peer, dropped) = tracked_stream(
+        4096,
+        Some((
+            RateLimit {
+                delay: Duration::from_secs(3600),
+                burst: 1,
+            },
+            Arc::new(AtomicBool::new(true)),
+        )),
+    );
+    for i in 0..3 {
+        conn.send_message(crate::msg!("PING", i.to_string()));
+    }
+    tokio::task::yield_now().await;
+    drop((conn, reader));
+    await_transport_drop(&dropped).await?;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn graceful_shutdown_preserves_rate_limited_queue() -> anyhow::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let (conn, reader, mut peer, dropped) = tracked_stream(
+        4096,
+        Some((
+            RateLimit {
+                delay: Duration::from_secs(1),
+                burst: 1,
+            },
+            Arc::new(AtomicBool::new(true)),
+        )),
+    );
+    for i in 0..3 {
+        conn.send_message(crate::msg!("PING", i.to_string()));
+    }
+    conn.shutdown();
+    drop((conn, reader));
+    let mut output = String::new();
+    tokio::time::timeout(Duration::from_secs(5), peer.read_to_string(&mut output)).await??;
+    assert_eq!(output, "PING 0\r\nPING 1\r\nPING 2\r\n");
+    assert!(dropped.load(Ordering::SeqCst));
+    Ok(())
 }

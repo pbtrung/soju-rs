@@ -64,6 +64,7 @@ test_on_both_runtimes!(
     disconnected_client_history,
     sqlite_history_survives_restart,
     receipt_playback_survives_disconnect_and_restart,
+    aborted_downstream_session,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -518,3 +519,7 @@ use cases_multiplex::{multiplex, multiplex_not_attached_label, multiplex_unsuppo
 #[path = "server/service.rs"]
 mod cases_service;
 use cases_service::{service_blocking_work, service_other_user, user_network_channel_isolation};
+
+#[path = "server/lifecycle.rs"]
+mod cases_lifecycle;
+use cases_lifecycle::aborted_downstream_session;

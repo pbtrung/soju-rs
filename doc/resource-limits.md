@@ -147,3 +147,25 @@ notification or reconnect throughput. Regressions separately cover shared
 cache pressure, large entries, 10,000-receipt lazy file reopen, partial flushes,
 case/invalid-UTF8 aliases, atomic new-target initialization, injected failure
 and named-client playback after disconnect/restart on both Tokio runtimes.
+
+## Connection ownership
+
+`Conn` clones and virtual views are session owners. The writer task owns only
+transport/state, without a sender or session owner, so it cannot keep itself
+alive. Dropping the final owner cancels an abandoned session, including rate
+limiter and blocked write waits. The existing writer-close operation then has
+a ten-second timeout; idle teardown finishes without that delay. Reads wake on
+cancellation. A retained reader still owns its read half until it is dropped;
+dropping only the reader does not close remaining writer owners/views.
+
+Calling `shutdown()` before releasing owners explicitly requests graceful,
+ordered queue draining. Dropping those owners does not cancel that drain.
+Rate limits still apply, so graceful duration depends on queued output and its
+configured rate; stalled writes and transport close retain their individual
+ten-second timeouts. Calling `close()` requests cancellation instead.
+
+Cancelling a downstream serving task also notifies the user actor to remove
+its connection clone and flush client receipts. This uses an owned attachment
+guard, ordered after attachment. Tests cover an idle abandoned stream, clones
+and views after reader drop, queued and rate-limited draining, blocked close,
+rate-wait cancellation and abort after registration on both Tokio runtimes.

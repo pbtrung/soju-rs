@@ -77,7 +77,6 @@ enum Outgoing {
 }
 
 struct Shared {
-    tx: mpsc::UnboundedSender<Outgoing>,
     /// The number of messages queued and not written yet
     queued: AtomicUsize,
     /// The accounted size of these messages, see `MAX_QUEUED_BYTES`
@@ -85,6 +84,14 @@ struct Shared {
     closed: AtomicBool,
     cancel: CancellationToken,
     logger: Logger,
+}
+
+impl Shared {
+    fn close(&self) {
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            self.cancel.cancel();
+        }
+    }
 }
 
 /// A virtual connection multiplexed on a connection (soju.im/multiplex):
@@ -97,10 +104,28 @@ struct View {
     on_close: Box<dyn Fn() + Send + Sync>,
 }
 
-/// A handle to a connection's writer. Cloning is cheap.
+struct SessionOwner {
+    cancel: CancellationToken,
+    draining: AtomicBool,
+}
+
+impl Drop for SessionOwner {
+    fn drop(&mut self) {
+        if !self.draining.load(Ordering::Relaxed) {
+            self.cancel.cancel();
+        }
+    }
+}
+
+/// A session owner and handle to a connection's writer. Clones and views keep
+/// the writer alive. Dropping the last owner cancels abandoned work; calling
+/// `shutdown` first requests graceful draining instead. The writer never owns
+/// a sender/session owner. Dropping only the reader leaves owners usable.
 #[derive(Clone)]
 pub struct Conn {
     shared: Arc<Shared>,
+    owner: Arc<SessionOwner>,
+    tx: mpsc::UnboundedSender<Outgoing>,
     view: Option<Arc<View>>,
 }
 
@@ -117,6 +142,18 @@ pub struct RateLimit {
 pub type RateLimitFlag = Arc<AtomicBool>;
 
 impl Conn {
+    fn from_shared(shared: Arc<Shared>, tx: mpsc::UnboundedSender<Outgoing>) -> Self {
+        let owner = Arc::new(SessionOwner {
+            cancel: shared.cancel.clone(),
+            draining: AtomicBool::new(false),
+        });
+        Self {
+            shared,
+            owner,
+            tx,
+            view: None,
+        }
+    }
     /// Splits a connection into a reader and a writer handle. The writer
     /// task runs until the connection is closed.
     #[must_use]
@@ -147,18 +184,17 @@ impl Conn {
     ) -> (Conn, ConnReader) {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
-            tx,
             queued: AtomicUsize::new(0),
             queued_bytes: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             logger: logger.clone(),
         });
-        let conn = Conn { shared, view: None };
+        let conn = Self::from_shared(shared, tx);
 
-        let c = conn.clone();
+        let c = conn.shared.clone();
         tokio::spawn(async move {
-            let cancel = c.shared.cancel.clone();
+            let cancel = c.cancel.clone();
             let mut limiter = match rate
                 .as_ref()
                 .map(|(r, _)| RateLimiter::new(r.delay, r.burst))
@@ -166,7 +202,7 @@ impl Conn {
             {
                 Ok(limiter) => limiter,
                 Err(e) => {
-                    logf!(c.shared.logger, "invalid connection rate limit: {e}");
+                    logf!(c.logger, "invalid connection rate limit: {e}");
                     c.close();
                     return;
                 }
@@ -180,9 +216,8 @@ impl Conn {
                     Some(Outgoing::Line(l)) => l,
                     Some(Outgoing::Shutdown) | None => break,
                 };
-                c.shared.queued.fetch_sub(1, Ordering::Relaxed);
-                c.shared
-                    .queued_bytes
+                c.queued.fetch_sub(1, Ordering::Relaxed);
+                c.queued_bytes
                     .fetch_sub(line.len() + QUEUED_LINE_OVERHEAD, Ordering::Relaxed);
                 let throttled = rate
                     .as_ref()
@@ -195,18 +230,22 @@ impl Conn {
                         () = cancel.cancelled() => break,
                     }
                 }
-                debugf!(c.shared.logger, "sent: {}", redact_line_for_log(&line));
+                debugf!(c.logger, "sent: {}", redact_line_for_log(&line));
                 // Batch lines in a write when more are ready, e.g. backlog.
                 // Rate limited lines are sent as soon as allowed.
                 let flush = throttled || rx.is_empty();
-                match tokio::time::timeout(WRITE_TIMEOUT, writer.write(line, flush)).await {
+                let written = tokio::select! {
+                    result = tokio::time::timeout(WRITE_TIMEOUT, writer.write(line, flush)) => result,
+                    () = cancel.cancelled() => break,
+                };
+                match written {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
-                        logf!(c.shared.logger, "failed to write message: {e}");
+                        logf!(c.logger, "failed to write message: {e}");
                         break;
                     }
                     Err(_) => {
-                        logf!(c.shared.logger, "failed to write message: i/o timeout");
+                        logf!(c.logger, "failed to write message: i/o timeout");
                         break;
                     }
                 }
@@ -214,10 +253,10 @@ impl Conn {
             c.close();
             match tokio::time::timeout(WRITE_TIMEOUT, writer.close()).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => debugf!(c.shared.logger, "failed to close connection: {e}"),
-                Err(_) => debugf!(c.shared.logger, "timed out closing connection"),
+                Ok(Err(e)) => debugf!(c.logger, "failed to close connection: {e}"),
+                Err(_) => debugf!(c.logger, "timed out closing connection"),
             }
-            debugf!(c.shared.logger, "connection closed");
+            debugf!(c.logger, "connection closed");
         });
 
         debugf!(logger, "new connection");
@@ -246,6 +285,8 @@ impl Conn {
     ) -> Conn {
         Conn {
             shared: self.shared.clone(),
+            owner: self.owner.clone(),
+            tx: self.tx.clone(),
             view: Some(Arc::new(View {
                 tag_key: tag_key.to_owned(),
                 tag_value: tag_value.to_owned(),
@@ -274,9 +315,7 @@ impl Conn {
     }
 
     fn close_shared(&self) {
-        if !self.shared.closed.swap(true, Ordering::SeqCst) {
-            self.shared.cancel.cancel();
-        }
+        self.shared.close();
     }
 
     /// Like close, but a view is closed without telling the peer, e.g.
@@ -326,7 +365,7 @@ impl Conn {
             return;
         }
         self.shared.queued.fetch_add(1, Ordering::Relaxed);
-        if self.shared.tx.send(Outgoing::Line(line)).is_err() {
+        if self.tx.send(Outgoing::Line(line)).is_err() {
             // The writer can exit between the closed check and enqueue.
             self.shared.queued.fetch_sub(1, Ordering::Relaxed);
             self.shared.queued_bytes.fetch_sub(size, Ordering::Relaxed);
@@ -358,13 +397,16 @@ impl Conn {
         if self.is_closed() {
             return;
         }
-        if self.shared.tx.send(Outgoing::Shutdown).is_err() {
+        self.owner.draining.store(true, Ordering::Relaxed);
+        if self.tx.send(Outgoing::Shutdown).is_err() {
             self.close_shared();
         }
     }
 }
 
-/// The reading side of a connection.
+/// The reading side of a connection. It does not own the writer session;
+/// dropping it leaves cloned `Conn` owners/views usable. Cancellation and last
+/// owner shutdown still wake a pending read.
 pub struct ConnReader {
     reader: Reader,
     input: Arc<Semaphore>,

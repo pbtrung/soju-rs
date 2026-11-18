@@ -855,6 +855,20 @@ pub async fn serve(
     guard.finish();
 }
 
+/// Once attached, cancellation must also remove the actor's connection clone
+/// and flush its receipts. The event is ordered after the attachment event.
+struct AttachedSession {
+    user: crate::user::UserHandle,
+    id: u64,
+}
+
+impl Drop for AttachedSession {
+    fn drop(&mut self) {
+        self.user
+            .notify(crate::user::Event::DownstreamDisconnected { dc_id: self.id });
+    }
+}
+
 async fn serve_session(
     srv: Arc<Server>,
     conn: Conn,
@@ -930,6 +944,10 @@ async fn serve_session(
         conn.shutdown();
         return;
     }
+    let _attachment = AttachedSession {
+        user: user.clone(),
+        id,
+    };
     loop {
         match reader.read_message_limited().await {
             Ok(Some((msg, permit))) => {
@@ -948,7 +966,6 @@ async fn serve_session(
             }
         }
     }
-    user.notify(crate::user::Event::DownstreamDisconnected { dc_id: id });
     conn.shutdown();
 }
 
