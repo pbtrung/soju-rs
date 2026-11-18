@@ -6,7 +6,7 @@ instructions or evidence that later audit findings have been fixed.
 
 | Record | Historical scope | Current reference |
 | --- | --- | --- |
-| [Code audit, 2026-11-11](code-audit.md) | Earlier fixes, module extraction and validation | [Audit and implementation checklist](../audit_results.md) |
+| [Code audit, 2026-11-11](code-audit.md) | Earlier fixes, module extraction and validation | [Audit summary](../audit_results.md) |
 | [Message index investigation](message-text-index.md) | Schema 30–34 changes and synthetic connect measurements | [Current message storage](../message-text-index.md) |
 | [Memory layout and reader review](performance-layout.md) | Rust 1.99.1 layouts, reader timing and proposed optimization analysis | [Performance measurement](../performance-layout.md) |
 

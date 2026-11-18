@@ -47,8 +47,10 @@ are not current implementation requirements.
   for that action. Never add private keys, local databases, credentials,
   `target/` or `dist/` to commits.
 
-The audit checklist is [doc/audit_results.md](doc/audit_results.md). Use it
-when implementing audit work and update statuses only after verification.
+The authoritative audit checklist is
+[doc/audit/implementation-plan.md](doc/audit/implementation-plan.md), with the
+[summary](doc/audit_results.md) as its entry point. Update finding/checklist
+statuses only after verification.
 The audit prompt's audit-only restriction belongs to that explicitly invoked
 workflow; it does not prohibit ordinary authorized repository changes or
 automatically require a full audit for every task.
@@ -84,7 +86,7 @@ Current exceptions describe validated actor/IRC indices, bounded parser cursors,
 fixed UTF-8/constants, cancelled deliveries, the final stderr sink, deliberate
 fixture failures and selected ordered dispatchers. Phase 7's history, protocol,
 service and configuration boundaries are documented in
-[protocol handler ownership](doc/protocol-handlers.md). Keep those responsibilities
+[protocol handler ownership](doc/audit/protocol-handlers.md). Keep those responsibilities
 separate; never add crate/module-wide suppressions.
 
 `src/state_lock.rs` defines fail-closed actor/auth poison policy. SQLite separately
@@ -109,7 +111,7 @@ must be handled or propagated.
   and `cargo machete --with-metadata` when available. The full deny policy
   passes after STEP-030 replaced chrono with Jiff. Do not suppress advisories
   to bypass future failures. See
-  [dependency maintenance](doc/dependencies.md) for constraints and results.
+  [dependency maintenance](doc/audit/dependencies.md) for constraints and results.
 
 CI currently has separate manually dispatched Tests and Build and Release
 workflows. Do not assume that publishing implies tests passed. Consult the

@@ -2,7 +2,7 @@
 
 Reviewed on 2026-11-17 with Rust 1.100.0. The package uses 35 direct
 dependencies; the reduced lockfile contains 266 packages including soju.
-The original inventory remains in [the audit report](audit_results.md#5-dependency-upgrade-assessment).
+The original inventory remains in [the audit report](dependency-assessment.md#5-dependency-upgrade-assessment).
 
 ## Completed updates
 
@@ -22,7 +22,7 @@ The [rusqlite release](https://github.com/rusqlite/rusqlite/releases/tag/v0.43.0
 changes empty/comment-only statement handling and fixes optional APIs. Our
 queries require no API adaptation. Bundled libsqlite3-sys remains 0.40.0
 (SQLite 3.54.1); schema 35 and persisted message IDs are unchanged. The new
-[file-backed regression](../src/database/sqlite/tests/migrations.rs) checks
+[file-backed regression](../../src/database/sqlite/tests/migrations.rs) checks
 migration/reopen behavior, FTS, foreign keys, delivery cursors and ID allocation.
 
 ## Selected features
@@ -48,13 +48,13 @@ rather than forced through incompatible patches.
 
 ## Advisory and license policy
 
-[deny.toml](../deny.toml) rejects yanked crates and unreviewed Git/registry
+[deny.toml](../../deny.toml) rejects yanked crates and unreviewed Git/registry
 sources. Its license list covers this AGPL project and the SPDX choices
 present in the inspected dependency graph, including build/dev dependencies.
 Duplicate major versions remain visible warnings; they are not suppressed.
 No advisory IDs are ignored.
 
-**Resolved:** [DEPS-002 / STEP-030](audit_results.md#deps-002--replace-unmaintained-chrono-with-jiff)
+**Resolved:** [DEPS-002 / STEP-030](findings.md#deps-002--replace-unmaintained-chrono-with-jiff)
 replaces chrono with [Jiff 1.0.0](https://docs.rs/jiff/1.0.0/jiff/), the current
 stable release reviewed on 2026-11-17. chrono and its timezone backend are absent
 from the lockfile. A fresh RustSec scan reports zero known vulnerabilities and
@@ -152,4 +152,4 @@ these rows when parents publish compatible updates.
 | windows_x86_64_gnullvm | 0.52.6 | 0.53.1 | windows-targets 0.52.6 (^0.52.6) |
 | windows_x86_64_msvc | 0.52.6 | 0.53.1 | windows-targets 0.52.6 (^0.52.6) |
 
-[Documentation index](README.md)
+[Documentation index](../README.md)

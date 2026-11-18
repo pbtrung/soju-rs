@@ -8,6 +8,15 @@
 
 **Scope:** Entire repository, including source code, dependencies, build scripts, tests, CI, and documentation.
 
+> Current record layout: [summary](../audit_results.md), [findings](findings.md),
+> [implementation checklist](implementation-plan.md), [verification](verification.md)
+> and [progress](progress.md). The user removed native instrumentation and the
+> CI-hardening implementation phase. CI findings remain assessment-only; local
+> quality gates remain required. Phase/step identifiers are retained: the active
+> plan goes from Phase 8 to Phase 10, and STEP-026–027 are retired.
+> Authorized implementation follows the user's current phase and execution scope;
+> this prompt's audit-only restriction applies when invoking that original audit workflow.
+
 ## 1. Mission
 
 Act as a principal Rust engineer, security auditor, software architect, and code quality reviewer.
@@ -25,7 +34,7 @@ The objectives are:
 5. Upgrade all direct and transitive dependencies to the latest compatible stable releases, including major versions.
 6. Improve architecture, maintainability, modularity, and readability.
 7. Refactor oversized files, overly long functions, duplicated logic, and unnecessarily complex implementations.
-8. Strengthen testing, fuzzing, static analysis, and CI.
+8. Strengthen testing, fuzzing and static analysis, and report CI automation gaps.
 9. Preserve existing behavior, protocol compatibility, database integrity, security, and performance.
 10. Follow established Rust ecosystem conventions and sound software engineering principles.
 
@@ -548,9 +557,11 @@ Never sacrifice correctness for speculative performance improvements.
 
 ---
 
-## 12. CI and Automated Quality Gates
+## 12. CI Assessment and Local Quality Gates
 
-Implement strict CI enforcement.
+Assess CI weaknesses and keep them recorded as open findings. The user excluded
+CI-hardening implementation from this plan; do not add workflows or release
+enforcement as an inferred audit step. Run the applicable local checks below.
 
 Required baseline:
 
@@ -574,7 +585,8 @@ Also evaluate:
 - Fuzzing
 - Dependency freshness checks
 
-Run expensive checks in dedicated or scheduled workflows where appropriate.
+Record automation opportunities as excluded follow-up work; run the authorized
+local verification without adding scheduled workflows.
 
 Verify existing release builds.
 
@@ -627,8 +639,10 @@ Add regression, property-based, integration, fuzzing and resource-soak coverage.
 Run the complete test suite and supported release builds.
 
 After significant implementation work, verify that the repository remains functional.
-For the current Phase 6 execution, implement STEP-018–020 after STEP-017 before
-running tests and quality gates once at the end, as directed by the user.
+STEP-018–020 followed STEP-017 before combined final verification. For Phases
+7–8, the user requested compilation-only checks between steps and tests/lint/
+gates after all implementations in the phase were written. Subsequent work
+follows the user's selected phase and execution scope.
 
 Do not combine unrelated breaking changes into one unreviewable modification.
 
@@ -698,9 +712,9 @@ After implementation, produce a structured report containing:
 - Fuzzing and resource-soak results.
 - Commands executed and results.
 
-### F. CI
+### F. CI assessment
 
-- New enforcement rules.
+- Existing automation gaps and their excluded implementation scope.
 - Compiler and Clippy settings.
 - Build compatibility results.
 - Any justified exceptions.
@@ -721,9 +735,9 @@ Distinguish confirmed bugs, suspected risks, optional improvements, and blocked 
 
 ## 16. Execution Instructions for Codex
 
-**Do not stop after producing an audit report or a proposed plan.**
-
-Proceed with implementation, subject to the constraints below.
+For user-authorized implementation, complete the selected checklist work and
+verify it under the user's execution policy. The original audit-only workflow
+in §17.5 instead stops after producing the report and implementation plan.
 
 - Inspect the repository before editing.
 - Work through all phases systematically.
@@ -756,7 +770,7 @@ The completed repository should:
 - Have reliable async task lifecycle management.
 - Have clear, modular, maintainable architecture.
 - Avoid unnecessarily large files and functions.
-- Have strong automated tests and CI enforcement.
+- Have strong automated tests and verified local gates, with CI automation gaps reported separately.
 - Preserve IRC behavior, database integrity, and deployment compatibility.
 - Avoid significant performance regressions.
 
@@ -766,9 +780,10 @@ The completed repository should:
 
 ## 17. Mandatory Audit Report and Step-by-Step Implementation Plan
 
-Write all audit findings and the proposed implementation plan to a Markdown file named **`doc/audit_results.md`** in the repository documentation directory.
-
-This file is a mandatory deliverable.
+Maintain **`doc/audit_results.md`** as a concise why/what/how summary and entry
+point. Keep detailed findings, the implementation plan, verification evidence
+and progress under **`doc/audit/`**, linked from that summary. These records are
+mandatory deliverables; each detailed record has one authoritative home.
 
 ### 17.1 Audit findings
 
@@ -800,22 +815,23 @@ Distinguish confirmed defects from potential risks and optional improvements.
 
 ### 17.2 Step-by-step implementation plan
 
-Create a detailed, prioritized implementation plan inside `doc/audit_results.md`.
+Maintain the detailed, prioritized implementation plan in
+`doc/audit/implementation-plan.md`, linked from the summary.
 
 Organize the plan into sequential phases. Native instrumentation and a dedicated
 CI-hardening phase are excluded by user request. Retain local quality gates and
 record CI findings without adding an implementation phase for them. Preserve
 existing phase/step numbers for stable references:
 
-1. Baseline verification and critical bug fixes.
-2. Rust toolchain and Edition 2024 modernization.
-3. Dependency upgrades, including major versions.
-4. Strict compiler and Clippy enforcement.
-5. Memory-safety and resource-lifecycle improvements.
-6. Async and concurrency correctness.
-7. Architectural refactoring of large files and functions.
-8. Testing, fuzzing, and resource-soak coverage.
-10. Final regression testing and production readiness review.
+- **Phase 1:** Baseline verification and critical bug fixes.
+- **Phase 2:** Rust toolchain and Edition 2024 modernization.
+- **Phase 3:** Dependency upgrades, including major versions.
+- **Phase 4:** Strict compiler and Clippy enforcement.
+- **Phase 5:** Memory-safety and resource-lifecycle improvements.
+- **Phase 6:** Async and concurrency correctness.
+- **Phase 7:** Architectural refactoring of large files and functions.
+- **Phase 8:** Testing, fuzzing, and resource-soak coverage.
+- **Phase 10:** Final regression testing and production readiness review.
 
 For **every implementation step**, specify:
 
@@ -832,14 +848,10 @@ For **every implementation step**, specify:
 
 Break large tasks into small, independently verifiable steps. Order tasks by dependencies, risk, and implementation priority.
 
-Use Markdown checkboxes to track progress:
-
-```markdown
-- [ ] STEP-001: Establish compiler and test baseline
-- [ ] STEP-002: Fix critical correctness defects
-- [ ] STEP-003: Upgrade Rust toolchain
-- [ ] STEP-004: Upgrade dependencies
-```
+Track actual steps with Markdown checkboxes in the authoritative checklist.
+Check a step only after implementation and required verification complete.
+Keep finding IDs and step IDs stable; the summary and source prompt must not
+maintain competing status lists or example IDs that conflict with that plan.
 
 ### 17.3 Verification and progress tracking
 
@@ -858,7 +870,9 @@ Record actual results as **PASS / FAIL / BLOCKED / NOT RUN**.
 
 Never report a check as passed without executing it.
 
-Update `doc/audit_results.md` after each completed implementation phase, recording:
+Update `doc/audit/progress.md` and `doc/audit/verification.md` after each
+completed implementation phase, update finding/checklist statuses only after
+verification, and refresh the summary. Record:
 
 - Changes made.
 - Bugs fixed.
@@ -869,44 +883,19 @@ Update `doc/audit_results.md` after each completed implementation phase, recordi
 
 ### 17.4 Required document structure
 
-The final `doc/audit_results.md` must contain:
+- `doc/audit_results.md`: concise why/what/how, verified outcomes, remaining work and links.
+- `doc/audit/README.md`: record map and current execution scope.
+- `doc/audit/findings.md`: finding IDs, impact, fixes, verification and status.
+- `doc/audit/implementation-plan.md`: the single authoritative step checklist.
+- `doc/audit/verification.md`: baseline and implementation matrices with actual results.
+- `doc/audit/progress.md`: dated changes, verification outcomes and deviations.
+- `doc/audit/baseline.md`, `dependency-assessment.md`, `design-review.md` and
+  `remaining-work.md`: detailed assessment, original evidence and current limits.
+- Audit-specific dependency, resource and handler guides stay in this folder.
 
-```markdown
-# soju-rs — Comprehensive Rust Audit and Modernization
-
-## 1. Executive Summary
-## 2. Repository and Toolchain Baseline
-## 3. Audit Findings
-### 3.1 Critical Issues
-### 3.2 High-Priority Issues
-### 3.3 Medium-Priority Issues
-### 3.4 Low-Priority Issues
-
-## 4. Rust 1.100 and Edition 2024 Modernization
-## 5. Dependency Upgrade Assessment
-## 6. Compiler and Clippy Hardening
-## 7. Memory Safety and Resource Management
-## 8. Async and Concurrency Correctness
-## 9. Architecture and Refactoring Opportunities
-## 10. Testing and CI Assessment
-
-## 11. Step-by-Step Implementation Plan
-### Phase 1 — Baseline and Critical Fixes
-### Phase 2 — Rust Modernization
-### Phase 3 — Dependency Upgrades
-### Phase 4 — Compiler and Clippy
-### Phase 5 — Memory and Resource Safety
-### Phase 6 — Async and Concurrency
-### Phase 7 — Architecture Refactoring
-### Phase 8 — Testing and Fuzzing
-### Phase 10 — Final Verification
-
-## 12. Verification Matrix
-## 13. Compatibility and Performance Risks
-## 14. Remaining Issues and Blockers
-## 15. Implementation Progress Log
-## 16. Final Recommendations
-```
+Preserve phases 1–8 and Phase 10 and stable step IDs. STEP-026–027 are retired;
+the removed CI phase must not reappear as an active checklist. Distinguish
+source-prompt section numbers from implementation phase numbers.
 
 ### 17.5 Execution order — mandatory
 
@@ -916,13 +905,15 @@ The final `doc/audit_results.md` must contain:
 2. Execute available baseline checks.
 3. Research Rust modernization and dependency upgrades.
 4. Identify and prioritize findings.
-5. Create `doc/audit_results.md` in the repository documentation directory.
+5. Create/update the summary and detailed records in the layout above.
 6. Write the complete step-by-step implementation plan.
 7. Verify that the document includes actionable tasks, dependencies, acceptance criteria, and verification commands.
 8. Stop and present the audit summary and implementation plan for review.
 
 Do not modify Rust source code, Cargo manifests, dependencies, or CI workflows during this audit-only phase.
 
-**The next Codex execution should use `doc/audit_results.md` as the authoritative implementation checklist, execute the plan phase by phase, and update the document as work progresses.**
+**Authorized implementation uses `doc/audit/implementation-plan.md` as the
+authoritative checklist, follows the user's phase/execution scope, and updates
+findings, verification, progress and the summary as work proceeds.**
 
 Do not claim that an issue has been fixed until the implementation and its verification are complete.

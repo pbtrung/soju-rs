@@ -70,6 +70,6 @@ For resource changes, track active tasks, open file descriptors, retained
 queue/history bytes and RSS during repeated connection churn and sustained
 traffic. Test slow readers, many distinct senders and slow push endpoints.
 Per-connection limits alone do not establish a process-wide memory bound;
-the [audit checklist](audit_results.md) tracks the remaining resource risks.
+the [audit checklist](audit/implementation-plan.md) tracks the remaining resource risks.
 
 [Documentation index](README.md) · [Compatibility tests](../tests/compat/README.md)

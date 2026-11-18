@@ -16,7 +16,9 @@ For installation, supported builds and differences from upstream, see the
 
 ## Storage and performance
 
-- [Resource limits](resource-limits.md): memory-history budgets, eviction and cursor lifetimes.
+- [Parser/resource stress checks](audit/resource-soaks.md): deterministic properties,
+  mutation fuzzing and timed resource measurements.
+- [Resource limits](audit/resource-limits.md): memory-history budgets, eviction and cursor lifetimes.
 
 - [Message storage and indexes](message-text-index.md): current schema,
   migrations, history queries and maintenance.
@@ -27,16 +29,14 @@ For installation, supported builds and differences from upstream, see the
 
 ## Development and audit
 
-- [Protocol handler ownership](protocol-handlers.md): typed history requests,
+- [Protocol handler ownership](audit/protocol-handlers.md): typed history requests,
   command boundaries, service scope and ordered configuration validation.
 
-- [Dependency maintenance](dependencies.md): completed upgrades, selected
+- [Dependency maintenance](audit/dependencies.md): completed upgrades, selected
   features, dependency policy and remaining advisories/parent constraints.
-- [Audit results and implementation checklist](audit_results.md): findings,
-  verification evidence and planned work from 2026-11-17. Planned fixes remain
-  unimplemented unless their status explicitly says otherwise.
-- [Audit prompt](audit_prompt.md): scope, reporting requirements and the
-  audit-only instruction used for that run.
+- [Audit summary](audit_results.md): why/what/how, verified outcomes and remaining scope.
+- [Audit records](audit/README.md): findings, authoritative checklist, verification,
+  progress, source prompt and supporting assessments.
 
 ## Historical records
 
