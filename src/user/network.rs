@@ -275,6 +275,7 @@ impl User {
     /// bound to it.
     fn remove_network(&mut self, i: usize) -> Network {
         let net = self.networks.remove(i);
+        self.notifications.cancel_network(net.id());
         net.stop.cancel();
         if let Some(uc) = &net.conn {
             uc.conn.close();

@@ -186,43 +186,7 @@ pub(super) fn handle_message(
             }
 
             if send_web_push {
-                let target_cm = cm(&buffer_name);
-                let srv = u.srv.clone();
-                let user_id = u.record.id;
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                let logger = u.networks[ni].logger.clone();
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                let push_targets = u.networks[ni].push_targets.clone();
-                let buffer = buffer_name.clone();
-                let m = msg.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    let receipt =
-                        db::run(&srv.db, move |db| db.get_read_receipt(net_id, &target_cm)).await;
-                    match receipt {
-                        Err(e) => {
-                            logf!(logger, "failed to get the read receipt for {buffer:?}: {e}");
-                            return;
-                        }
-                        Ok(Some(r)) if r.timestamp.is_some_and(|t| t >= timestamp) => return,
-                        Ok(_) => {}
-                    }
-                    let subs =
-                        crate::user::web_push_subscriptions(&srv, user_id, net_id, &logger).await;
-                    // Without subscriptions, there is no notification to
-                    // dismiss when the buffer gets read
-                    if subs.is_empty() {
-                        return;
-                    }
-                    crate::state_lock::lock(&push_targets).set(&buffer, timestamp);
-                    crate::user::send_web_push_to(&srv, subs, &logger, &m).await;
-                });
+                u.queue_web_push(ni, cm(&buffer_name), msg.clone(), Some(timestamp));
             }
 
             produce(u, ni, &buffer_name, msg, downstream_id, blocked);

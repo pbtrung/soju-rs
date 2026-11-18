@@ -247,6 +247,15 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                 let dc_id = dc!(u, i).id;
                 let label = dc!(u, i).take_label();
                 let tx = u.tx.clone();
+                let stop = u.notification_stop();
+                let network_stop = u.net_index(network_id).map_or_else(
+                    || stop.clone(),
+                    |index| {
+                        u.networks
+                            .get(index)
+                            .map_or_else(|| stop.clone(), |net| net.stop.clone())
+                    },
+                );
                 tokio::spawn(async move {
                     let _slot = slot;
                     let test = msg!(
@@ -255,9 +264,12 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         "REGISTERED",
                         "Push notifications enabled"
                     );
-                    let res = crate::user::send_web_push(&sender, &new_sub, &test)
-                        .await
-                        .map_err(|e| e.to_string());
+                    let res = tokio::select! {
+                        biased;
+                        () = stop.cancelled() => return,
+                        () = network_stop.cancelled() => return,
+                        result = crate::user::send_web_push(&sender, &new_sub, &test) => result.map_err(|error| error.to_string()),
+                    };
                     #[expect(
                         clippy::let_underscore_must_use,
                         reason = "The user stopped during the check; dropping the undelivered event releases its check guard."

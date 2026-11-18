@@ -3,8 +3,18 @@
 use std::fmt::Write;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
+/// Notification admission and worker counts, aggregated across users.
+#[derive(Default)]
+pub struct PushMetrics {
+    pub pending: AtomicI64,
+    pub active: AtomicI64,
+    pub overflow_total: AtomicU64,
+    pub coalesced_total: AtomicU64,
+}
+
 #[derive(Default)]
 pub struct Metrics {
+    pub push: std::sync::Arc<PushMetrics>,
     pub downstreams: AtomicI64,
     pub upstreams: AtomicI64,
     pub upstream_out_messages_total: AtomicU64,
@@ -61,7 +71,27 @@ impl Metrics {
             "Current number of upstream connections",
             &self.upstreams.load(Ordering::Relaxed),
         );
+        gauge(
+            "soju_webpush_pending",
+            "Queued notification conversations",
+            &self.push.pending.load(Ordering::Relaxed),
+        );
+        gauge(
+            "soju_webpush_active",
+            "Active notification workers",
+            &self.push.active.load(Ordering::Relaxed),
+        );
         let counters = [
+            (
+                "soju_webpush_overflow_total",
+                "Notifications rejected by queue limits",
+                &self.push.overflow_total,
+            ),
+            (
+                "soju_webpush_coalesced_total",
+                "Notifications replaced by newer conversation state",
+                &self.push.coalesced_total,
+            ),
             (
                 "soju_upstream_out_messages_total",
                 "Total number of outgoing messages sent to upstream servers",

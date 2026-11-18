@@ -303,6 +303,7 @@ pub struct Sender {
     pub vapid_public: String,
     vapid_private: String,
     client: reqwest::Client,
+    requests: tokio::sync::Semaphore,
 }
 
 impl Sender {
@@ -334,6 +335,7 @@ impl Sender {
             .timeout(Duration::from_secs(15))
             .build()?;
         Ok(Sender {
+            requests: tokio::sync::Semaphore::new(32),
             vapid_public: vapid_public.to_owned(),
             vapid_private: vapid_private.to_owned(),
             client,
@@ -355,6 +357,7 @@ impl Sender {
         payload: &[u8],
         urgency: Urgency,
     ) -> Result<()> {
+        let _request = self.requests.acquire().await?;
         if vapid_pub_key != self.vapid_public {
             bail!("unknown VAPID public key {vapid_pub_key:?}");
         }
@@ -565,5 +568,51 @@ mod tests {
     #[test]
     fn hkdf_invalid_output_length_is_returned() {
         assert!(hkdf_expand(b"salt", b"input", b"info", 255 * 32 + 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sender_waits_for_global_request_capacity_before_crypto_or_http() -> Result<()> {
+        let (private, public) = generate_vapid_keys();
+        let sender = Sender::new(&public, &private)?;
+        let all_requests = sender.requests.acquire_many(32).await?;
+        assert_eq!(sender.requests.available_permits(), 0);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                sender.send(
+                    "https://push.example/test",
+                    "invalid",
+                    "invalid",
+                    &public,
+                    b"notification",
+                    Urgency::Normal
+                )
+            )
+            .await
+            .is_err()
+        );
+        drop(all_requests);
+        assert_eq!(sender.requests.available_permits(), 32);
+        // Invalid encryption keys fail locally after admission; no HTTP occurs.
+        assert!(
+            sender
+                .send(
+                    "https://push.example/test",
+                    "invalid",
+                    "invalid",
+                    &public,
+                    b"notification",
+                    Urgency::Normal
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(sender.requests.available_permits(), 32);
+        Ok(())
     }
 }

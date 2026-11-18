@@ -365,6 +365,22 @@ mod tests {
         // The original socket remains reachable and has not been replaced.
         tokio::net::UnixStream::connect(&path).await.unwrap();
         drop(original);
+        // The reactor can briefly retain the registered resource after drop.
+        // Wait for actual refusal before asserting stale-socket reclamation.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match tokio::net::UnixStream::connect(&path).await {
+                    Err(error) => {
+                        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+                        break;
+                    }
+                    Ok(stream) => drop(stream),
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         // A stale socket left after the listener closes can be reclaimed.
         let replacement = bind(&address).await.unwrap();
         drop(replacement);

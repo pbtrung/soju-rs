@@ -103,7 +103,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** A slow push endpoint plus sustained mentions/private messages can accumulate tasks, payloads, DB jobs and requests. These tasks are not joined on shutdown.
 - **Recommended fix:** Admit work before spawning through a bounded notification worker/queue. Define per-target coalescing, concurrency and overflow policy; expose overload counters; cancel or drain deliberately on network/user/server shutdown. Do not silently discard IRC messages when notification capacity is exhausted.
 - **Verification:** Slow/mock sender tests on both runtimes; burst beyond queue capacity, assert bounded tasks/bytes, documented coalescing, cancellation, and continued IRC responsiveness.
-- **Status:** Not Started.
+- **Status:** Completed. One bounded/coalescing worker per user admits at most 128 pending conversations/1 MiB and one active job; sender-wide semaphore limits encryption/HTTP to 32 requests. Integrate delayed read checks, MARKREAD, overflow metrics, joined stop, network cancellation and registration-test stop tokens. Recheck scoped subscription snapshots and conditionally delete expiry to protect replacement IDs/keys; invalidate subscription caches. Flood/timing/byte/cancel/expiry/owner/global-cap/25-subscription/four-test-slot regressions pass. Full GNU/musl checks (264 tests each), strict Clippy/rustdoc and documentation checks pass; stale Unix-socket fixture now waits for actual refusal.
 
 ### 3.3 Medium-Priority Issues
 
@@ -652,13 +652,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: temporary probe converted to regression; idle/blocked/draining writers, serving-task abort, view tests.
   - Acceptance/status: abandoned sessions close and tasks finish within stated bounds; **Completed**.
 
-- [ ] **STEP-016 (P1): Add a bounded notification worker.**
+- [x] **STEP-016 (P1): Add a bounded notification worker.**
   - Findings: ASYNC-001. Objective: constrain notification work before creating tasks.
   - Files: `src/upstream/messages.rs`, `src/user/webpush.rs`, `src/webpush.rs`, user/server lifecycle and metrics.
   - Instructions: bounded queue/worker concurrency; per-target coalescing and explicit overflow result/counter; integrate delayed read-marker checks; handle expiry deletion/cache invalidation. Treat notifications separately from mandatory IRC delivery.
   - Dependencies: STEP-015. Risks: altered push timing/order, superseded read markers, stale work after deletion.
   - Verification: mock slow endpoint flood, repeated MARKREAD, shutdown/deletion, subscription-expiry and registration-limit tests.
-  - Acceptance/status: queue/task/request limits hold; no unbounded waiter tasks; **Not Started**.
+  - Acceptance/status: queue/task/request limits hold; no unbounded waiter tasks; **Completed**.
 
 - [ ] **STEP-017 (P1): Drain durable mention work before user completion.**
   - Findings: ASYNC-003. Objective: preserve mention state on orderly stop and retry transient failures.
@@ -881,6 +881,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-013 | Global accepted-session admission defaults to 256, is reloadable, rejects before spawning, and follows physical streams through TLS/PROXY/HTTP/WebSocket upgrades. Cancellation closes session writers. Concurrent admission, 300 overload attempts, close/error/upgrade/reload/admin/shutdown/abort regressions pass; full GNU/musl checks (240 tests each), strict Clippy/rustdoc and documentation links pass. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-014 | Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-015 | Remove writer-owned senders/session owners. Explicit shared ownership keeps clones/views valid, cancels abandonment and rate/write waits, and preserves requested graceful draining. Attachment guards remove actor clones and persist receipts after serving-task abort. Idle/blocked/rate/drain/view and both-runtime abort regressions pass, including the ten-second abandoned-writer close bound. Full GNU/musl checks (254 tests each), strict Clippy/rustdoc and documentation checks pass. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-016 | One bounded/coalescing worker per user admits at most 128 pending conversations/1 MiB and one active job; sender-wide semaphore limits encryption/HTTP to 32 requests. Integrate delayed read checks, MARKREAD, overflow metrics, joined stop, network cancellation and registration-test stop tokens. Recheck scoped subscription snapshots and conditionally delete expiry to protect replacement IDs/keys; invalidate subscription caches. Flood/timing/byte/cancel/expiry/owner/global-cap/25-subscription/four-test-slot regressions pass. Full GNU/musl checks (264 tests each), strict Clippy/rustdoc and documentation checks pass; stale Unix-socket fixture now waits for actual refusal. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

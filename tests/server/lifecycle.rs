@@ -45,3 +45,86 @@ pub(super) async fn aborted_downstream_session() {
     assert_eq!(env.srv.user_records().len(), 1);
     env.srv.shutdown().await;
 }
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions must fail immediately on invalid data."
+)]
+pub(super) async fn webpush_subscription_limit() {
+    let env = setup(db_store()).await;
+    let mut upstream = accept_upstream(&env).await;
+    register_upstream(&mut upstream).await;
+    let user = env.srv.get_user(TEST_USERNAME).unwrap().record();
+    for i in 0..25 {
+        let mut sub = database::WebPushSubscription {
+            endpoint: format!("https://push.example/{i}"),
+            ..Default::default()
+        };
+        env.srv
+            .db
+            .store_web_push_subscription(user.id, env.network.id, &mut sub)
+            .unwrap();
+    }
+    let mut client = connect_downstream(&env.srv);
+    register_downstream_caps(&mut client, Some(&env.network), "soju.im/webpush").await;
+    client.send(msg!(
+        "WEBPUSH",
+        "REGISTER",
+        "https://push.example/extra",
+        "auth=a;p256dh=b"
+    ));
+    let reply = client.expect("FAIL").await;
+    assert_eq!(
+        reply.params,
+        [
+            "WEBPUSH",
+            "INTERNAL_ERROR",
+            "REGISTER",
+            "Too many subscriptions"
+        ]
+    );
+    assert_eq!(
+        env.srv
+            .db
+            .list_web_push_subscriptions(user.id, env.network.id)
+            .unwrap()
+            .len(),
+        25
+    );
+    let (send, receive) = tokio::sync::oneshot::channel();
+    assert!(
+        env.srv
+            .get_user(TEST_USERNAME)
+            .unwrap()
+            .send(soju::user::Event::Run(Box::new(move |user| {
+                let available =
+                    u32::try_from(user.web_push_check_slots.available_permits()).unwrap();
+                assert!(available > 0);
+                let slots = user
+                    .web_push_check_slots
+                    .clone()
+                    .try_acquire_many_owned(available)
+                    .unwrap();
+                assert!(send.send(slots).is_ok());
+            })))
+    );
+    let slots = receive.await.unwrap();
+    client.send(msg!(
+        "WEBPUSH",
+        "REGISTER",
+        "https://push.example/0",
+        "auth=a;p256dh=b"
+    ));
+    let reply = client.expect("FAIL").await;
+    assert_eq!(
+        reply.params,
+        [
+            "WEBPUSH",
+            "INTERNAL_ERROR",
+            "REGISTER",
+            "Too many pending subscriptions, try again later"
+        ]
+    );
+    drop(slots);
+    env.srv.shutdown().await;
+}

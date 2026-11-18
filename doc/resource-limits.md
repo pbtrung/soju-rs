@@ -169,3 +169,50 @@ its connection clone and flush client receipts. This uses an owned attachment
 guard, ordered after attachment. Tests cover an idle abandoned stream, clones
 and views after reader drop, queued and rate-limited draining, blocked close,
 rate-wait cancellation and abort after registration on both Tokio runtimes.
+
+## Web Push work
+
+Each user has one notification worker and a pending queue limited to 128
+network/conversation keys and 1 MiB of accounted message/key data. One job may
+also be active per worker. Admission and replacement happen synchronously
+before any per-notification work; there are no per-message sleeper/waiter tasks.
+Queue overflow rejects the new optional push and increments
+`soju_webpush_overflow_total`, leaving an existing queued state intact. IRC
+forwarding continues. `soju_webpush_pending`, `soju_webpush_active` and
+`soju_webpush_coalesced_total` expose queue/worker activity and replacements.
+These limits cover notification work, not all user/network/subscription state.
+
+Repeated messages for a conversation replace its pending payload within a
+five-second window measured from the first message. At delivery the worker
+checks the latest durable read marker and suppresses messages already read.
+MARKREAD notifications replace pending conversation state and run without the
+message delay. A new unread message following MARKREAD starts a new five-second
+window. Mandatory IRC delivery does not await notification HTTP or queue space.
+
+All ordinary and registration-test requests share the sender's 32-request
+semaphore, acquired before encryption/HTTP. The existing 15-second HTTP timeout
+applies after admission. Each user's registration tests retain their separate
+four-slot limit; each user/network retains the 25-subscription registration cap.
+Global request waiters come only from these bounded workers/test slots, with
+no additional task spawned to wait for capacity.
+
+Network deletion cancels its active notification and removes its pending jobs.
+User stop cancels optional queued/active work and joins the worker, including
+a stop during startup retry. Already-started blocking DB calls may finish;
+they cannot recreate subscriptions. A request already received by a remote
+endpoint cannot be recalled. Pending work is optional and is not persisted for
+retry across shutdown.
+
+Before sending, a queued subscription is re-read using its owner, network, ID
+and endpoint. Expiry/pruning deletes only a still-matching owner/endpoint/key
+snapshot, so delayed responses cannot delete replaced subscriptions. Successful
+deletion invalidates the actor's cached subscription-network set. HTTPS,
+external-address checks and credential/payload handling remain in the sender.
+
+Finite regressions flood a stalled mock delivery with 10,000 different targets:
+one active job, 128 pending jobs, 9,872 rejected pushes and no task-count growth.
+Other tests cover 10,000 coalesced MARKREAD updates, byte pressure, network/user
+cancellation, delay transitions, latest read receipts, expiry/replacement/owner
+isolation, the full global request semaphore and subscription/test-slot limits
+on both Tokio runtimes. The stalled delivery test uses an injected pending
+future; it is not a remote endpoint throughput or whole-server soak result.

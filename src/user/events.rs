@@ -36,11 +36,13 @@ impl User {
                 tokio::select! {
                     () = &mut retry => break,
                     () = stopped.cancelled() => {
+                        self.notifications.shutdown().await;
                         self.close_msg_store();
                         return;
                     }
                     ev = rx.recv() => match ev {
                         None | Some(Event::Stop) => {
+                            self.notifications.shutdown().await;
                             self.close_msg_store();
                             return;
                         }
@@ -70,6 +72,7 @@ impl User {
                 break;
             }
         }
+        self.notifications.shutdown().await;
         self.close_msg_store();
     }
 
@@ -426,7 +429,9 @@ impl User {
                 crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res, check);
             }
             Event::Run(f) => f(self),
+            Event::WebPushSubscriptionsChanged => self.reset_web_push_networks(),
             Event::Stop => {
+                self.notifications.cancel();
                 for dc in &self.downstreams {
                     dc.conn.close();
                 }

@@ -30,6 +30,7 @@ mod channels;
 mod delivered;
 mod events;
 mod network;
+mod notifications;
 mod upstream_conn;
 mod webpush;
 
@@ -95,6 +96,7 @@ pub enum Event {
     },
     Broadcast(Message),
     Stop,
+    WebPushSubscriptionsChanged,
     UserUpdate {
         password: Option<String>,
         admin: Option<bool>,
@@ -249,6 +251,7 @@ pub struct User {
     pub downstreams: Vec<DownstreamConn>,
     pub msg_store: Store,
     receipt_budget: Arc<delivered::ReceiptBudget>,
+    notifications: notifications::Notifications,
     /// Held while a certificate is being generated for this user: key
     /// generation is expensive, only one runs at a time
     pub certfp_generating: Arc<tokio::sync::Semaphore>,
@@ -283,7 +286,9 @@ impl User {
             MsgStoreDriver::Db => Store::Db(msgstore::DbStore::new(srv.db.clone())),
             MsgStoreDriver::Memory => Store::Memory(msgstore::MemoryStore::new()),
         };
+        let notifications = notifications::Notifications::new(srv.clone(), record.id, tx.clone());
         User {
+            notifications,
             srv,
             record,
             logger,

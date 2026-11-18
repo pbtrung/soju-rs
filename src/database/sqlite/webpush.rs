@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use jiff::Timestamp;
-use rusqlite::{named_params, params};
+use rusqlite::{OptionalExtension, named_params, params};
 
 use super::{Database, null_id, time_from_sql};
 use crate::database::{WebPushConfig, WebPushKeys, WebPushSubscription};
@@ -62,6 +62,39 @@ impl Database {
         )?;
         let rows = stmt.query_map([user_id], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Rechecks a queued subscription immediately before delivery, so removed
+    /// endpoints are skipped and updated keys are used.
+    ///
+    /// # Errors
+    /// Returns SQLite errors or malformed stored subscription values.
+    pub fn get_web_push_subscription(
+        &self,
+        user: i64,
+        network: i64,
+        id: i64,
+        endpoint: &str,
+    ) -> Result<Option<WebPushSubscription>> {
+        let conn = self.conn();
+        let row = conn.query_row(
+            "SELECT endpoint,created_at,updated_at,key_auth,key_p256dh,key_vapid FROM WebPushSubscription WHERE user=? AND network IS ? AND id=? AND endpoint=?", params![user, null_id(network), id, endpoint],
+            |row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?)),
+        ).optional()?;
+        let Some((endpoint, created, updated, auth, p256dh, vapid)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(WebPushSubscription {
+            id,
+            endpoint,
+            created_at: time_from_sql(created)?,
+            updated_at: time_from_sql(updated)?,
+            keys: WebPushKeys {
+                auth: auth.unwrap_or_default(),
+                p256dh: p256dh.unwrap_or_default(),
+                vapid: vapid.unwrap_or_default(),
+            },
+        }))
     }
 
     /// Lists subscriptions for a user and network (0 means the bouncer
@@ -157,6 +190,21 @@ impl Database {
             sub.id = conn.last_insert_rowid();
         }
         Ok(())
+    }
+
+    /// Deletes an expired snapshot only if its owner, endpoint and keys still
+    /// match. An in-flight response cannot delete a replacement subscription.
+    ///
+    /// # Errors
+    /// Returns SQLite errors.
+    pub fn delete_web_push_subscription_if_current(
+        &self,
+        user: i64,
+        network: i64,
+        sub: &WebPushSubscription,
+    ) -> Result<bool> {
+        Ok(self.conn().execute("DELETE FROM WebPushSubscription WHERE user=? AND network IS ? AND id=? AND endpoint=? AND COALESCE(key_auth,'')=? AND COALESCE(key_p256dh,'')=? AND COALESCE(key_vapid,'')=?",
+            params![user, null_id(network), sub.id, sub.endpoint, sub.keys.auth, sub.keys.p256dh, sub.keys.vapid])? != 0)
     }
 
     ///

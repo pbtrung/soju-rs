@@ -65,6 +65,7 @@ test_on_both_runtimes!(
     sqlite_history_survives_restart,
     receipt_playback_survives_disconnect_and_restart,
     aborted_downstream_session,
+    webpush_subscription_limit,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -522,4 +523,4 @@ use cases_service::{service_blocking_work, service_other_user, user_network_chan
 
 #[path = "server/lifecycle.rs"]
 mod cases_lifecycle;
-use cases_lifecycle::aborted_downstream_session;
+use cases_lifecycle::{aborted_downstream_session, webpush_subscription_limit};
