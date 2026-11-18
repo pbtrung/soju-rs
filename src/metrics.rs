@@ -84,8 +84,17 @@ impl Metrics {
             "Active notification workers",
             &self.push.active.load(Ordering::Relaxed),
         );
+        self.render_counters(&mut s);
+        s
+    }
+
+    fn render_counters(&self, s: &mut String) {
         let counters = [
-            ("soju_pending_command_timeouts_total", "Upstream reconnects after serial command deadlines", &self.pending_command_timeouts_total),
+            (
+                "soju_pending_command_timeouts_total",
+                "Upstream reconnects after serial command deadlines",
+                &self.pending_command_timeouts_total,
+            ),
             (
                 "soju_mention_flush_errors_total",
                 "Failed durable mention batch writes",
@@ -149,7 +158,6 @@ impl Metrics {
             )
             .expect("writing metrics into a String cannot fail");
         }
-        s
     }
 }
 

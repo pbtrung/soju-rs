@@ -13,7 +13,11 @@ use tokio::io::AsyncWriteExt;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn sample(payload: usize, messages: usize) -> anyhow::Result<Duration> {
+async fn sample(
+    payload: usize,
+    messages: usize,
+    dispatch: Option<bool>,
+) -> anyhow::Result<Duration> {
     let line = format!(
         ":nick!user@host PRIVMSG #channel :{}\r\n",
         "x".repeat(payload)
@@ -32,9 +36,22 @@ async fn sample(payload: usize, messages: usize) -> anyhow::Result<Duration> {
     let mut received = 0;
     let mut bytes = 0;
     while let Some((message, permit)) = reader.read_message_limited().await? {
-        bytes += black_box(&message).param(1).len();
+        let handle = move || {
+            let bytes = black_box(&message).param(1).len();
+            drop(permit);
+            bytes
+        };
+        bytes += match dispatch {
+            Some(true) => soju::server::blocking(handle).await?,
+            Some(false)
+                if tokio::runtime::Handle::current().runtime_flavor()
+                    == tokio::runtime::RuntimeFlavor::MultiThread =>
+            {
+                tokio::task::block_in_place(handle)
+            }
+            _ => handle(),
+        };
         received += 1;
-        drop(permit);
     }
     let elapsed = start.elapsed();
     producer.await??;
@@ -150,26 +167,54 @@ async fn actor_boundary_samples() -> anyhow::Result<()> {
     for _ in 0..7 {
         let start = Instant::now();
         let mut state = 0u64;
-        for _ in 0..2000 { state = black_box(state + 1); }
+        for _ in 0..2000 {
+            state = black_box(state + 1);
+        }
         inline.push(start.elapsed());
         assert_eq!(state, 2000);
         let start = Instant::now();
         let mut state = 0u64;
-        for _ in 0..2000 { state = soju::server::blocking(move || black_box(state + 1)).await?; }
+        for _ in 0..2000 {
+            state = soju::server::blocking(move || black_box(state + 1)).await?;
+        }
         workers.push(start.elapsed());
         assert_eq!(state, 2000);
     }
-    inline.sort_unstable(); workers.sort_unstable();
-    println!("actor events=2000 inline_median={:?} worker_median={:?}", inline.get(3), workers.get(3));
+    inline.sort_unstable();
+    workers.sort_unstable();
+    println!(
+        "actor events=2000 inline_median={:?} worker_median={:?}",
+        inline.get(3),
+        workers.get(3)
+    );
+    for payload in [32, 256] {
+        let mut legacy = Vec::new();
+        let mut owned = Vec::new();
+        for _ in 0..3 {
+            legacy.push(sample(payload, 4096, Some(false)).await?);
+            owned.push(sample(payload, 4096, Some(true)).await?);
+        }
+        legacy.sort_unstable();
+        owned.sort_unstable();
+        println!(
+            "IRC pipeline payload={payload} messages=4096 legacy_median={:?} worker_median={:?}",
+            legacy.get(1),
+            owned.get(1)
+        );
+    }
     Ok(())
 }
 
 async fn contention_sample(legacy: bool) -> anyhow::Result<Duration> {
     use soju::database::{Database, User};
-    let path = std::env::temp_dir().join(format!("soju-actor-bench-{:032x}", rand::random::<u128>()));
+    let path =
+        std::env::temp_dir().join(format!("soju-actor-bench-{:032x}", rand::random::<u128>()));
     std::fs::create_dir(&path)?;
     let file = path.join("bench.db");
-    let db = Database::open(file.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?)?;
+    let db = Database::open(
+        file.to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?,
+    )?;
     let lock = rusqlite::Connection::open(file)?;
     lock.execute_batch("BEGIN IMMEDIATE;")?;
     let release = std::thread::spawn(move || {
@@ -177,29 +222,49 @@ async fn contention_sample(legacy: bool) -> anyhow::Result<Duration> {
         lock.execute_batch("COMMIT;")
     });
     let start = Instant::now();
-    let timer = tokio::spawn(async move { tokio::time::sleep(Duration::from_millis(10)).await; start.elapsed() });
+    let timer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        start.elapsed()
+    });
     tokio::task::yield_now().await;
     let operation = move || db.store_user(&mut User::new("contended"));
     if legacy {
-        if tokio::runtime::Handle::current().runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+        if tokio::runtime::Handle::current().runtime_flavor()
+            == tokio::runtime::RuntimeFlavor::MultiThread
+        {
             tokio::task::block_in_place(operation)?;
-        } else { operation()?; }
-    } else { soju::server::blocking(operation).await??; }
+        } else {
+            operation()?;
+        }
+    } else {
+        soju::server::blocking(operation).await??;
+    }
     let latency = timer.await?;
-    release.join().map_err(|error| anyhow::anyhow!("writer thread panicked: {error:?}"))??;
+    release
+        .join()
+        .map_err(|error| anyhow::anyhow!("writer thread panicked: {error:?}"))??;
     std::fs::remove_dir_all(path)?;
     Ok(latency)
 }
 
 fn actor_boundary() -> anyhow::Result<()> {
     for multithread in [false, true] {
-        let mut runtime = if multithread { let mut builder = tokio::runtime::Builder::new_multi_thread(); builder.worker_threads(2); builder }
-            else { tokio::runtime::Builder::new_current_thread() };
+        let mut runtime = if multithread {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2);
+            builder
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+        };
         let runtime = runtime.enable_all().build()?;
         runtime.block_on(async {
             println!("runtime_multithread={multithread}");
             actor_boundary_samples().await?;
-            println!("contention timer10ms legacy={:?} workers={:?}", contention_sample(true).await?, contention_sample(false).await?);
+            println!(
+                "contention timer10ms legacy={:?} workers={:?}",
+                contention_sample(true).await?,
+                contention_sample(false).await?
+            );
             Ok::<(), anyhow::Error>(())
         })?;
     }
@@ -207,7 +272,9 @@ fn actor_boundary() -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    if std::env::args().any(|arg| arg == "--actor-boundary") { return actor_boundary(); }
+    if std::env::args().any(|arg| arg == "--actor-boundary") {
+        return actor_boundary();
+    }
     if std::env::args().any(|arg| arg == "--receipt-clients") {
         return receipt_clients();
     }
@@ -241,13 +308,13 @@ fn main() -> anyhow::Result<()> {
             // Cargo also executes custom benchmarks in `test --all-targets`.
             // Verify each workload in debug builds; measure optimized builds.
             if cfg!(debug_assertions) {
-                sample(payload, 128).await?;
+                sample(payload, 128, None).await?;
                 continue;
             }
-            sample(payload, 1024).await?;
+            sample(payload, 1024, None).await?;
             let mut samples = [Duration::ZERO; 7];
             for slot in &mut samples {
-                *slot = sample(payload, messages).await?;
+                *slot = sample(payload, messages, None).await?;
             }
             samples.sort();
             println!(

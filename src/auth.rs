@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::config::{self, AuthDriver};
-use crate::database::{Database, parse_url, split_host_port};
+use crate::database::{Database, split_host_port};
 
 mod oauth;
 pub use oauth::OAuth2;
@@ -217,7 +217,7 @@ impl PlainAuthenticator {
                 let effective = oauth.auth_oauth_bearer(password, remote_addr).await?;
                 if username != effective {
                     return Err(invalid_credentials(anyhow!(
-                        "username mismatch (OAuth 2.0 server returned {effective:?})"
+                        "username mismatch from OAuth 2.0 provider"
                     )));
                 }
                 Ok(())

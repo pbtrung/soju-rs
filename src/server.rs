@@ -44,7 +44,9 @@ pub async fn blocking<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static)
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
         f()
-    }).await {
+    })
+    .await
+    {
         Ok(value) => Ok(value),
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
         Err(error) => Err(anyhow!(error).context("actor job cancelled before completion")),
@@ -443,7 +445,9 @@ impl Server {
 
     /// Fixed maintenance timers and any coalesced expiry worker still running.
     #[must_use]
-    pub fn maintenance_tasks(&self) -> usize { self.maintenance_tasks.len() }
+    pub fn maintenance_tasks(&self) -> usize {
+        self.maintenance_tasks.len()
+    }
 
     pub fn render_metrics(&self) -> String {
         format!(

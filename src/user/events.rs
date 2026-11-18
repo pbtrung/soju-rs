@@ -63,7 +63,11 @@ impl User {
             let ev = if let Some(event) = early.pop_front() {
                 event
             } else {
-                let deadline = self.next_mention_deadline().into_iter().chain(self.next_pending_deadline()).min();
+                let deadline = self
+                    .next_mention_deadline()
+                    .into_iter()
+                    .chain(self.next_pending_deadline())
+                    .min();
                 let next = if let Some(deadline) = deadline {
                     tokio::select! {
                         biased;
@@ -85,9 +89,14 @@ impl User {
             self = match crate::server::blocking(move || {
                 self.handle_event(ev);
                 self
-            }).await {
+            })
+            .await
+            {
                 Ok(actor) => actor,
-                Err(error) => { logf!(logger, "actor execution failed: {error}"); return; }
+                Err(error) => {
+                    logf!(logger, "actor execution failed: {error}");
+                    return;
+                }
             };
             if self.stopped {
                 break;
@@ -213,8 +222,13 @@ impl User {
                 let attrs = Tags::from_iter([("error", err)]);
                 self.notify_bouncer_network_state(net_id, &attrs);
             }
-            Event::PendingCommandTimeout { net_id, conn_id, kind, epoch } => {
-                upstream::pending_command_timeout(self, net_id, conn_id, kind, epoch);
+            Event::PendingCommandTimeout {
+                net_id,
+                conn_id,
+                kind,
+                epoch,
+            } => {
+                upstream::pending_command_timeout(self, net_id, conn_id, kind, &epoch);
             }
             Event::UpstreamRegistrationDelayDone { net_id, conn_id } => {
                 let Some(ni) = self.net_index(net_id) else {

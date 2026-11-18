@@ -32,23 +32,37 @@ impl Mock {
                 crate::state_lock::lock(&captured).push(request.clone());
                 let response = handler(&server_origin, &request);
                 if let Err(error) = stream.get_mut().write_all(response.as_bytes()).await {
-                    if matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset) { continue; }
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    ) {
+                        continue;
+                    }
                     return Err(error.into());
                 }
             }
         });
-        Ok(Self { source, requests, stop, task: Some(task) })
+        Ok(Self {
+            source,
+            requests,
+            stop,
+            task: Some(task),
+        })
     }
     async fn shutdown(mut self) -> Result<()> {
         self.stop.cancel();
-        if let Some(task) = self.task.take() { task.await??; }
+        if let Some(task) = self.task.take() {
+            task.await??;
+        }
         Ok(())
     }
 }
 impl Drop for Mock {
     fn drop(&mut self) {
         self.stop.cancel();
-        if let Some(task) = self.task.take() { task.abort(); }
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 async fn read_request(stream: &mut BufReader<TcpStream>) -> Result<String> {
@@ -56,12 +70,22 @@ async fn read_request(stream: &mut BufReader<TcpStream>) -> Result<String> {
     let mut length = 0;
     loop {
         let mut line = String::new();
-        if stream.read_line(&mut line).await? == 0 || line == "\r\n" { break; }
-        if let Some((name, value)) = line.split_once(':') && name.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>()?; }
+        if stream.read_line(&mut line).await? == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse::<usize>()?;
+        }
         request.push_str(&line);
-        if request.len() > MAX_RESPONSE_BYTES { bail!("oversized fixture request headers"); }
+        if request.len() > MAX_RESPONSE_BYTES {
+            bail!("oversized fixture request headers");
+        }
     }
-    if length > MAX_RESPONSE_BYTES { bail!("oversized fixture request body"); }
+    if length > MAX_RESPONSE_BYTES {
+        bail!("oversized fixture request body");
+    }
     let mut body = vec![0; length];
     stream.read_exact(&mut body).await?;
     request.push_str("\r\n");
@@ -69,46 +93,98 @@ async fn read_request(stream: &mut BufReader<TcpStream>) -> Result<String> {
     Ok(request)
 }
 fn response(status: &str, body: &str) -> String {
-    format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 fn metadata(origin: &str, suffix: &str) -> String {
     serde_json::json!({"issuer":format!("{origin}{suffix}"), "introspection_endpoint":format!("{origin}/introspect"), "introspection_endpoint_auth_methods_supported":["none","client_secret_basic"]}).to_string()
 }
 async fn new_error(source: &str) -> Result<anyhow::Error> {
-    match OAuth2::new(source).await { Err(error) => Ok(error), Ok(_) => bail!("invalid OAuth configuration was accepted") }
+    match OAuth2::new(source).await {
+        Err(error) => Ok(error),
+        Ok(_) => bail!("invalid OAuth configuration was accepted"),
+    }
 }
 fn assert_redacted(error: &anyhow::Error) {
     let text = format!("{error:#?}");
-    assert!(!text.contains("unit-secret"), "client secret escaped into auth diagnostics");
-    assert!(!text.contains("unit-token"), "token escaped into auth diagnostics");
+    assert!(
+        !text.contains("unit-secret"),
+        "client secret escaped into auth diagnostics"
+    );
+    assert!(
+        !text.contains("unit-token"),
+        "token escaped into auth diagnostics"
+    );
 }
 
 #[tokio::test]
 async fn matching_issuer_credentials_forwarding_and_external_plain_auth() -> Result<()> {
     let mock = Mock::new(|origin, request| {
-        if request.starts_with("GET ") { return response("200 OK", &metadata(origin, "/realm/")); }
-        if request.contains("token=inactive") { response("200 OK", r#"{"active":false}"#) }
-        else { response("200 OK", r#"{"active":true,"username":"alice"}"#) }
-    }).await?;
+        if request.starts_with("GET ") {
+            return response("200 OK", &metadata(origin, "/realm/"));
+        }
+        if request.contains("token=inactive") {
+            response("200 OK", r#"{"active":false}"#)
+        } else if request.contains("token=echo") {
+            response(
+                "200 OK",
+                r#"{"active":true,"username":"unit-token unit-secret"}"#,
+            )
+        } else {
+            response("200 OK", r#"{"active":true,"username":"alice"}"#)
+        }
+    })
+    .await?;
     let source = mock.source.replacen("://", "://id:unit-secret@", 1) + "/realm/";
     let oauth = Arc::new(OAuth2::new(&source).await?);
-    assert_eq!(oauth.auth_oauth_bearer("unit-token+value", "1.2.3.4:1234").await?, "alice");
-    let error = oauth.auth_oauth_bearer("inactive", "").await.err().ok_or_else(|| anyhow!("inactive token accepted"))?;
-    assert_eq!(super::super::auth_error_reason(&error), "Invalid credentials");
+    assert_eq!(
+        oauth
+            .auth_oauth_bearer("unit-token+value", "1.2.3.4:1234")
+            .await?,
+        "alice"
+    );
+    let error = oauth
+        .auth_oauth_bearer("inactive", "")
+        .await
+        .err()
+        .ok_or_else(|| anyhow!("inactive token accepted"))?;
+    assert_eq!(
+        super::super::auth_error_reason(&error),
+        "Invalid credentials"
+    );
     assert_redacted(&error);
     let plain = super::super::PlainAuthenticator::OAuthPlain(oauth);
     let db = Arc::new(crate::database::Database::open_in_memory()?);
     plain.auth_plain(&db, "alice", "unit-token", "").await?;
-    let error = plain.auth_plain(&db, "other", "unit-token", "").await.err().ok_or_else(|| anyhow!("mismatched username accepted"))?;
+    let error = plain
+        .auth_plain(&db, "other", "unit-token", "")
+        .await
+        .err()
+        .ok_or_else(|| anyhow!("mismatched username accepted"))?;
+    assert_redacted(&error);
+    let error = plain
+        .auth_plain(&db, "other", "echo", "")
+        .await
+        .err()
+        .ok_or_else(|| anyhow!("echoed credential username accepted"))?;
     assert_redacted(&error);
     {
         let requests = crate::state_lock::lock(&mock.requests);
-        let first = requests.first().ok_or_else(|| anyhow!("no discovery request"))?;
+        let first = requests
+            .first()
+            .ok_or_else(|| anyhow!("no discovery request"))?;
         assert!(first.starts_with("GET /.well-known/oauth-authorization-server/realm HTTP/1.1"));
         assert!(!first.to_ascii_lowercase().contains("authorization:"));
-        let post = requests.get(1).ok_or_else(|| anyhow!("no introspection request"))?;
+        let post = requests
+            .get(1)
+            .ok_or_else(|| anyhow!("no introspection request"))?;
         assert!(post.contains("token=unit-token%2Bvalue"));
-        assert!(post.to_ascii_lowercase().contains("x-forwarded-for: 1.2.3.4"));
+        assert!(
+            post.to_ascii_lowercase()
+                .contains("x-forwarded-for: 1.2.3.4")
+        );
         assert!(post.contains(&BASE64.encode("id:unit-secret")));
     }
     mock.shutdown().await
@@ -117,14 +193,27 @@ async fn matching_issuer_credentials_forwarding_and_external_plain_auth() -> Res
 #[tokio::test]
 async fn issuer_mismatch_and_missing_issuer_never_use_metadata() -> Result<()> {
     for suffix in ["/other", "/realm/", "", "/unit-secret"] {
-        let mock = Mock::new(move |origin, _| response("200 OK", &metadata(origin, suffix))).await?;
+        let mock =
+            Mock::new(move |origin, _| response("200 OK", &metadata(origin, suffix))).await?;
         let error = new_error(&(mock.source.clone() + "/realm")).await?;
         assert_redacted(&error);
         assert_eq!(crate::state_lock::lock(&mock.requests).len(), 1);
         mock.shutdown().await?;
     }
-    let mock = Mock::new(|origin, _| response("200 OK", &serde_json::json!({"introspection_endpoint":format!("{origin}/introspect")}).to_string())).await?;
-    assert!(new_error(&mock.source).await?.to_string().contains("issuer"));
+    let mock = Mock::new(|origin, _| {
+        response(
+            "200 OK",
+            &serde_json::json!({"introspection_endpoint":format!("{origin}/introspect")})
+                .to_string(),
+        )
+    })
+    .await?;
+    assert!(
+        new_error(&mock.source)
+            .await?
+            .to_string()
+            .contains("issuer")
+    );
     mock.shutdown().await
 }
 
@@ -132,10 +221,33 @@ async fn issuer_mismatch_and_missing_issuer_never_use_metadata() -> Result<()> {
 fn issuer_identity_and_endpoint_transport_policy() -> Result<()> {
     let issuer = Issuer::parse("https://id:unit-secret@EXAMPLE.org:443/%72ealm/")?;
     assert_eq!(issuer.expected, "https://EXAMPLE.org:443/%72ealm/");
-    assert!(issuer.endpoint("https://different.example/introspect?provider=1").is_ok());
-    for endpoint in ["http://example.org/introspect", "/relative", "https://id:unit-secret@example.org/introspect", "https://example.org/introspect#fragment"] { assert!(issuer.endpoint(endpoint).is_err()); }
-    for source in ["http://127.0.0.1/realm", "http+insecure://localhost/realm", "http+insecure://192.0.2.1/realm", "https://example.org?query", "https://example.org#fragment", "https://example.org\\path", "https://:unit-secret@example.org"] {
-        let error = Issuer::parse(source).err().ok_or_else(|| anyhow!("invalid issuer accepted"))?;
+    assert!(
+        issuer
+            .endpoint("https://different.example/introspect?provider=1")
+            .is_ok()
+    );
+    for endpoint in [
+        "http://example.org/introspect",
+        "/relative",
+        "https://id:unit-secret@example.org/introspect",
+        "https://example.org/introspect#fragment",
+    ] {
+        assert!(issuer.endpoint(endpoint).is_err());
+    }
+    for source in [
+        "http://127.0.0.1/realm",
+        "http+insecure://localhost/realm",
+        "http+insecure://192.0.2.1/realm",
+        "https://example.org?query",
+        "https://example.org#fragment",
+        "https://example.org\\path",
+        "https://:unit-secret@example.org",
+        "https:///example.org",
+        "http+insecure:///127.0.0.1",
+    ] {
+        let error = Issuer::parse(source)
+            .err()
+            .ok_or_else(|| anyhow!("invalid issuer accepted"))?;
         assert_redacted(&error);
     }
     let issuer = Issuer::parse("http+insecure://127.0.0.1:1234/realm")?;
@@ -154,11 +266,22 @@ async fn redirects_are_rejected_for_metadata_and_token_posts() -> Result<()> {
                 "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/redirect?unit-secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
             } else { response("200 OK", &metadata(origin, "")) }
         }).await?;
-        let error = if discovery { new_error(&mock.source).await? }
-            else { OAuth2::new(&mock.source).await?.auth_oauth_bearer("unit-token", "").await.err().ok_or_else(|| anyhow!("redirect accepted"))? };
+        let error = if discovery {
+            new_error(&mock.source).await?
+        } else {
+            OAuth2::new(&mock.source)
+                .await?
+                .auth_oauth_bearer("unit-token", "")
+                .await
+                .err()
+                .ok_or_else(|| anyhow!("redirect accepted"))?
+        };
         assert!(error.to_string().contains("307"));
         assert_redacted(&error);
-        assert_eq!(crate::state_lock::lock(&mock.requests).len(), if discovery {1} else {2});
+        assert_eq!(
+            crate::state_lock::lock(&mock.requests).len(),
+            if discovery { 1 } else { 2 }
+        );
         mock.shutdown().await?;
     }
     Ok(())
@@ -194,9 +317,15 @@ async fn introspection_errors_are_bounded_and_never_quote_provider_values() -> R
             }
         }).await?;
         let oauth = OAuth2::new(&mock.source).await?;
-        let error = oauth.auth_oauth_bearer("unit-token", "").await.err().ok_or_else(|| anyhow!("invalid introspection response accepted"))?;
+        let error = oauth
+            .auth_oauth_bearer("unit-token", "")
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("invalid introspection response accepted"))?;
         assert_redacted(&error);
-        if mode == 1 || mode == 2 { assert!(error.to_string().contains("limit")); }
+        if mode == 1 || mode == 2 {
+            assert!(error.to_string().contains("limit"));
+        }
         mock.shutdown().await?;
     }
     Ok(())
@@ -208,13 +337,22 @@ async fn https_discovery_keeps_normal_certificate_verification() -> Result<()> {
     let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])?;
     let certificate = params.self_signed(&key)?;
     let config = rustls::ServerConfig::builder_with_provider(crate::tls::provider())
-        .with_safe_default_protocol_versions()?.with_no_client_auth()
-        .with_single_cert(vec![certificate.der().clone()], rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into())?;
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        )?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await?;
-        assert!(tokio_rustls::TlsAcceptor::from(Arc::new(config)).accept(stream).await.is_err());
+        assert!(
+            tokio_rustls::TlsAcceptor::from(Arc::new(config))
+                .accept(stream)
+                .await
+                .is_err()
+        );
         Ok::<(), anyhow::Error>(())
     });
     let error = new_error(&format!("https://id:unit-secret@{address}")).await?;
@@ -225,8 +363,18 @@ async fn https_discovery_keeps_normal_certificate_verification() -> Result<()> {
 
 #[tokio::test]
 async fn local_metadata_cannot_delegate_tokens_to_another_origin() -> Result<()> {
-    for endpoint in ["http://127.0.0.1:1/token", "https://other.example/token", "http://id:unit-secret@127.0.0.1/token"] {
-        let mock = Mock::new(move |origin, _| response("200 OK", &serde_json::json!({"issuer":origin,"introspection_endpoint":endpoint}).to_string())).await?;
+    for endpoint in [
+        "http://127.0.0.1:1/token",
+        "https://other.example/token",
+        "http://id:unit-secret@127.0.0.1/token",
+    ] {
+        let mock = Mock::new(move |origin, _| {
+            response(
+                "200 OK",
+                &serde_json::json!({"issuer":origin,"introspection_endpoint":endpoint}).to_string(),
+            )
+        })
+        .await?;
         let error = new_error(&mock.source).await?;
         assert_redacted(&error);
         assert_eq!(crate::state_lock::lock(&mock.requests).len(), 1);

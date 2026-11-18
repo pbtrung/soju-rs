@@ -27,22 +27,31 @@ pub(super) struct ExpiryState {
 impl Server {
     pub(super) fn schedule_message_expiry(self: &Arc<Self>, vacuum: bool) {
         let mut state = crate::state_lock::lock(&self.expiry_state);
-        if self.is_shutting_down() { return; }
+        if self.is_shutting_down() {
+            return;
+        }
         state.requested = Some(state.requested.unwrap_or(false) || vacuum);
-        if state.running { return; }
+        if state.running {
+            return;
+        }
         state.running = true;
         let server = self.clone();
         self.maintenance_tasks.spawn(async move {
             loop {
                 let request = {
                     let mut state = crate::state_lock::lock(&server.expiry_state);
-                    if server.is_shutting_down() { state.requested = None; }
-                    match state.requested.take() {
-                        Some(vacuum) => Some(vacuum),
-                        None => { state.running = false; None }
+                    if server.is_shutting_down() {
+                        state.requested = None;
                     }
+                    let pending = state.requested.take();
+                    if pending.is_none() {
+                        state.running = false;
+                    }
+                    pending
                 };
-                let Some(vacuum) = request else { return; };
+                let Some(vacuum) = request else {
+                    return;
+                };
                 server.run_message_expiry(vacuum).await;
             }
         });
