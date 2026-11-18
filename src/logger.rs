@@ -20,6 +20,7 @@ pub struct Logger {
 }
 
 impl Logger {
+    #[must_use]
     pub fn new(debug: bool) -> Logger {
         Logger {
             root: Arc::new(Root {
@@ -30,6 +31,7 @@ impl Logger {
     }
 
     /// Returns a logger which prepends prefix to every line.
+    #[must_use]
     pub fn with_prefix(&self, prefix: impl AsRef<str>) -> Logger {
         Logger {
             root: self.root.clone(),
@@ -37,11 +39,13 @@ impl Logger {
         }
     }
 
+    #[must_use]
     pub fn debug_enabled(&self) -> bool {
         self.root.debug.load(Ordering::Relaxed)
     }
 
     /// Sets the debug flag, returning the previous value.
+    #[must_use]
     pub fn set_debug(&self, debug: bool) -> bool {
         self.root.debug.swap(debug, Ordering::Relaxed)
     }

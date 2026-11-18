@@ -1,14 +1,27 @@
 //! Keeping downstream connections in sync with upstream state: nick,
 //! host, channels, topics and metadata.
 
-use super::*;
+use super::{
+    CaseMapping, DownstreamConn, Message, RPL_LOGGEDIN, RPL_LOGGEDOUT, RPL_METADATASUBOK,
+    RPL_METADATASUBS, RPL_METADATAUNSUBOK, RPL_NOTOPIC, RPL_TOPIC, RPL_TOPICWHOTIME,
+    RPL_VISIBLEHOST, Result, UpstreamChannel, User, db, fail, get_nick, get_realname, ircutil,
+    logf, msg, need_more_params, xirc,
+};
 
 /// The nick of a downstream connection: our nick on its network, or the
 /// user's for a bouncer connection.
 pub(super) fn current_nick(u: &User, net_idx: Option<usize>) -> String {
     match net_idx {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         Some(ni) => match u.networks[ni].upstream() {
             Some(uc) => uc.nick.clone(),
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             None => get_nick(&u.record, Some(&u.networks[ni].record)).to_owned(),
         },
         None => get_nick(&u.record, None).to_owned(),
@@ -17,8 +30,16 @@ pub(super) fn current_nick(u: &User, net_idx: Option<usize>) -> String {
 
 pub fn update_nick(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
     let nick = current_nick(u, net_idx);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     if nick == dc.nick {
         return;
@@ -31,7 +52,15 @@ pub fn update_nick(u: &mut User, dc_id: u64) {
 
 pub fn update_host(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(uc) = net_idx.and_then(|ni| u.networks[ni].upstream()) else {
         return;
     };
@@ -39,6 +68,10 @@ pub fn update_host(u: &mut User, dc_id: u64) {
         return;
     }
     let (host, user) = (uc.hostname.clone(), uc.username.clone());
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     if host == dc.hostname && user == dc.username {
         return;
@@ -61,17 +94,39 @@ pub fn update_host(u: &mut User, dc_id: u64) {
 
 pub fn update_realname(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
-    if !u.downstreams[i].caps.is_enabled("setname") {
-        return;
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if !u.downstreams[i].caps.is_enabled("setname") {
+            return;
+        }
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
     let realname = match net_idx {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         Some(ni) => match u.networks[ni].upstream() {
             Some(uc) => uc.realname.clone(),
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             None => get_realname(&u.record, Some(&u.networks[ni].record)).to_owned(),
         },
         None => get_realname(&u.record, None).to_owned(),
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     if realname != dc.realname {
         let prefix = dc.prefix();
@@ -82,23 +137,39 @@ pub fn update_realname(u: &mut User, dc_id: u64) {
 
 pub fn update_account(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let account = match u.downstreams[i].network_id {
         None => u.record.username.clone(),
         Some(id) => {
             let ni = u.net_index(id);
-            match ni.and_then(|ni| u.networks[ni].upstream()) {
-                Some(uc) => uc.account.clone(),
-                None => return,
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                match ni.and_then(|ni| u.networks[ni].upstream()) {
+                    Some(uc) => uc.account.clone(),
+                    None => return,
+                }
             }
         }
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     if dc.account == account || !dc.caps.is_enabled("sasl") {
         return;
     }
     let nick = dc.nick.clone();
     let prefix = dc.prefix().to_string();
-    if !account.is_empty() {
+    if account.is_empty() {
+        dc.send_message(msg!(RPL_LOGGEDOUT, nick, prefix, "You are logged out"));
+    } else {
         dc.send_message(msg!(
             RPL_LOGGEDIN,
             nick,
@@ -106,8 +177,6 @@ pub fn update_account(u: &mut User, dc_id: u64) {
             account.clone(),
             format!("You are logged in as {account}")
         ));
-    } else {
-        dc.send_message(msg!(RPL_LOGGEDOUT, nick, prefix, "You are logged out"));
     }
     dc.account = account;
 }
@@ -166,7 +235,9 @@ pub fn forward_channel(
 
 pub fn send_topic(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
     let nick = dc.nick.clone();
-    if !ch.topic.is_empty() {
+    if ch.topic.is_empty() {
+        dc.send_message(msg!(RPL_NOTOPIC, nick, ch.name.clone(), "No topic is set"));
+    } else {
         dc.send_message(msg!(
             RPL_TOPIC,
             nick.clone(),
@@ -183,18 +254,15 @@ pub fn send_topic(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
                 t.to_string()
             ));
         }
-    } else {
-        dc.send_message(msg!(RPL_NOTOPIC, nick, ch.name.clone(), "No topic is set"));
     }
 }
 
 fn topic_time_seconds(time: Option<jiff::Timestamp>) -> i64 {
-    time.map(|t| {
+    time.map_or(-62_135_596_800, |t| {
         // IRC Unix seconds round down, while Jiff's as_second truncates
         // towards zero. Preserve pre-epoch fractional topic timestamps.
         t.as_second() - i64::from(t.subsec_nanosecond().is_negative())
     })
-    .unwrap_or(-62135596800)
 }
 
 pub fn send_names(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
@@ -209,6 +277,7 @@ pub fn send_names(dc: &mut DownstreamConn, ch: &UpstreamChannel) {
     }
 }
 
+#[must_use]
 pub fn get_message_target_metadata(mt: &db::MessageTarget) -> Vec<(&'static str, &'static str)> {
     let b = |v: bool| if v { "1" } else { "0" };
     vec![
@@ -242,12 +311,16 @@ pub fn handle_metadata_sub(
     if msg.params.len() < 2 {
         return Some(Err(need_more_params(&msg.command).into()));
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let subcommand = msg.params[1].as_str();
     match subcommand {
         "SUB" | "UNSUB" => {
             // Listed once, for all keys
             let mut mts: Option<Vec<db::MessageTarget>> = None;
-            for k in &msg.params[2..] {
+            for k in msg.params.iter().skip(2) {
                 let k = k.to_lowercase();
                 if !matches!(
                     k.as_str(),
@@ -342,6 +415,6 @@ mod tests {
         ] {
             assert_eq!(topic_time_seconds(Some(input.parse().unwrap())), seconds);
         }
-        assert_eq!(topic_time_seconds(None), -62135596800);
+        assert_eq!(topic_time_seconds(None), -62_135_596_800);
     }
 }

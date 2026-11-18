@@ -39,6 +39,7 @@ pub struct Identd {
 }
 
 impl Identd {
+    #[must_use]
     pub fn new() -> Identd {
         Identd::default()
     }
@@ -55,7 +56,7 @@ impl Identd {
         }
     }
 
-    /// Handles one ident client connection. remote_host is the client's IP.
+    /// Handles one ident client connection. `remote_host` is the client's IP.
     pub async fn handle<S: AsyncRead + AsyncWrite + Unpin>(&self, stream: S, remote_host: &str) {
         let mut r = BufReader::new(stream);
         while let Ok(Ok(true)) =
@@ -147,7 +148,7 @@ mod tests {
         b.write_all(&query).await.unwrap();
         let mut reply = Vec::new();
         b.read_to_end(&mut reply).await.unwrap();
-        assert!(reply.is_empty());
+        assert_eq!(reply, [] as [u8; 0]);
         task.await.unwrap();
     }
 

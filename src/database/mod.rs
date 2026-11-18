@@ -17,6 +17,10 @@ use jiff::Timestamp;
 /// Runs database operations from async code, on tokio's blocking thread
 /// pool: SQLite calls block, and would otherwise stall a runtime worker and
 /// all the tasks queued on it.
+///
+/// # Errors
+///
+/// Returns an error for invalid credentials, malformed stored values, or failed password processing.
 pub async fn run<T, F>(db: &Arc<Database>, f: F) -> Result<T>
 where
     F: FnOnce(&Database) -> Result<T> + Send + 'static,
@@ -43,10 +47,10 @@ impl std::error::Error for DuplicateDeviceCertificate {}
 pub struct MessageTargetLast {
     pub name: String,
     pub latest_message: Option<Timestamp>,
-    /// The latest text message: latest_message may be an event
+    /// The latest text message: `latest_message` may be an event
     pub latest_text: Option<Timestamp>,
     /// The latest message mentioning the user, see
-    /// store_message_target_highlight
+    /// `store_message_target_highlight`
     pub highlight: Option<Timestamp>,
     /// The read marker
     pub read: Option<Timestamp>,
@@ -54,12 +58,14 @@ pub struct MessageTargetLast {
 
 impl MessageTargetLast {
     /// Whether a text message is after the read marker.
+    #[must_use]
     pub fn unread(&self) -> bool {
         self.latest_text
             .is_some_and(|t| self.read.is_none_or(|r| t > r))
     }
 
     /// Whether a message mentioning the user is after the read marker.
+    #[must_use]
     pub fn mention(&self) -> bool {
         self.highlight
             .is_some_and(|t| self.read.is_none_or(|r| t > r))
@@ -71,7 +77,7 @@ pub struct MessageOptions {
     pub after_id: i64,
     pub after_time: Option<Timestamp>,
     pub before_time: Option<Timestamp>,
-    /// Zero returns no rows. Values above i64::MAX (including usize::MAX on
+    /// Zero returns no rows. Values above `i64::MAX` (including `usize::MAX` on
     /// 64-bit systems) explicitly request SQLite's unlimited LIMIT.
     pub limit: usize,
     pub events: bool,
@@ -105,6 +111,7 @@ pub struct User {
 }
 
 impl User {
+    #[must_use]
     pub fn new(username: &str) -> User {
         User {
             id: 0,
@@ -121,6 +128,10 @@ impl User {
 
     /// Checks a password. Returns true if the hash has been upgraded and the
     /// user record needs to be stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid credentials, malformed stored values, or failed password processing.
     pub fn check_password(&mut self, password: &str) -> Result<bool> {
         if self.password.is_empty() {
             bail!("password auth disabled");
@@ -141,6 +152,10 @@ impl User {
         Ok(false)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid credentials, malformed stored values, or failed password processing.
     pub fn set_password(&mut self, password: &str) -> Result<()> {
         // The bcrypt crate would silently truncate longer passwords, Go's
         // bcrypt rejects them
@@ -161,9 +176,15 @@ fn bcrypt_cost(hash: &str) -> Result<u32> {
     if parts.len() < 4 {
         bail!("invalid password cost: malformed hash");
     }
-    parts[2]
-        .parse()
-        .map_err(|e| anyhow!("invalid password cost: {e}"))
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
+        parts[2]
+            .parse()
+            .map_err(|e| anyhow!("invalid password cost: {e}"))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -197,7 +218,7 @@ pub struct Network {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkUrl {
     pub scheme: String,
-    /// host[:port], empty for Unix sockets
+    /// `host[:port]`, empty for Unix sockets
     pub host: String,
     pub path: String,
     pub has_user: bool,
@@ -206,6 +227,7 @@ pub struct NetworkUrl {
 }
 
 impl Network {
+    #[must_use]
     pub fn new(addr: &str) -> Network {
         Network {
             id: 0,
@@ -223,14 +245,19 @@ impl Network {
         }
     }
 
+    #[must_use]
     pub fn get_name(&self) -> &str {
-        if !self.name.is_empty() {
-            &self.name
-        } else {
+        if self.name.is_empty() {
             &self.addr
+        } else {
+            &self.name
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid credentials, malformed stored values, or failed password processing.
     pub fn url(&self) -> Result<NetworkUrl> {
         let mut s = self.addr.clone();
         if !s.contains("://") {
@@ -248,7 +275,11 @@ impl Network {
 }
 
 /// A minimal URL parser following Go's net/url for the URLs soju uses
-/// (scheme://[userinfo@]host[:port][/path][?query][#fragment]).
+/// (`scheme://[userinfo@]host[:port][/path][?query][#fragment]`).
+///
+/// # Errors
+///
+/// Returns an error for invalid credentials, malformed stored values, or failed password processing.
 pub fn parse_url(s: &str) -> Result<NetworkUrl> {
     let (s, fragment) = match s.split_once('#') {
         Some((a, f)) => (a, f.to_owned()),
@@ -270,10 +301,18 @@ pub fn parse_url(s: &str) -> Result<NetworkUrl> {
         bail!("first path segment in URL cannot contain colon");
     }
     let (authority, path) = match rest.find('/') {
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
     };
     let (has_user, host) = match authority.rfind('@') {
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Some(i) => (true, &authority[i + 1..]),
         None => (false, authority),
     };
@@ -291,12 +330,24 @@ pub fn parse_url(s: &str) -> Result<NetworkUrl> {
 }
 
 /// Splits host:port like Go's net.SplitHostPort.
+///
+/// # Errors
+///
+/// Returns an error for invalid credentials, malformed stored values, or failed password processing.
 pub fn split_host_port(hostport: &str) -> Result<(String, String)> {
     if let Some(rest) = hostport.strip_prefix('[') {
         let Some(end) = rest.find(']') else {
             bail!("address {hostport}: missing ']' in address");
         };
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         let host = &rest[..end];
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         let after = &rest[end + 1..];
         let Some(port) = after.strip_prefix(':') else {
             bail!("address {hostport}: missing port in address");
@@ -306,14 +357,25 @@ pub fn split_host_port(hostport: &str) -> Result<(String, String)> {
     let Some(i) = hostport.rfind(':') else {
         bail!("address {hostport}: missing port in address");
     };
+    #[expect(
+        clippy::string_slice,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+    )]
     let host = &hostport[..i];
     if host.contains(':') {
         bail!("address {hostport}: too many colons in address");
     }
-    Ok((host.to_owned(), hostport[i + 1..].to_owned()))
+    {
+        #![expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
+        Ok((host.to_owned(), hostport[i + 1..].to_owned()))
+    }
 }
 
 /// Joins host and port like Go's net.JoinHostPort.
+#[must_use]
 pub fn join_host_port(host: &str, port: &str) -> String {
     if host.contains(':') {
         format!("[{host}]:{port}")
@@ -322,6 +384,7 @@ pub fn join_host_port(host: &str, port: &str) -> String {
     }
 }
 
+#[must_use]
 pub fn get_nick<'a>(user: &'a User, net: Option<&'a Network>) -> &'a str {
     if let Some(net) = net
         && !net.nick.is_empty()
@@ -334,6 +397,7 @@ pub fn get_nick<'a>(user: &'a User, net: Option<&'a Network>) -> &'a str {
     &user.username
 }
 
+#[must_use]
 pub fn get_username<'a>(user: &'a User, net: Option<&'a Network>) -> &'a str {
     if let Some(net) = net
         && !net.username.is_empty()
@@ -343,6 +407,7 @@ pub fn get_username<'a>(user: &'a User, net: Option<&'a Network>) -> &'a str {
     get_nick(user, net)
 }
 
+#[must_use]
 pub fn get_realname<'a>(user: &'a User, net: Option<&'a Network>) -> &'a str {
     if let Some(net) = net
         && !net.realname.is_empty()
@@ -366,6 +431,7 @@ pub enum MessageFilter {
 }
 
 impl MessageFilter {
+    #[must_use]
     pub fn from_i64(v: i64) -> MessageFilter {
         match v {
             1 => MessageFilter::None,

@@ -1,7 +1,19 @@
 //! Channels' state: membership, topics, modes and names.
 
-use super::*;
+use super::{
+    CaseMapping, CaseMappingMap, ChannelModes, ChannelStatus, Membership, MembershipSet, Message,
+    Prefix, RPL_CHANNELMODEIS, RPL_CREATIONTIME, RPL_ENDOFNAMES, RPL_INVITING, RPL_LIST,
+    RPL_LISTEND, RPL_LISTSTART, RPL_NAMREPLY, RPL_NOTOPIC, RPL_TOPIC, RPL_TOPICWHOTIME,
+    RPL_UMODEIS, Result, Timestamp, UpstreamChannel, UpstreamConn, UpstreamUser, User, UserModes,
+    anyhow, append_log, bail, current_pending_downstream, dcs_for, dequeue_command, downstream,
+    forward_message, forward_msg_by_id, ircutil, is_our_nick, logf, msg, need_params, produce,
+    should_cache_user_info, xirc,
+};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 /// Handles channel messages: membership, topics, modes, names, LIST and
 /// invites. Returns false if the message isn't one of them.
 pub(super) fn handle_message(
@@ -10,13 +22,25 @@ pub(super) fn handle_message(
     msg: &mut Message,
     downstream_id: u64,
 ) -> Result<bool> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let cm = u.networks[ni].casemap;
     let prefix_name = msg.prefix_name().to_owned();
 
     match msg.command.as_str() {
         "JOIN" => {
             need_params(msg, 1)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channels = msg.params[0].clone();
             let prefix = msg.prefix.clone().unwrap_or_default();
             let uc = uc!(u, ni);
@@ -30,7 +54,7 @@ pub(super) fn handle_message(
                 // best-effort manner:
                 // - the H/G flag is set to Here first, will be replaced by
                 //   Gone later if the user is AWAY
-                uu.flags = "H".to_owned();
+                "H".clone_into(&mut uu.flags);
                 // - the B (bot mode) flag is set if the JOIN comes from a
                 //   bot. Note: we have no way to track the user bot mode
                 //   after they have joined (we are not notified of the bot
@@ -45,8 +69,20 @@ pub(super) fn handle_message(
             }
             if msg.params.len() > 2 {
                 // extended-join
-                uu.account = msg.params[1].clone();
-                uu.realname = msg.params[2].clone();
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    uu.account.clone_from(&msg.params[1]);
+                }
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    uu.realname.clone_from(&msg.params[2]);
+                }
             }
             uc.cache_user_info(&prefix_name, uu);
 
@@ -70,6 +106,10 @@ pub(super) fn handle_message(
         }
         "PART" => {
             need_params(msg, 1)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channels = msg.params[0].clone();
             for ch in channels.split(',') {
                 let uc = uc!(u, ni);
@@ -84,7 +124,15 @@ pub(super) fn handle_message(
         }
         "KICK" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channel = msg.params[0].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let user = msg.params[1].clone();
             let uc = uc!(u, ni);
             if is_our_nick(cm, uc, &user) {
@@ -100,7 +148,15 @@ pub(super) fn handle_message(
         }
         RPL_TOPIC | RPL_NOTOPIC => {
             need_params(msg, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[1].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let topic = msg.params[2].clone();
             let uc = uc!(u, ni);
             match uc.channels.get_mut(&name) {
@@ -116,14 +172,24 @@ pub(super) fn handle_message(
         }
         "TOPIC" => {
             need_params(msg, 1)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[0].clone();
             let uc = uc!(u, ni);
             let Some(ch) = uc.channels.get_mut(&name) else {
                 bail!("unknown channel {name:?}");
             };
             if msg.params.len() > 1 {
-                ch.topic = msg.params[1].clone();
-                ch.topic_who = msg.prefix.clone();
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    ch.topic.clone_from(&msg.params[1]);
+                }
+                ch.topic_who.clone_from(&msg.prefix);
                 ch.topic_time = Some(
                     msg.tags
                         .get("time")
@@ -138,24 +204,43 @@ pub(super) fn handle_message(
         }
         "MODE" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[0].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let mode_str = msg.params[1].clone();
             let uc = uc!(u, ni);
-            if !uc.is_channel(&name) {
+            if uc.is_channel(&name) {
+                // channel mode change
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                let ch_name = apply_channel_modes(uc, &name, &mode_str, &msg.params[2..], false)?
+                    .ok_or_else(|| anyhow!("unknown channel {name:?}"))?;
+                append_log(u, ni, &ch_name, msg);
+                {
+                    if !u
+                        .networks
+                        .get(ni)
+                        .ok_or_else(|| anyhow!("missing network"))?
+                        .is_detached(&name)
+                    {
+                        forward_message(u, net_id, msg);
+                    }
+                }
+            } else {
                 // user mode change
                 if name != uc.nick {
                     bail!("received MODE message for unknown nick {name:?}");
                 }
                 uc.modes.apply(&mode_str).map_err(|e| anyhow!(e))?;
                 forward_message(u, net_id, msg);
-            } else {
-                // channel mode change
-                let ch_name = apply_channel_modes(uc, &name, &mode_str, &msg.params[2..], false)?
-                    .ok_or_else(|| anyhow!("unknown channel {name:?}"))?;
-                append_log(u, ni, &ch_name, msg);
-                if !u.networks[ni].is_detached(&name) {
-                    forward_message(u, net_id, msg);
-                }
             }
         }
         RPL_UMODEIS => {
@@ -168,6 +253,10 @@ pub(super) fn handle_message(
         }
         RPL_CHANNELMODEIS => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channel = &msg.params[1];
             let mode_str = msg.param(2);
             let mode_args = msg.params.get(3..).unwrap_or_default();
@@ -180,12 +269,22 @@ pub(super) fn handle_message(
                 forward_msg_by_id(u, net_id, downstream_id, msg);
                 return Ok(true);
             }
-            if first_mode && !u.networks[ni].is_detached(channel) {
-                forward_message(u, net_id, msg);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if first_mode && !u.networks[ni].is_detached(channel) {
+                    forward_message(u, net_id, msg);
+                }
             }
         }
         RPL_CREATIONTIME => {
             need_params(msg, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channel = msg.params[1].clone();
             let uc = uc!(u, ni);
             let Some(ch) = uc.channels.get_mut(&channel) else {
@@ -193,13 +292,29 @@ pub(super) fn handle_message(
                 return Ok(true);
             };
             let first = ch.creation_time.is_empty();
-            ch.creation_time = msg.params[2].clone();
-            if first && !u.networks[ni].is_detached(&channel) {
-                forward_message(u, net_id, msg);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                ch.creation_time.clone_from(&msg.params[2]);
+            }
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if first && !u.networks[ni].is_detached(&channel) {
+                    forward_message(u, net_id, msg);
+                }
             }
         }
         RPL_TOPICWHOTIME => {
             need_params(msg, 4)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channel = msg.params[1].clone();
             let uc = uc!(u, ni);
             let Some(ch) = uc.channels.get_mut(&channel) else {
@@ -207,13 +322,29 @@ pub(super) fn handle_message(
                 return Ok(true);
             };
             let first = ch.topic_who.is_none();
-            ch.topic_who = Some(Prefix::parse(&msg.params[2]));
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                ch.topic_who = Some(Prefix::parse(&msg.params[2]));
+            }
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let sec: i64 = msg.params[3]
                 .parse()
                 .map_err(|e| anyhow!("failed to parse topic time: {e}"))?;
             ch.topic_time = Timestamp::from_second(sec).ok();
-            if first && !u.networks[ni].is_detached(&channel) {
-                forward_message(u, net_id, msg);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if first && !u.networks[ni].is_detached(&channel) {
+                    forward_message(u, net_id, msg);
+                }
             }
         }
         RPL_LISTSTART | RPL_LIST => {
@@ -221,7 +352,13 @@ pub(super) fn handle_message(
                 bail!("unexpected RPL_LIST: no matching pending LIST");
             };
             if let Some(i) = u.dc_index(dc_id) {
-                u.downstreams[i].send_message(msg.clone());
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    u.downstreams[i].send_message(msg.clone());
+                }
             }
         }
         RPL_LISTEND => {
@@ -229,13 +366,31 @@ pub(super) fn handle_message(
                 bail!("unexpected RPL_LISTEND: no matching pending LIST");
             };
             if let Some(i) = u.dc_index(dc_id) {
-                u.downstreams[i].send_message(msg.clone());
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    u.downstreams[i].send_message(msg.clone());
+                }
             }
         }
         RPL_NAMREPLY => {
             need_params(msg, 4)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let status_str = msg.params[1].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[2].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let members = msg.params[3].clone();
             let uc = uc!(u, ni);
             if !uc.channels.has(&name) {
@@ -255,6 +410,10 @@ pub(super) fn handle_message(
         }
         RPL_ENDOFNAMES => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[1].clone();
             let uc = uc!(u, ni);
             let Some(ch) = uc.channels.get_mut(&name) else {
@@ -266,7 +425,16 @@ pub(super) fn handle_message(
                 bail!("received unexpected RPL_ENDOFNAMES");
             }
             ch.complete = true;
-            if !u.networks[ni].is_detached(&name) {
+            if !u
+                .networks
+                .get(ni)
+                .ok_or_else(|| anyhow!("missing network"))?
+                .is_detached(&name)
+            {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let net = &u.networks[ni];
                 let uch = net
                     .conn
@@ -290,26 +458,46 @@ pub(super) fn handle_message(
         }
         "INVITE" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let nick = msg.params[0].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let channel = msg.params[1].clone();
             let uc = uc!(u, ni);
             let we_are_invited = is_our_nick(cm, uc, &nick);
             let mut blocked = false;
             if we_are_invited {
                 let joined = uc.channels.has(&channel);
-                if !joined && let Some(c) = u.networks[ni].channels.get(&channel) {
-                    // Automatically join a saved channel when we are invited
-                    let msgs = xirc::generate_join(
-                        std::slice::from_ref(&c.name),
-                        std::slice::from_ref(&c.key),
-                    );
-                    let uc = uc!(u, ni);
-                    for m in msgs {
-                        uc.send_message(m);
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if !joined && let Some(c) = u.networks[ni].channels.get(&channel) {
+                        // Automatically join a saved channel when we are invited
+                        let msgs = xirc::generate_join(
+                            std::slice::from_ref(&c.name),
+                            std::slice::from_ref(&c.key),
+                        );
+                        let uc = uc!(u, ni);
+                        for m in msgs {
+                            uc.send_message(m);
+                        }
+                        return Ok(true);
                     }
-                    return Ok(true);
                 }
-                blocked = u.networks[ni].message_target(&cm(&prefix_name)).blocked;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    blocked = u.networks[ni].message_target(&cm(&prefix_name)).blocked;
+                }
             }
             for dc in dcs_for(&mut u.downstreams, net_id) {
                 if !we_are_invited && !dc.caps.is_enabled("invite-notify") {
@@ -377,7 +565,7 @@ fn remove_member(uc: &mut UpstreamConn, cm: CaseMapping, channel: &str, nick: &s
 }
 
 /// Applies a mode change to a channel we're in. reset clears its modes
-/// first, for a full mode list (RPL_CHANNELMODEIS). Returns the channel's
+/// first, for a full mode list (`RPL_CHANNELMODEIS`). Returns the channel's
 /// name, or None if we're not in it.
 fn apply_channel_modes(
     uc: &mut UpstreamConn,
@@ -413,9 +601,15 @@ fn parse_membership_prefix<'a>(memberships: &[Membership], s: &'a str) -> (Membe
         if i >= b.len() {
             break;
         }
-        if b[i] == m.prefix {
-            ms.0.push(*m);
-            i += 1;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            if b[i] == m.prefix {
+                ms.0.push(*m);
+                i += 1;
+            }
         }
     }
     (ms, s.get(i..).unwrap_or(s))
@@ -423,16 +617,32 @@ fn parse_membership_prefix<'a>(memberships: &[Membership], s: &'a str) -> (Membe
 
 /// Produces a JOIN or PART for one of the channels it lists.
 fn produce_for_channel(u: &mut User, ni: usize, ch: &str, msg: &Message) {
-    if msg.params[0] == ch {
-        produce(u, ni, ch, msg, 0, false);
-    } else {
-        let mut ch_msg = msg.clone();
-        ch_msg.params[0] = ch.to_owned();
-        produce(u, ni, ch, &ch_msg, 0, false);
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        if msg.params[0] == ch {
+            produce(u, ni, ch, msg, 0, false);
+        } else {
+            let mut ch_msg = msg.clone();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                ch.clone_into(&mut ch_msg.params[0]);
+            }
+            produce(u, ni, ch, &ch_msg, 0, false);
+        }
     }
 }
 
 pub fn update_channel_auto_detach(u: &mut User, ni: usize, name: &str) {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &mut u.networks[ni];
     let Some(ch) = net.channels.get(name) else {
         return;
@@ -466,6 +676,10 @@ pub fn update_channel_auto_detach(u: &mut User, ni: usize, name: &str) {
 /// started, it's re-armed instead. A timer that has been stopped meanwhile
 /// (e.g. the channel was parted) is ignored.
 pub fn auto_detach_timer_fired(u: &mut User, ni: usize, name: &str) -> bool {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(uc) = u.networks[ni].upstream_mut() else {
         return false;
     };

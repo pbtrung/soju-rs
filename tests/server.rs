@@ -1,4 +1,4 @@
-//! Integration tests ported from upstream's server_test.go: an in-process
+//! Integration tests ported from upstream's `server_test.go`: an in-process
 //! bouncer with a fake upstream server.
 
 use std::sync::Arc;
@@ -217,6 +217,10 @@ async fn register_downstream_as(c: &mut TestConn, username: &str, network: &data
     c.expect("001").await;
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn register_upstream(c: &mut TestConn) {
     let msg = c.expect("CAP").await;
     assert_eq!(msg.params[0], "LS", "invalid CAP LS: {msg}");
@@ -250,8 +254,12 @@ async fn register_upstream(c: &mut TestConn) {
     c.send(msg!("422", nick, "No MOTD").with_prefix(p));
 }
 
-/// Registers an upstream connection like register_upstream, advertising
+/// Registers an upstream connection like `register_upstream`, advertising
 /// ISUPPORT tokens.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn register_upstream_with(c: &mut TestConn, isupport: &[&str]) -> String {
     c.expect("CAP").await;
     let nick = c.expect("NICK").await.params[0].clone();
@@ -259,7 +267,7 @@ async fn register_upstream_with(c: &mut TestConn, isupport: &[&str]) -> String {
     let p = server_prefix();
     c.send(msg!("001", nick.clone(), "Welcome!").with_prefix(p.clone()));
     let mut params = vec![nick.clone()];
-    params.extend(isupport.iter().map(|s| s.to_string()));
+    params.extend(isupport.iter().map(std::string::ToString::to_string));
     params.push("are supported".to_owned());
     c.send(Message::new("005", params).with_prefix(p.clone()));
     c.send(msg!("422", nick.clone(), "No MOTD").with_prefix(p));
@@ -268,7 +276,11 @@ async fn register_upstream_with(c: &mut TestConn, isupport: &[&str]) -> String {
 
 /// Registers a downstream connection after negotiating capabilities, bound
 /// to a network or else to the bouncer itself. Returns the messages received
-/// after RPL_WELCOME.
+/// after `RPL_WELCOME`.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn register_downstream_caps(
     c: &mut TestConn,
     network: Option<&database::Network>,
@@ -302,6 +314,10 @@ async fn register_downstream_caps(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn read_cap_ls(c: &mut TestConn) -> Vec<String> {
     let mut caps = Vec::new();
     loop {
@@ -332,8 +348,12 @@ fn db_store() -> MsgStore {
     }
 }
 
-/// Registers an upstream connection like register_upstream, negotiating
+/// Registers an upstream connection like `register_upstream`, negotiating
 /// capabilities.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn register_upstream_caps(c: &mut TestConn, caps: &str) -> String {
     let p = server_prefix();
     c.expect("CAP").await;
@@ -355,6 +375,10 @@ async fn register_upstream_caps(c: &mut TestConn, caps: &str) -> String {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn read_multiline(c: &mut TestConn) -> (Message, Vec<Message>) {
     let opener = read_until(c, "BATCH").await;
     assert_eq!(opener.params[1], "draft/multiline", "{opener}");
@@ -371,7 +395,11 @@ async fn read_multiline(c: &mut TestConn) -> (Message, Vec<Message>) {
     }
 }
 
-/// Reads the next BouncerServ reply.
+/// Reads the next `BouncerServ` reply.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn read_service_reply(c: &mut TestConn) -> String {
     loop {
         let m = read_until(c, "PRIVMSG").await;
@@ -383,6 +411,10 @@ async fn read_service_reply(c: &mut TestConn) -> String {
 
 /// Lists the targets of CHATHISTORY TARGETS with their soju.im/unread and
 /// soju.im/mention tags.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn unread_target_tags(dc: &mut TestConn) -> Vec<(String, bool, bool)> {
     dc.send(msg!(
         "CHATHISTORY",
@@ -422,6 +454,10 @@ async fn read_until_tagged(c: &mut TestConn, cmd: &str, net: &str) -> Message {
 
 /// Fetches history through IRC, checking the complete reply rather than
 /// inspecting the database or the user's event-loop state.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn history_texts(c: &mut TestConn, target: &str) -> Vec<String> {
     c.send(msg!("CHATHISTORY", "LATEST", target, "*", "100"));
     c.roundtrip()

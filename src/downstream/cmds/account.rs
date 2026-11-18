@@ -1,12 +1,24 @@
 //! AUTHENTICATE and CLIENTCERT from registered downstream connections.
 
-use super::*;
+use super::{
+    Digest, ERR_SASLFAIL, Message, Result, Sha512, Tags, User, db, dc_network,
+    enqueue_upstream_command, fail, irc_error, logf, msg, need_params, unknown_command, upstream,
+    xirc,
+};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     // Post-connection-registration AUTHENTICATE is only supported if an
     // upstream is bound and supports SASL
     let nick = dc!(u, i).nick.clone();
     let ni = dc_network(u, i);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let ok = ni
         .and_then(|ni| u.networks[ni].upstream())
         .is_some_and(|uc| uc.caps.is_enabled("sasl"));
@@ -20,22 +32,32 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
     let ni =
         ni.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(credentials) = u.downstreams[i].handle_authenticate(msg)? else {
         return Ok(());
     };
 
-    if u.networks[ni]
-        .upstream()
-        .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
-        .sasl_client
-        .is_some()
     {
-        dc!(u, i).end_sasl(Some(msg!(
-            ERR_SASLFAIL,
-            nick,
-            "Another authentication attempt is already in progress"
-        )));
-        return Ok(());
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if u.networks[ni]
+            .upstream()
+            .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
+            .sasl_client
+            .is_some()
+        {
+            dc!(u, i).end_sasl(Some(msg!(
+                ERR_SASLFAIL,
+                nick,
+                "Another authentication attempt is already in progress"
+            )));
+            return Ok(());
+        }
     }
 
     match credentials.mechanism.as_str() {
@@ -51,6 +73,10 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
                 )));
                 return Ok(());
             }
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let uc = u.networks[ni].upstream_mut().ok_or_else(|| {
                 anyhow::anyhow!("required user or connection state is unavailable")
             })?;
@@ -67,7 +93,15 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
         }
         "ANONYMOUS" => {
             let dc_id = dc!(u, i).id;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             if !u.networks[ni].record.sasl.mechanism.is_empty() {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let mut record = u.networks[ni].record.clone();
                 record.sasl = db::Sasl::default();
                 if u.update_network(record, false).is_err() {
@@ -94,8 +128,16 @@ pub(super) fn handle_authenticate_registered(u: &mut User, i: usize, msg: &Messa
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_clientcert(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let subcommand = msg.params[0].clone();
     if !u.srv.config().basic.client_cert_auth {
         return Err(unknown_command(&msg.command));
@@ -128,6 +170,10 @@ pub(super) fn handle_clientcert(u: &mut User, i: usize, msg: &Message) -> Result
         }
         "CREATE" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let name = msg.params[1].clone();
             let Some(pc) = dc!(u, i).info.peer_cert.clone() else {
                 return Err(fail(&[
@@ -163,6 +209,10 @@ pub(super) fn handle_clientcert(u: &mut User, i: usize, msg: &Message) -> Result
         }
         "DELETE" => {
             let (fingerprint, h) = if msg.params.len() > 1 {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
                 let fp = msg.params[1].clone();
                 match hex::decode(&fp) {
                     Ok(h) if h.len() == 64 => (fp, h),

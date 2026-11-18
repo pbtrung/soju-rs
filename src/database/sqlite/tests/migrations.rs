@@ -1,6 +1,7 @@
 //! Migrations regression scenarios.
 
 use super::*;
+use crate::database::MessageOptions;
 
 // SQLite version 0 schema, from upstream. DO NOT EDIT.
 const SQLITE_V0_SCHEMA: &str = "
@@ -42,6 +43,10 @@ PRAGMA user_version = 1;
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 fn migrations() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(SQLITE_V0_SCHEMA).unwrap();
@@ -71,6 +76,10 @@ fn migrations() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn message_text_index_migration() {
     for manual_index in [false, true] {
@@ -213,6 +222,10 @@ fn repeated_migration_after_another_initializer_is_a_noop() {
 }
 
 #[test]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 fn file_backed_history_survives_migration_and_reopen() -> anyhow::Result<()> {
     struct TestDirectory(std::path::PathBuf);
     impl Drop for TestDirectory {

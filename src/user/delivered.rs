@@ -19,19 +19,23 @@ impl DeliveredStore {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.m.is_empty()
     }
 
+    #[must_use]
     pub fn has_target(&self, target: &str) -> bool {
         self.m.has(target)
     }
 
     /// The number of targets with receipts.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.m.len()
     }
 
+    #[must_use]
     pub fn load_id(&self, target: &str, client: &str) -> String {
         self.m
             .get(target)
@@ -64,6 +68,7 @@ impl DeliveredStore {
         self.m.keys().map(str::to_owned).collect()
     }
 
+    #[must_use]
     pub fn clients(&self) -> Vec<String> {
         let mut clients: Vec<String> = Vec::new();
         for c in self.m.values() {
@@ -82,6 +87,10 @@ impl User {
         if !self.has_persistent_msg_store() {
             return;
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &self.networks[ni];
         let mut receipts: Vec<db::DeliveryReceipt> = net
             .delivered

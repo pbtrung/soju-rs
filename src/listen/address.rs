@@ -38,6 +38,10 @@ fn with_default_port(addr: &str, port: &str) -> String {
 }
 
 /// Parses a listen URI.
+///
+/// # Errors
+///
+/// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
 pub fn parse_listen_uri(listen: &str) -> Result<Listener> {
     let uri = if listen.contains(":/") {
         listen.to_owned()
@@ -50,6 +54,10 @@ pub fn parse_listen_uri(listen: &str) -> Result<Listener> {
         None => (String::new(), uri.trim_start_matches("//").to_owned()),
     };
     let (host, path) = match rest.find('/') {
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Some(i) => (rest[..i].to_owned(), rest[i..].to_owned()),
         None => (rest.clone(), String::new()),
     };

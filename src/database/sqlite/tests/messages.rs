@@ -1,11 +1,17 @@
 //! Messages regression scenarios.
 
 use super::*;
+use crate::database::{MessageOptions, Network, User};
 
 #[test]
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::too_many_lines,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn messages() {
     let db = db();
@@ -65,7 +71,10 @@ fn messages() {
         text: "!!!".into(),
         ..Default::default()
     };
-    assert!(db.list_messages(n.id, "#a", &opts).unwrap().is_empty());
+    assert_eq!(
+        db.list_messages(n.id, "#a", &opts).unwrap(),
+        [] as [crate::irc::Message; 0]
+    );
     let opts = MessageOptions {
         limit: 10,
         text: "hello world".into(),
@@ -126,6 +135,10 @@ fn messages() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 fn messages_same_time() {
     let db = db();
     let mut u = User::new("alice");
@@ -171,6 +184,10 @@ fn messages_same_time() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 fn message_last_id_insertion_order() {
     let db = db();
     let mut u = User::new("alice");
@@ -188,6 +205,10 @@ fn message_last_id_insertion_order() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn messages_invalid_utf8() {
     let db = db();

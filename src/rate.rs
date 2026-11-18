@@ -14,6 +14,10 @@ pub struct Backoffer {
 }
 
 impl Backoffer {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rate intervals or backoff bounds are invalid or unrepresentable.
     pub fn new(min: Duration, max: Duration, jitter: Duration) -> anyhow::Result<Backoffer> {
         if min.is_zero() || max < min {
             anyhow::bail!("backoff requires a positive minimum and maximum at least the minimum");
@@ -30,6 +34,10 @@ impl Backoffer {
         self.n = 0;
     }
 
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
     pub fn next_delay(&mut self) -> Duration {
         if self.n == 0 {
             self.n = 1;
@@ -74,6 +82,10 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rate intervals or backoff bounds are invalid or unrepresentable.
     pub fn new(interval: Duration, burst: u32) -> anyhow::Result<RateLimiter> {
         if interval.is_zero() || burst == 0 || Instant::now().checked_add(interval).is_none() {
             anyhow::bail!("rate interval and burst must be positive");

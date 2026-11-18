@@ -82,8 +82,8 @@ strip = true
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["test-util"] }
 
-# Core policy from STEP-008. Numeric, unwrap/expect and pedantic lints are
-# staged separately in STEP-009–011; do not disable this baseline to add them.
+# Practical compiler/Clippy baseline completed in STEP-011.
+# Preserve reasoned local contracts; do not weaken the baseline for new code.
 [lints.rust]
 unsafe_code = "forbid"
 unused_must_use = "deny"
@@ -94,6 +94,7 @@ unfulfilled_lint_expectations = "deny"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
@@ -108,3 +109,7 @@ cast_sign_loss = "deny"
 
 unwrap_used = "deny"
 expect_used = "deny"
+
+indexing_slicing = "deny"
+string_slice = "deny"
+map_err_ignore = "deny"

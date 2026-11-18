@@ -1,4 +1,4 @@
-//! BouncerServ network commands.
+//! `BouncerServ` network commands.
 
 use anyhow::{Result, anyhow, bail};
 
@@ -62,25 +62,25 @@ fn update_network_from_flags(p: &Parsed, network: &mut db::Network) -> Result<()
         {
             bail!("unknown scheme {scheme:?} (supported schemes: ircs, irc+insecure, irc+unix)");
         }
-        network.addr = addr.to_owned();
+        addr.clone_into(&mut network.addr);
     }
     if let Some(name) = p.get("name") {
         if name == "*" {
             bail!("the network name {name:?} is reserved");
         }
-        network.name = name.to_owned();
+        name.clone_into(&mut network.name);
     }
     if let Some(v) = p.get("nick") {
-        network.nick = v.to_owned();
+        v.clone_into(&mut network.nick);
     }
     if let Some(v) = p.get("username") {
-        network.username = v.to_owned();
+        v.clone_into(&mut network.username);
     }
     if let Some(v) = p.get("pass") {
-        network.pass = v.to_owned();
+        v.clone_into(&mut network.pass);
     }
     if let Some(v) = p.get("realname") {
-        network.realname = v.to_owned();
+        v.clone_into(&mut network.realname);
     }
     if let Some(v) = p.get("certfp") {
         let certfp = v.replace(':', "").to_lowercase();
@@ -101,21 +101,27 @@ fn update_network_from_flags(p: &Parsed, network: &mut db::Network) -> Result<()
         network.enabled = v;
     }
     if let Some(cmds) = p.get_all("connect-command") {
-        if cmds.len() == 1 && cmds[0].is_empty() {
-            network.connect_commands.clear();
-        } else {
-            if cmds.len() > 20 {
-                bail!("too many -connect-command flags supplied");
-            }
-            for command in cmds {
-                if let Err(e) = Message::parse(command) {
-                    bail!(
-                        "flag -connect-command must be a valid raw irc command string: \
-                            {command:?}: {e}"
-                    );
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            if cmds.len() == 1 && cmds[0].is_empty() {
+                network.connect_commands.clear();
+            } else {
+                if cmds.len() > 20 {
+                    bail!("too many -connect-command flags supplied");
                 }
+                for command in cmds {
+                    if let Err(e) = Message::parse(command) {
+                        bail!(
+                            "flag -connect-command must be a valid raw irc command string: \
+                            {command:?}: {e}"
+                        );
+                    }
+                }
+                network.connect_commands = cmds.to_vec();
             }
-            network.connect_commands = cmds.to_vec();
         }
     }
     Ok(())
@@ -141,7 +147,13 @@ pub(super) fn handle_network_create(
     let ni = u
         .create_network(record, !ignore_limit)
         .map_err(|e| anyhow!("could not create network: {e}"))?;
-    ctx.print(format!("created network {:?}", u.networks[ni].get_name()));
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        ctx.print(format!("created network {:?}", u.networks[ni].get_name()));
+    }
     Ok(())
 }
 
@@ -170,7 +182,7 @@ pub(super) fn handle_network_status(
         } else {
             statuses.push("disconnected".to_owned());
             if let Some(e) = &net.last_error {
-                details = e.clone();
+                details.clone_from(e);
             }
         }
         if Some(net.id()) == ctx.network_id {
@@ -203,6 +215,10 @@ pub(super) fn handle_network_info(
     if let Some(a) = rest.first() {
         bail!("unexpected argument: {a}");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni].record;
     ctx.print(format!("name: {}", net.get_name()));
     ctx.print(format!("addr: {}", net.addr));
@@ -239,7 +255,7 @@ pub(super) fn handle_network_info(
 }
 
 /// Shows a raw IRC command without its last parameters, which may contain
-/// secrets, e.g. "PRIVMSG NickServ :IDENTIFY <password>".
+/// secrets, e.g. "PRIVMSG `NickServ` :IDENTIFY <password>".
 pub(super) fn redact_command(raw: &str) -> String {
     let Ok(m) = Message::parse(raw) else {
         return "(invalid)".to_owned();
@@ -264,13 +280,23 @@ pub(super) fn handle_network_update(
     if ignore_limit && !ctx.admin {
         bail!("you must be an admin to use the flag -ignore-limit");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let mut record = u.networks[ni].record.clone();
     let was_enabled = record.enabled;
     update_network_from_flags(&p, &mut record)?;
     let ni = u
         .update_network(record, !ignore_limit && !was_enabled)
         .map_err(|e| anyhow!("could not update network: {e}"))?;
-    ctx.print(format!("updated network {:?}", u.networks[ni].get_name()));
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        ctx.print(format!("updated network {:?}", u.networks[ni].get_name()));
+    }
     Ok(())
 }
 
@@ -284,7 +310,15 @@ pub(super) fn handle_network_delete(
         bail!("expected exactly one argument");
     }
     let (ni, _) = get_network_from_arg(u, ctx, params)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let id = u.networks[ni].id();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let name = u.networks[ni].get_name().to_owned();
     u.delete_network(id)?;
     ctx.print(format!("deleted network {name:?}"));
@@ -304,8 +338,20 @@ pub(super) fn handle_network_quote(
         .last()
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
         .clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let (ni, _) = get_network_from_arg(u, ctx, &params[..params.len() - 1])?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let name = u.networks[ni].get_name().to_owned();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(uc) = u.networks[ni].upstream() else {
         bail!("network {name:?} is not currently connected");
     };

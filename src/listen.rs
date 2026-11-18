@@ -129,12 +129,17 @@ fn is_af_unsupported(e: &std::io::Error) -> bool {
 
 /// Formats an address as "host:port", with IPv4-mapped IPv6 addresses as
 /// IPv4.
+#[must_use]
 pub fn fmt_addr(a: SocketAddr) -> String {
     join_host_port(&a.ip().to_canonical().to_string(), &a.port().to_string())
 }
 
 /// Binds a listener and spawns its accept loop. Returns the bound local
 /// address for TCP listeners.
+///
+/// # Errors
+///
+/// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
 pub async fn spawn_listener(
     srv: Arc<Server>,
     l: Listener,
@@ -188,7 +193,7 @@ pub async fn spawn_listener(
         loop {
             let accepted = tokio::select! {
                 a = bound.accept(&logger) => a,
-                _ = stop.cancelled() => return,
+                () = stop.cancelled() => return,
             };
             let a = match accepted {
                 Ok(a) => {
@@ -270,10 +275,7 @@ async fn handle_accepted(
         proxyproto::read_header(io),
     )
     .await;
-    let (header, io) = match res {
-        Ok(Ok(v)) => v,
-        _ => return,
-    };
+    let Ok(Ok((header, io))) = res else { return };
     let trusted = accept_proxy(&srv, a.remote, a.unix);
     let mut remote = a.remote;
     if trusted && let Some(h) = &header {
@@ -314,9 +316,7 @@ async fn handle_accepted(
         }
         Kind::Ident => {
             let Some(identd) = srv.identd() else { return };
-            let host = remote
-                .map(|r| r.ip().to_canonical().to_string())
-                .unwrap_or_default();
+            let host = remote.map_or_default(|r| r.ip().to_canonical().to_string());
             identd.handle(io, &host).await;
         }
         Kind::Http | Kind::Prometheus => unreachable!(),

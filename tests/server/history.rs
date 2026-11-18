@@ -14,6 +14,10 @@ pub(super) async fn chat_history_db() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn chat_history_params() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -84,6 +88,10 @@ pub(super) async fn chat_history_params() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn upstream_clock_skew() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -109,7 +117,10 @@ pub(super) async fn upstream_clock_skew() {
     ] {
         dc.send(Message::new(
             "CHATHISTORY",
-            params.iter().map(|s| s.to_string()).collect(),
+            params
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
         ));
         let got: Vec<String> = dc
             .roundtrip()
@@ -142,6 +153,10 @@ pub(super) async fn upstream_clock_skew() {
 }
 
 /// A lower chathistory-limit is advertised and caps replies.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn chat_history_limit() {
     let env = setup(db_store()).await;
     let mut cfg = (*env.srv.config()).clone();
@@ -200,6 +215,11 @@ pub(super) async fn chat_history_limit() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::too_many_lines,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn chat_history(msg_store: MsgStore) {
     let env = setup(msg_store).await;
     let mut uc = accept_upstream(&env).await;
@@ -230,7 +250,12 @@ async fn chat_history(msg_store: MsgStore) {
 
     let n = i64::try_from(texts.len()).unwrap();
     let ts = |ms: i64| format!("timestamp={}", xirc::format_server_time(at(ms)));
-    let s = |r: std::ops::Range<usize>| texts[r].iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    let s = |r: std::ops::Range<usize>| {
+        texts[r]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     let cases: Vec<(&str, Vec<String>, usize, Vec<String>)> = vec![
         (
             "before_all",

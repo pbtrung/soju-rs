@@ -15,7 +15,7 @@ impl Database {
     ) -> rusqlite::Result<(User, Option<String>)> {
         // Columns: id, [username], password, admin, nick, realname, enabled,
         // downstream_interacted_at, max_networks
-        let off = if username.is_some() { 0 } else { 1 };
+        let off = usize::from(username.is_none());
         let username = match username {
             Some(u) => u,
             None => r.get(1)?,
@@ -34,6 +34,10 @@ impl Database {
         Ok((user, r.get(6 + off)?))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_users(&self) -> Result<Vec<User>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -52,6 +56,10 @@ impl Database {
     }
 
     /// Returns None if the user doesn't exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_user(&self, username: &str) -> Result<Option<User>> {
         let conn = self.conn();
         let res = conn
@@ -73,6 +81,10 @@ impl Database {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_username_by_id(&self, id: i64) -> Result<Option<String>> {
         let conn = self.conn();
         Ok(conn
@@ -81,6 +93,10 @@ impl Database {
     }
 
     /// Lists the enabled users who haven't interacted since limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_inactive_usernames(&self, limit: Timestamp) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -91,8 +107,12 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Updates an existing user like store_user, except for its password:
-    /// the record may hold an outdated hash, see upgrade_user_password.
+    /// Updates an existing user like `store_user`, except for its password:
+    /// the record may hold an outdated hash, see `upgrade_user_password`.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_user_keep_password(&self, user: &User) -> Result<()> {
         self.conn().execute(
             "UPDATE User
@@ -117,6 +137,10 @@ impl Database {
 
     /// Replaces a user's password hash with a stronger hash of the same
     /// password, unless the password was changed meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn upgrade_user_password(&self, id: i64, old: &str, new: &str) -> Result<()> {
         self.conn().execute(
             "UPDATE User SET password = :new WHERE id = :id AND password = :old AND (password IS \
@@ -126,6 +150,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn set_user_downstream_interacted_at(&self, id: i64, t: Timestamp) -> Result<()> {
         self.conn().execute(
             "UPDATE User SET downstream_interacted_at = ?1 WHERE id = ?2 AND \
@@ -135,6 +163,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_user(&self, user: &mut User) -> Result<()> {
         let interacted = time_to_sql(user.downstream_interacted_at);
         let fields = named_params! {
@@ -176,6 +208,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_user(&self, id: i64) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -243,6 +279,10 @@ impl Database {
     }
 
     /// Returns the owner user ID and the certificate, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_device_certificate(
         &self,
         fingerprint: &[u8],
@@ -280,6 +320,10 @@ impl Database {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_device_certificates(&self, user_id: i64) -> Result<Vec<DeviceCertificate>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -312,6 +356,10 @@ impl Database {
 
     /// Stores a device certificate. Fails with [`DuplicateDeviceCertificate`]
     /// if the fingerprint is already registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_device_certificate(
         &self,
         user_id: i64,
@@ -363,6 +411,10 @@ impl Database {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_device_certificate(&self, user_id: i64, fingerprint: &[u8]) -> Result<()> {
         self.conn().execute(
             "DELETE FROM DeviceCertificate WHERE user = ? AND fingerprint = ?",

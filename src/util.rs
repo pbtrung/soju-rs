@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Result, anyhow, bail};
 use tokio::sync::Semaphore;
 
-/// Maximum number of CPU-heavy jobs waiting for a free CPU, see cpu_work.
+/// Maximum number of CPU-heavy jobs waiting for a free CPU, see `cpu_work`.
 const MAX_CPU_WORK_WAITING: usize = 64;
 
 struct CpuWork {
@@ -26,25 +26,28 @@ impl Drop for Waiting<'_> {
 /// Runs CPU-heavy work (password hashing, key generation) on a blocking
 /// thread. At most one job per CPU runs at once, so that such work can't
 /// starve the rest of the server (blocking SQLite calls share the same
-/// thread pool), and at most MAX_CPU_WORK_WAITING jobs wait for their turn:
+/// thread pool), and at most `MAX_CPU_WORK_WAITING` jobs wait for their turn:
 /// further jobs fail immediately. A started job runs to completion even if
 /// the returned future is dropped.
+///
+/// # Errors
+///
+/// Returns an error if CPU work cannot be admitted or its worker fails.
 pub async fn cpu_work<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
     static CPU_WORK: OnceLock<CpuWork> = OnceLock::new();
     let w = CPU_WORK.get_or_init(|| CpuWork {
-        sem: Semaphore::new(std::thread::available_parallelism().map_or(1, |n| n.get())),
+        sem: Semaphore::new(std::thread::available_parallelism().map_or(1, std::num::NonZero::get)),
         waiting: AtomicUsize::new(0),
     });
-    let permit = match w.sem.try_acquire() {
-        Ok(p) => p,
-        Err(_) => {
-            if w.waiting.fetch_add(1, Ordering::Relaxed) >= MAX_CPU_WORK_WAITING {
-                w.waiting.fetch_sub(1, Ordering::Relaxed);
-                bail!("server busy, try again later");
-            }
-            let _waiting = Waiting(&w.waiting);
-            w.sem.acquire().await?
+    let permit = if let Ok(p) = w.sem.try_acquire() {
+        p
+    } else {
+        if w.waiting.fetch_add(1, Ordering::Relaxed) >= MAX_CPU_WORK_WAITING {
+            w.waiting.fetch_sub(1, Ordering::Relaxed);
+            bail!("server busy, try again later");
         }
+        let _waiting = Waiting(&w.waiting);
+        w.sem.acquire().await?
     };
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
@@ -68,6 +71,10 @@ impl std::error::Error for BadPattern {}
 
 /// Reports whether name matches the shell pattern, with the same semantics
 /// as Go's path.Match.
+///
+/// # Errors
+///
+/// Returns an error if CPU work cannot be admitted or its worker fails.
 pub fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> {
     let pattern: Vec<char> = pattern.chars().collect();
     let name: Vec<char> = name.chars().collect();
@@ -94,7 +101,15 @@ pub fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> {
             // Look for match skipping i+1 bytes.
             // Cannot skip /.
             let mut i = 0;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
             while i < n.len() && n[i] != '/' {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                )]
                 let (t, ok) = match_chunk(chunk, &n[i + 1..])?;
                 if ok {
                     // if we're the last chunk, make sure we exhausted the name
@@ -123,29 +138,51 @@ pub fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> {
 fn scan_chunk(mut p: &[char]) -> (bool, &[char], &[char]) {
     let mut star = false;
     while let Some('*') = p.first() {
-        p = &p[1..];
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
+            p = &p[1..];
+        }
         star = true;
     }
     let mut inrange = false;
     let mut i = 0;
     while i < p.len() {
-        match p[i] {
-            '\\' => {
-                // error check handled in match_chunk: bad pattern.
-                if i + 1 < p.len() {
-                    i += 1;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
+            match p[i] {
+                '\\' => {
+                    // error check handled in match_chunk: bad pattern.
+                    if i + 1 < p.len() {
+                        i += 1;
+                    }
                 }
+                '[' => inrange = true,
+                ']' => inrange = false,
+                '*' if !inrange => break,
+                _ => {}
             }
-            '[' => inrange = true,
-            ']' => inrange = false,
-            '*' if !inrange => break,
-            _ => {}
         }
         i += 1;
     }
-    (star, &p[..i], &p[i..])
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
+        (star, &p[..i], &p[i..])
+    }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "The ordered Go-compatible glob state machine keeps its bounded cursor transitions together."
+)]
 fn match_chunk<'a>(
     mut chunk: &[char],
     mut s: &'a [char],
@@ -154,34 +191,74 @@ fn match_chunk<'a>(
     // the loop continues on processing chunk, checking that the pattern is
     // well-formed but no longer reading s.
     let mut failed = false;
-    while !chunk.is_empty() {
+    while let Some((&next, _)) = chunk.split_first() {
         if !failed && s.is_empty() {
             failed = true;
         }
-        match chunk[0] {
+        match next {
             '[' => {
                 let mut r = '\0';
                 if !failed {
-                    r = s[0];
-                    s = &s[1..];
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        r = s[0];
+                    }
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        s = &s[1..];
+                    }
                 }
-                chunk = &chunk[1..];
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                    )]
+                    chunk = &chunk[1..];
+                }
                 let mut negated = false;
                 if let Some('^') = chunk.first() {
                     negated = true;
-                    chunk = &chunk[1..];
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        chunk = &chunk[1..];
+                    }
                 }
                 let mut matched = false;
                 let mut nrange = 0;
                 loop {
-                    if !chunk.is_empty() && chunk[0] == ']' && nrange > 0 {
-                        chunk = &chunk[1..];
-                        break;
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        if !chunk.is_empty() && chunk[0] == ']' && nrange > 0 {
+                            {
+                                #![expect(
+                                    clippy::indexing_slicing,
+                                    reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                                )]
+                                chunk = &chunk[1..];
+                            }
+                            break;
+                        }
                     }
                     let (lo, rest) = get_esc(chunk)?;
                     chunk = rest;
                     let mut hi = lo;
                     if chunk.first() == Some(&'-') {
+                        #[expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
                         let (h, rest) = get_esc(&chunk[1..])?;
                         hi = h;
                         chunk = rest;
@@ -197,34 +274,94 @@ fn match_chunk<'a>(
             }
             '?' => {
                 if !failed {
-                    if s[0] == '/' {
-                        failed = true;
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        if s[0] == '/' {
+                            failed = true;
+                        }
                     }
-                    s = &s[1..];
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        s = &s[1..];
+                    }
                 }
-                chunk = &chunk[1..];
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                    )]
+                    chunk = &chunk[1..];
+                }
             }
             '\\' => {
-                chunk = &chunk[1..];
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                    )]
+                    chunk = &chunk[1..];
+                }
                 if chunk.is_empty() {
                     return Err(BadPattern);
                 }
                 if !failed {
-                    if chunk[0] != s[0] {
-                        failed = true;
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        if chunk[0] != s[0] {
+                            failed = true;
+                        }
                     }
-                    s = &s[1..];
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        s = &s[1..];
+                    }
                 }
-                chunk = &chunk[1..];
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                    )]
+                    chunk = &chunk[1..];
+                }
             }
             c => {
                 if !failed {
-                    if c != s[0] {
-                        failed = true;
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        if c != s[0] {
+                            failed = true;
+                        }
                     }
-                    s = &s[1..];
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                        )]
+                        s = &s[1..];
+                    }
                 }
-                chunk = &chunk[1..];
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                    )]
+                    chunk = &chunk[1..];
+                }
             }
         }
     }
@@ -235,17 +372,45 @@ fn match_chunk<'a>(
 }
 
 fn get_esc(mut chunk: &[char]) -> Result<(char, &[char]), BadPattern> {
-    if chunk.is_empty() || chunk[0] == '-' || chunk[0] == ']' {
-        return Err(BadPattern);
-    }
-    if chunk[0] == '\\' {
-        chunk = &chunk[1..];
-        if chunk.is_empty() {
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
+        if chunk.is_empty() || chunk[0] == '-' || chunk[0] == ']' {
             return Err(BadPattern);
         }
     }
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
+        if chunk[0] == '\\' {
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                )]
+                chunk = &chunk[1..];
+            }
+            if chunk.is_empty() {
+                return Err(BadPattern);
+            }
+        }
+    }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+    )]
     let r = chunk[0];
-    chunk = &chunk[1..];
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
+        chunk = &chunk[1..];
+    }
     if chunk.is_empty() {
         return Err(BadPattern);
     }

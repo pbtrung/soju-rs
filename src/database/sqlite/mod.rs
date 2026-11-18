@@ -1,4 +1,4 @@
-//! The SQLite database backend (port of upstream's db_sqlite.go).
+//! The SQLite database backend (port of upstream's `db_sqlite.go`).
 
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow, bail};
 use jiff::Timestamp;
 use rusqlite::{Connection, Row, TransactionBehavior};
 
-use super::*;
+use super::DatabaseStats;
 use crate::xirc;
 
 use super::sqlite_migrations::MIGRATIONS;
@@ -71,15 +71,27 @@ pub struct Database {
 }
 
 impl Database {
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn open_config(cfg: &crate::config::Server) -> Result<Self> {
         Self::open(&cfg.db.source)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn open(source: &str) -> Result<Database> {
         let conn = Connection::open(source)?;
         Self::setup(conn)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn open_in_memory() -> Result<Database> {
         Self::setup(Connection::open_in_memory()?)
     }
@@ -101,7 +113,9 @@ impl Database {
     // rusqlite transactions roll back on drop, including unwinding. Recovery
     // keeps SQLite authoritative rather than recovering partially changed actor state.
     pub(super) fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn upgrade(&self) -> Result<()> {
@@ -163,6 +177,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn stats(&self) -> Result<DatabaseStats> {
         let conn = self.conn();
         Ok(conn.query_row(
@@ -182,6 +200,10 @@ impl Database {
     }
 
     /// Deletes expired messages in chunks, yielding database access between chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn expire_messages(
         &self,
         before: Timestamp,
@@ -204,12 +226,16 @@ impl Database {
 
     /// The fraction of the database file made of free pages: space freed by
     /// deleted rows, reused for new rows, or reclaimed by vacuum.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn free_page_ratio(&self) -> Result<f64> {
         let conn = self.conn();
         let pages: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
         let free: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
         Ok(if pages > 0 {
-            free as f64 / pages as f64
+            f64::from(u32::try_from(free)?) / f64::from(u32::try_from(pages)?)
         } else {
             0.0
         })
@@ -217,6 +243,10 @@ impl Database {
 
     /// Merges the search index after deleting messages. Without this, the
     /// index keeps growing with segments full of deleted entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn optimize(&self) -> Result<()> {
         let conn = self.conn();
         conn.execute_batch("INSERT INTO MessageFTS(MessageFTS) VALUES ('optimize');")?;
@@ -228,12 +258,20 @@ impl Database {
     /// Frees the page cache. After deleting expired messages, optimizing or
     /// vacuuming, it holds pages from scanning or rewriting the whole
     /// database, which day-to-day queries won't reuse.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn shrink_memory(&self) -> Result<()> {
         self.conn().execute_batch("PRAGMA shrink_memory;")?;
         Ok(())
     }
 
     /// Reclaims the free pages, by rewriting the whole database file.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn vacuum(&self) -> Result<()> {
         let conn = self.conn();
         conn.execute_batch("VACUUM;")?;

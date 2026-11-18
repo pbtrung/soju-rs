@@ -1,6 +1,9 @@
 //! SASL authentication of downstream connections.
 
-use super::*;
+use super::{
+    BASE64, DownstreamConn, ERR_SASLABORTED, ERR_SASLFAIL, ERR_SASLTOOLONG, Engine, Message,
+    Result, bail, irc_error, msg, xirc,
+};
 
 #[derive(Clone, Debug)]
 pub struct SaslPlain {
@@ -35,6 +38,10 @@ pub struct DownstreamSasl {
 }
 
 impl DownstreamSasl {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+    )]
     /// Feeds a client response to the SASL server. Returns the challenge to
     /// send back, or None when the exchange is complete.
     fn next(&mut self, response: Option<&[u8]>) -> Result<Option<Vec<u8>>> {
@@ -60,11 +67,17 @@ impl DownstreamSasl {
                     bail!("sasl: invalid response");
                 }
                 let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-                self.plain = Some(SaslPlain {
-                    identity: s(parts[0]),
-                    username: s(parts[1]),
-                    password: s(parts[2]),
-                });
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    self.plain = Some(SaslPlain {
+                        identity: s(parts[0]),
+                        username: s(parts[1]),
+                        password: s(parts[2]),
+                    });
+                }
                 Ok(None)
             }
             SaslServerKind::Anonymous => Ok(None),
@@ -117,7 +130,13 @@ impl DownstreamSasl {
                             if !v.to_lowercase().starts_with(PREFIX) {
                                 return fail(self, "Unsupported token type");
                             }
-                            opts.token = v[PREFIX.len()..].to_owned();
+                            {
+                                #![expect(
+                                    clippy::string_slice,
+                                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                                )]
+                                v[PREFIX.len()..].clone_into(&mut opts.token);
+                            }
                         }
                         _ => {
                             return fail(
@@ -137,6 +156,10 @@ impl DownstreamSasl {
 impl DownstreamConn {
     /// Handles an AUTHENTICATE message. Returns the completed SASL state
     /// once the client has sent its credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
     pub fn handle_authenticate(&mut self, msg: &Message) -> Result<Option<DownstreamSasl>> {
         let res = self.handle_authenticate_inner(msg);
         if res.is_err() {
@@ -212,6 +235,10 @@ impl DownstreamConn {
                 if chunk.len() == xirc::MAX_SASL_LENGTH {
                     return Ok(None); // Multi-line response, wait for the next command
                 }
+                #[expect(
+                    clippy::map_err_ignore,
+                    reason = "The fixed IRC response deliberately preserves protocol text and omits decoder/capacity details."
+                )]
                 let decoded = BASE64.decode(&sasl.pending_resp).map_err(|_| {
                     irc_error(msg!(
                         ERR_SASLFAIL,
@@ -244,12 +271,12 @@ impl DownstreamConn {
     }
 
     pub(super) fn set_auth_username(&mut self, username: &str, client: &str, network: &str) {
-        self.client_name = client.to_owned();
+        client.clone_into(&mut self.client_name);
         let Some(r) = self.registration.as_mut() else {
             return;
         };
-        r.auth_username = username.to_owned();
-        r.network_name = network.to_owned();
+        username.clone_into(&mut r.auth_username);
+        network.clone_into(&mut r.network_name);
     }
 }
 

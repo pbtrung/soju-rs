@@ -1,5 +1,5 @@
 //! PROXY protocol (v1 and v2) parsing, see
-//! https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt
+//! <https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt>
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
@@ -21,7 +21,7 @@ pub struct Header {
     /// Source address, None for LOCAL/UNKNOWN connections
     pub source: Option<SocketAddr>,
     pub destination: Option<SocketAddr>,
-    /// DER client certificate from a PP2_TYPE_SSL TLV
+    /// DER client certificate from a `PP2_TYPE_SSL` TLV
     pub client_cert: Option<Vec<u8>>,
 }
 
@@ -86,6 +86,10 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Prefixed<S> {
 /// never blocks waiting for data a regular client wouldn't send. The
 /// returned stream replays any consumed bytes which weren't part of a
 /// header.
+///
+/// # Errors
+///
+/// Returns an error for malformed, oversized, or truncated PROXY data, or an I/O failure.
 #[deny(clippy::indexing_slicing, clippy::string_slice)]
 pub async fn read_header<S: AsyncRead + Unpin>(
     mut stream: S,
@@ -164,6 +168,10 @@ async fn read_v1<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Address-family and TLV validation form one bounded PROXY v2 parse with local bounds contracts."
+)]
 #[deny(clippy::indexing_slicing, clippy::string_slice)]
 async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     let mut hdr = [0u8; 4];
@@ -194,14 +202,27 @@ async fn read_v2<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Header> {
     }
     let (addr_len, addrs) = match fam >> 4 {
         1 if data.len() >= 12 => {
-            let [a, b, c, d, e, f, g, h, p, q, r, s]: [u8; 12] = data
+            let [
+                src_0,
+                src_1,
+                src_2,
+                src_3,
+                dst_0,
+                dst_1,
+                dst_2,
+                dst_3,
+                src_port_high,
+                src_port_low,
+                dst_port_high,
+                dst_port_low,
+            ]: [u8; 12] = data
                 .get(..12)
                 .ok_or_else(|| anyhow!("proxyproto: short IPv4 block"))?
                 .try_into()?;
-            let src = Ipv4Addr::new(a, b, c, d);
-            let dst = Ipv4Addr::new(e, f, g, h);
-            let sp = u16::from_be_bytes([p, q]);
-            let dp = u16::from_be_bytes([r, s]);
+            let src = Ipv4Addr::new(src_0, src_1, src_2, src_3);
+            let dst = Ipv4Addr::new(dst_0, dst_1, dst_2, dst_3);
+            let sp = u16::from_be_bytes([src_port_high, src_port_low]);
+            let dp = u16::from_be_bytes([dst_port_high, dst_port_low]);
             (
                 12,
                 Some((

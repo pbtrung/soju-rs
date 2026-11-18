@@ -254,11 +254,15 @@ async fn queue_budget() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn input_in_flight() {
     let (a, b) = tokio::io::duplex(1 << 20);
     let (ca, _ra) = Conn::new_stream(Box::new(a), Logger::new(false), None);
     let (_cb, mut rb) = Conn::new_stream(Box::new(b), Logger::new(false), None);
-    for i in 0..MAX_INPUT_IN_FLIGHT + 1 {
+    for i in 0..=MAX_INPUT_IN_FLIGHT {
         ca.send_message(crate::msg!("PRIVMSG", "#a", i.to_string()));
     }
     ca.send_message(crate::msg!("PING", "alive"));
@@ -322,6 +326,11 @@ async fn cancelled_read_preserves_partial_line_and_length_limit() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn keepalive_flood_has_a_separate_bounded_backlog() {
     let (a, b) = tokio::io::duplex(1 << 16);
     let (c, _r) = Conn::new_stream(Box::new(a), Logger::new(false), None);
@@ -382,6 +391,10 @@ async fn full_queue_closes_physical_connection_from_view() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 async fn view() {
     let (a, b) = tokio::io::duplex(4096);

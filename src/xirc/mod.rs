@@ -19,14 +19,15 @@ pub const MAX_MESSAGE_LENGTH: usize = 512;
 pub const MAX_MESSAGE_PARAMS: usize = 15;
 pub const MAX_SASL_LENGTH: usize = 400;
 
-/// Formats a time with the IRCv3 server-time layout.
+/// Formats a time with the `IRCv3` server-time layout.
+#[must_use]
 pub fn format_server_time(t: Timestamp) -> String {
     jiff::fmt::temporal::DateTimePrinter::new()
         .precision(Some(3))
         .timestamp_to_string(&t)
 }
 
-/// Parses a time with the IRCv3 server-time layout
+/// Parses a time with the `IRCv3` server-time layout
 /// ("2006-01-02T15:04:05.000Z" in Go notation).
 ///
 /// The fractional seconds may have one through nine digits or be omitted.
@@ -34,6 +35,7 @@ pub fn format_server_time(t: Timestamp) -> String {
 /// digits.
 /// Leap seconds are constrained to second 59, following Jiff's Unix timescale.
 /// Dates outside Jiff's representable timestamp range are rejected.
+#[must_use]
 pub fn parse_server_time(s: &str) -> Option<Timestamp> {
     let s = s.strip_suffix('Z')?;
     let (base, frac) = match s.split_once('.') {
@@ -54,7 +56,7 @@ pub fn parse_server_time(s: &str) -> Option<Timestamp> {
     let mut parsed = jiff::fmt::strtime::parse("%Y-%m-%dT%H:%M:%S", base).ok()?;
     parsed.set_offset(Some(jiff::tz::Offset::UTC));
     let t = parsed.to_timestamp().ok()?;
-    t.checked_add(jiff::SignedDuration::from_nanos(nanos as i64))
+    t.checked_add(jiff::SignedDuration::from_nanos(i64::from(nanos)))
         .ok()
 }
 
@@ -66,14 +68,17 @@ pub struct CapRegistry {
 }
 
 impl CapRegistry {
+    #[must_use]
     pub fn new() -> CapRegistry {
         CapRegistry::default()
     }
 
+    #[must_use]
     pub fn is_available(&self, name: &str) -> bool {
         self.available.contains_key(name)
     }
 
+    #[must_use]
     pub fn is_enabled(&self, name: &str) -> bool {
         self.enabled.contains(name)
     }
@@ -100,6 +105,10 @@ pub enum ChannelStatus {
 }
 
 impl ChannelStatus {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input violates the supported IRC syntax or message constraints.
     pub fn parse(s: &str) -> Result<ChannelStatus, String> {
         if s.len() > 1 {
             return Err(format!(
@@ -114,6 +123,7 @@ impl ChannelStatus {
         }
     }
 
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ChannelStatus::Public => "=",
@@ -142,13 +152,19 @@ impl MembershipSet {
             if i >= l.len() {
                 break;
             }
-            if l[i] == avail {
-                if avail == new {
-                    // we already have this membership
-                    return;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                if l[i] == avail {
+                    if avail == new {
+                        // we already have this membership
+                        return;
+                    }
+                    i += 1;
+                    continue;
                 }
-                i += 1;
-                continue;
             }
             if avail == new {
                 break;
@@ -164,10 +180,12 @@ impl MembershipSet {
     }
 }
 
+#[must_use]
 pub fn decode_isupport_value(v: &str) -> String {
     replace_all(v, &[("\\x20", " "), ("\\x5C", "\\")])
 }
 
+#[must_use]
 pub fn encode_isupport_value(v: &str) -> String {
     replace_all(v, &[(" ", "\\x20"), ("\\", "\\x5C")])
 }
@@ -175,15 +193,22 @@ pub fn encode_isupport_value(v: &str) -> String {
 /// Replaces substrings left-to-right, like Go's strings.Replacer: at each
 /// position, the first matching pattern wins and the output is not
 /// rescanned.
+#[must_use]
 pub fn replace_all(s: &str, pairs: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     'outer: while i < s.len() {
         for (old, new) in pairs {
-            if !old.is_empty() && s[i..].starts_with(old) {
-                out.push_str(new);
-                i += old.len();
-                continue 'outer;
+            {
+                #![expect(
+                    clippy::string_slice,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                if !old.is_empty() && s[i..].starts_with(old) {
+                    out.push_str(new);
+                    i += old.len();
+                    continue 'outer;
+                }
             }
         }
         let Some(c) = s.get(i..).and_then(|s| s.chars().next()) else {
@@ -232,6 +257,10 @@ mod tests {
         clippy::expect_used,
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::string_slice,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn server_time_compatibility() {
         for (input, output) in [

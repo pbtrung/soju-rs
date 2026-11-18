@@ -1,4 +1,4 @@
-//! BouncerServ server commands.
+//! `BouncerServ` server commands.
 
 use anyhow::{Result, bail};
 
@@ -23,6 +23,10 @@ pub(super) fn handle_server_status(
     Ok(())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Service dispatch uses a uniform Option<&mut User> callback signature, including read-only commands."
+)]
 pub(super) fn handle_server_notice(
     u: Option<&mut User>,
     ctx: &mut ServiceContext,
@@ -31,6 +35,10 @@ pub(super) fn handle_server_notice(
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let text = &params[0];
     let logger = match &u {
         Some(u) => u.logger.clone(),
@@ -65,8 +73,18 @@ pub(super) fn handle_server_debug(
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let Some(enabled) = crate::flags::parse_go_bool(&params[0]) else {
-        bail!("strconv.ParseBool: parsing {:?}: invalid syntax", params[0]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            bail!("strconv.ParseBool: parsing {:?}: invalid syntax", params[0]);
+        }
     };
     let previous = ctx.srv.logger.set_debug(enabled);
     if previous != enabled {

@@ -1,11 +1,16 @@
 //! Accounts regression scenarios.
 
 use super::*;
+use crate::database::{Channel, MessageFilter, Network, User};
 
 #[test]
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn users() {
     let db = db();
@@ -35,24 +40,28 @@ fn users() {
     let mut disabled = got.clone();
     disabled.enabled = false;
     db.store_user(&mut disabled).unwrap();
-    assert!(
+    assert_eq!(
         db.list_inactive_usernames(Timestamp::now() + jiff::SignedDuration::from_hours(1))
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [std::string::String; 0]
     );
-    assert!(
+    assert_eq!(
         db.list_inactive_usernames(Timestamp::now() - jiff::SignedDuration::from_hours(1))
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [std::string::String; 0]
     );
     db.delete_user(u.id).unwrap();
-    assert!(db.list_users().unwrap().is_empty());
+    assert_eq!(db.list_users().unwrap(), [] as [crate::database::User; 0]);
 }
 
 #[test]
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn networks_channels() {
     let db = db();
@@ -85,7 +94,13 @@ fn networks_channels() {
     assert_eq!(chs[0].detach_after, Duration::from_secs(2));
     assert_eq!(chs[0].relay_detached, MessageFilter::Message);
     db.delete_channel(ch.id).unwrap();
-    assert!(db.list_channels(n.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_channels(n.id).unwrap(),
+        [] as [crate::database::Channel; 0]
+    );
     db.delete_network(n.id).unwrap();
-    assert!(db.list_networks(u.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_networks(u.id).unwrap(),
+        [] as [crate::database::Network; 0]
+    );
 }

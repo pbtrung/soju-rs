@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn broadcast() {
     let env = setup(MsgStore {
         driver: MsgStoreDriver::Db,
@@ -44,6 +48,10 @@ pub(super) async fn statusmsg_keeps_sigil() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn upstream_malformed_messages() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -71,6 +79,10 @@ pub(super) async fn upstream_malformed_messages() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn cap_req_removal() {
     let env = setup(db_store()).await;
     let mut dc = connect_downstream(&env.srv);
@@ -94,11 +106,15 @@ pub(super) async fn cap_req_removal() {
     let m = dc.expect("CAP").await;
     assert_eq!(m.params[1], "LIST");
     let mut caps: Vec<&str> = m.params[2].split(' ').collect();
-    caps.sort();
+    caps.sort_unstable();
     assert_eq!(caps, ["cap-notify", "server-time"]);
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn labeled_response_ack() {
     let env = setup(db_store()).await;
     // labeled-response is passed through from the upstream: use a bouncer
@@ -161,7 +177,7 @@ pub(super) async fn unread_replies_before_registration() {
         rd.read_to_end(&mut sink).await.unwrap();
         sink.len()
     };
-    let (_, received) = tokio::time::timeout(TIMEOUT, async { tokio::join!(write, wait_closed) })
+    let ((), received) = tokio::time::timeout(TIMEOUT, async { tokio::join!(write, wait_closed) })
         .await
         .expect("the connection wasn't closed");
     // Far less than the replies to all requests
@@ -170,6 +186,10 @@ pub(super) async fn unread_replies_before_registration() {
 }
 
 /// MONITOR ignores empty targets and targets containing spaces.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn monitor_invalid_targets() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -196,6 +216,10 @@ pub(super) async fn monitor_invalid_targets() {
 
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn setname_survives_network_update() {

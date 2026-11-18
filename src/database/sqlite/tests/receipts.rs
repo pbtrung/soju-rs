@@ -1,6 +1,10 @@
 //! Receipts regression scenarios.
 
 use super::*;
+use crate::database::{
+    Channel, DeliveryReceipt, DeviceCertificate, DuplicateDeviceCertificate, Network, ReadReceipt,
+    User, WebPushConfig, WebPushSubscription,
+};
 
 #[test]
 #[expect(
@@ -101,7 +105,10 @@ fn receipts_targets_webpush_certs() {
     assert_eq!(db.list_message_targets(n.id).unwrap(), vec![mt.clone()]);
     mt.pinned = false;
     db.store_message_target(n.id, &mut mt).unwrap();
-    assert!(db.list_message_targets(n.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_message_targets(n.id).unwrap(),
+        [] as [crate::database::MessageTarget; 0]
+    );
 
     let mut cfg = WebPushConfig {
         vapid_public: "pub".into(),
@@ -117,14 +124,16 @@ fn receipts_targets_webpush_certs() {
     db.store_web_push_subscription(u.id, 0, &mut sub).unwrap();
     assert_eq!(db.list_web_push_subscriptions(u.id, 0).unwrap().len(), 1);
     assert_eq!(db.list_web_push_networks(u.id).unwrap(), [0]);
-    assert!(
-        db.list_web_push_subscriptions(u.id, n.id)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        db.list_web_push_subscriptions(u.id, n.id).unwrap(),
+        [] as [crate::database::WebPushSubscription; 0]
     );
     db.delete_web_push_subscription(sub.id).unwrap();
-    assert!(db.list_web_push_subscriptions(u.id, 0).unwrap().is_empty());
-    assert!(db.list_web_push_networks(u.id).unwrap().is_empty());
+    assert_eq!(
+        db.list_web_push_subscriptions(u.id, 0).unwrap(),
+        [] as [crate::database::WebPushSubscription; 0]
+    );
+    assert_eq!(db.list_web_push_networks(u.id).unwrap(), [] as [i64; 0]);
 
     let mut cert = DeviceCertificate {
         label: "laptop".into(),
@@ -161,6 +170,10 @@ fn receipts_targets_webpush_certs() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn unchanged_records_and_receipts_do_not_write() {
     let db = db();

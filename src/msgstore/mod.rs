@@ -49,16 +49,19 @@ pub enum Store {
 }
 
 impl Store {
+    #[must_use]
     pub fn is_memory(&self) -> bool {
         matches!(self, Store::Memory(_))
     }
 
     /// Whether the store supports chat history operations.
+    #[must_use]
     pub fn supports_chathistory(&self) -> bool {
         !self.is_memory()
     }
 
     /// Whether the store supports server-side search.
+    #[must_use]
     pub fn supports_search(&self) -> bool {
         !self.is_memory()
     }
@@ -71,6 +74,10 @@ impl Store {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; the result type matches the store lifecycle interface.
     pub fn close(&mut self) -> Result<()> {
         match self {
             Store::Memory(s) => {
@@ -84,6 +91,10 @@ impl Store {
     /// Queries the last message ID for the given network and entity. The
     /// message ID returned may not refer to a valid message, but can be used
     /// in history queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn last_msg_id(&mut self, network: &Network, entity: &str) -> Result<String> {
         match self {
             Store::Memory(s) => Ok(s.last_msg_id(network, entity)),
@@ -93,6 +104,10 @@ impl Store {
 
     /// Queries the latest non-event messages after the given message ID, up
     /// to a count of limit messages, sorted from oldest to newest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn load_latest_id(
         &mut self,
         id: &str,
@@ -106,6 +121,10 @@ impl Store {
 
     /// Appends a message. Returns the internal message ID, or an empty
     /// string if the message isn't stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn append(&mut self, network: &Network, entity: &str, msg: &Message) -> Result<String> {
         match self {
             Store::Memory(s) => s.append(network, entity, msg),
@@ -117,6 +136,10 @@ impl Store {
     /// returns up to limit targets, starting from start and ending on end,
     /// both excluded. end may be before or after start. If events is false,
     /// only PRIVMSG/NOTICE messages are considered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn list_targets(
         &mut self,
         network: &Network,
@@ -134,6 +157,10 @@ impl Store {
     /// Loads up to limit messages before start down to end. The returned
     /// messages are between and excluding the provided bounds. Missing
     /// bounds mean no bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn load_before_time(
         &mut self,
         start: Option<Timestamp>,
@@ -149,6 +176,10 @@ impl Store {
     /// Loads up to limit messages after start up to end. The returned
     /// messages are between and excluding the provided bounds. Missing
     /// bounds mean no bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn load_after_time(
         &mut self,
         start: Option<Timestamp>,
@@ -161,6 +192,10 @@ impl Store {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
     pub fn search(
         &mut self,
         network: &Network,
@@ -199,7 +234,7 @@ fn format_msg_id(
     URL_SAFE_NO_PAD.encode(&w.0)
 }
 
-/// Parses an internal message ID header. If typ isn't MSG_ID_NONE, checks
+/// Parses an internal message ID header. If typ isn't `MSG_ID_NONE`, checks
 /// the type and returns a reader positioned at the body.
 fn parse_msg_id_with(s: &str, typ: u64) -> Result<(i64, String, Vec<u8>)> {
     let b = URL_SAFE_NO_PAD
@@ -221,13 +256,18 @@ fn parse_msg_id_with(s: &str, typ: u64) -> Result<(i64, String, Vec<u8>)> {
 }
 
 /// Parses the network ID and target of an internal message ID.
+///
+/// # Errors
+///
+/// Returns an error for invalid cursor/query data, unsupported operations, or a storage failure.
 pub fn parse_msg_id(s: &str) -> Result<(i64, String)> {
     let (net_id, target, _) = parse_msg_id_with(s, MSG_ID_NONE)?;
     Ok((net_id, target))
 }
 
 fn body_err(e: anyhow::Error) -> anyhow::Error {
-    anyhow!("invalid internal message ID: {e}")
+    let message = format!("invalid internal message ID: {e}");
+    e.context(message)
 }
 
 #[cfg(test)]
@@ -242,7 +282,7 @@ mod tests {
     )]
     fn go_compat() {
         assert_eq!(
-            memory::format_memory_msg_id(42, "#soju", 1234567),
+            memory::format_memory_msg_id(42, "#soju", 1_234_567),
             "AFQFI3NvanUBh61L"
         );
         assert_eq!(
@@ -257,7 +297,7 @@ mod tests {
         );
         assert_eq!(
             memory::parse_memory_msg_id("AFQFI3NvanUBh61L").unwrap(),
-            1234567
+            1_234_567
         );
         assert!(db::parse_db_msg_id("AFQFI3NvanUBh61L").is_err());
         assert_eq!(db::parse_db_msg_id("AA4DYm9iA5-NBg").unwrap(), 99999);
@@ -267,7 +307,7 @@ mod tests {
             (5, "#chan".to_owned())
         );
         let (_, _, body) = parse_msg_id_with("AAoFI2NoYW4C0B8GEoBA", MSG_ID_FS).unwrap();
-        assert!(!body.is_empty());
+        assert_ne!(body, [] as [u8; 0]);
         assert!(db::parse_db_msg_id("AAoFI2NoYW4C0B8GEoBA").is_err());
         assert!(parse_msg_id("!!!").is_err());
         assert!(parse_msg_id("").is_err());

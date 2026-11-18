@@ -3,6 +3,10 @@
 use super::*;
 
 /// Replies to messages for a network not attached keep their label.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn multiplex_not_attached_label() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -34,6 +38,10 @@ pub(super) async fn multiplex_not_attached_label() {
 
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn multiplex() {
@@ -127,6 +135,10 @@ pub(super) async fn multiplex() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn multiplex_unsupported() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

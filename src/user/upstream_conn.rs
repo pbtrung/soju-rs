@@ -9,6 +9,10 @@ use crate::{logf, msg};
 
 impl User {
     pub fn handle_upstream_disconnected(&mut self, ni: usize) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(uc) = net.conn.as_mut() else { return };
         let was_attached = uc.attached;
@@ -31,6 +35,10 @@ impl User {
 
         self.notify_bouncer_network_state(net_id, &Tags::from_iter([("state", "disconnected")]));
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &self.networks[ni];
         if net.last_error.is_none() {
             let text = format!("disconnected from {}", net.get_name());
@@ -43,6 +51,10 @@ impl User {
     }
 
     pub(super) fn upstream_connected(&mut self, ni: usize, new: upstream::NewConn) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         if let Some(old) = net.conn.take() {
             old.conn.close();
@@ -57,6 +69,10 @@ impl User {
         let Some(ni) = self.net_index(net_id) else {
             return;
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let Some(uc) = self.networks[ni].conn.as_mut() else {
             return;
         };
@@ -84,35 +100,42 @@ impl User {
     }
 
     fn process_upstream_message(&mut self, ni: usize, mut msg: Message) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let registered_before = self.networks[ni]
             .conn
             .as_ref()
             .is_some_and(|uc| uc.registered);
         let res = upstream::handle_message(self, ni, &mut msg);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let Some(uc) = self.networks[ni].conn.as_mut() else {
             return;
         };
         if let Err(e) = res {
             if !registered_before && !uc.registered {
                 // Errors during registration abort the connection
-                let err = match e.downcast_ref::<upstream::RegistrationError>() {
-                    Some(reg) => upstream::OutcomeError {
+                let err = if let Some(reg) = e.downcast_ref::<upstream::RegistrationError>() {
+                    upstream::OutcomeError {
                         text: format!("failed to register: {}", reg.reason()),
                         event: format!("failed to register: {reg}"),
                         temporary: reg.temporary(),
-                    },
-                    None => {
-                        let mut m = msg.clone();
-                        m.tags.clear();
-                        let text = format!(
-                            "failed to register: failed to handle message {:?}: {e}",
-                            crate::ircutil::redact_for_log(&m)
-                        );
-                        upstream::OutcomeError {
-                            event: text.clone(),
-                            text,
-                            temporary: true,
-                        }
+                    }
+                } else {
+                    let mut m = msg.clone();
+                    m.tags.clear();
+                    let text = format!(
+                        "failed to register: failed to handle message {:?}: {e}",
+                        crate::ircutil::redact_for_log(&m)
+                    );
+                    upstream::OutcomeError {
+                        event: text.clone(),
+                        text,
+                        temporary: true,
                     }
                 };
                 uc.reg_error = Some(err);
@@ -140,13 +163,27 @@ impl User {
         let Some(ni) = self.net_index(net_id) else {
             return;
         };
-        if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
-            return;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
+                return;
+            }
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let was_attached = self.networks[ni].upstream().is_some();
         if was_attached {
             self.handle_upstream_disconnected(ni);
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let Some(mut uc) = self.networks[ni].conn.take() else {
             return;
         };
@@ -190,6 +227,10 @@ impl User {
     /// (if any) elapsed: joins channels and makes the connection available
     /// to downstreams.
     pub fn attach_upstream(&mut self, ni: usize) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(uc) = net.conn.as_mut() else { return };
         if uc.attached {
@@ -214,42 +255,87 @@ impl User {
         self.update_away(ni);
         self.update_monitor(ni);
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let name = self.networks[ni].get_name().to_owned();
         for dc_id in dc_ids_for(&self.downstreams, net_id) {
             downstream::update_supported_caps(self, dc_id);
             let Some(i) = self.dc_index(dc_id) else {
                 continue;
             };
-            if !self.downstreams[i]
-                .caps
-                .is_enabled("soju.im/bouncer-networks")
             {
-                send_service_notice(&mut self.downstreams[i], &format!("connected to {name}"));
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if !self.downstreams[i]
+                    .caps
+                    .is_enabled("soju.im/bouncer-networks")
+                {
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        send_service_notice(
+                            &mut self.downstreams[i],
+                            &format!("connected to {name}"),
+                        );
+                    }
+                }
             }
             downstream::update_nick(self, dc_id);
             downstream::update_host(self, dc_id);
             downstream::update_realname(self, dc_id);
             downstream::update_account(self, dc_id);
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let cm = self.networks[ni].casemap;
             if let Some(i) = self.dc_index(dc_id) {
-                self.downstreams[i].update_casemapping(cm);
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    self.downstreams[i].update_casemapping(cm);
+                }
             }
         }
         self.notify_bouncer_network_state(
             net_id,
             &Tags::from_iter([("state", "connected"), ("error", "")]),
         );
-        self.networks[ni].last_error = None;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            self.networks[ni].last_error = None;
+        }
 
         for msg in delayed.unwrap_or_default() {
-            if self.networks[ni].conn.is_none() {
-                break;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if self.networks[ni].conn.is_none() {
+                    break;
+                }
             }
             self.process_upstream_message(ni, msg);
         }
     }
 
     pub fn update_away(&mut self, ni: usize) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &self.networks[ni];
         if !net.record.auto_away {
             return;
@@ -260,6 +346,10 @@ impl User {
             .iter()
             .filter(|d| d.network_id == Some(net_id))
             .all(|d| d.away.is_some());
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(uc) = net.upstream_mut() else { return };
         if away == uc.away {

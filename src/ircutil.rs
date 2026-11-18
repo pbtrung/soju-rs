@@ -3,11 +3,15 @@
 use indexmap::IndexMap;
 use jiff::Timestamp;
 
-use crate::irc::{Message, Tags, numerics::*};
+use crate::irc::{
+    Message, Tags,
+    numerics::{RPL_NOWAWAY, RPL_UNAWAY},
+};
 use crate::xirc::{self, CaseMappingMap, Membership, MembershipSet};
 
 /// Formats a message for logs, hiding the parameters of commands carrying
 /// credentials.
+#[must_use]
 pub fn redact_for_log(msg: &Message) -> String {
     match msg.command.as_str() {
         "PASS" | "AUTHENTICATE" | "OPER" | "REGISTER" | "VERIFY" | "BOUNCERSERV" => {
@@ -31,6 +35,7 @@ pub fn redact_for_log(msg: &Message) -> String {
 pub struct UserModes(pub String);
 
 impl UserModes {
+    #[must_use]
     pub fn has(&self, c: u8) -> bool {
         self.0.as_bytes().contains(&c)
     }
@@ -49,6 +54,10 @@ impl UserModes {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input violates the supported IRC syntax or message constraints.
     pub fn apply(&mut self, s: &str) -> Result<(), String> {
         let mut plus_minus = 0u8;
         for c in s.bytes() {
@@ -68,7 +77,7 @@ impl UserModes {
 }
 
 /// Standard channel mode types, as explained in
-/// https://modern.ircdocs.horse/#mode-message
+/// <https://modern.ircdocs.horse/#mode-message>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelModeType {
     /// Modes that add or remove an address to or from a list
@@ -84,8 +93,9 @@ pub enum ChannelModeType {
     D,
 }
 
+#[must_use]
 pub fn std_channel_modes() -> IndexMap<u8, ChannelModeType> {
-    use ChannelModeType::*;
+    use ChannelModeType::{A, B, C, D};
     [
         (b'b', A), // ban list
         (b'e', A), // ban exception list
@@ -106,6 +116,7 @@ pub type ChannelModes = IndexMap<u8, String>;
 
 pub const STD_CHANNEL_TYPES: &str = "#&+!";
 
+#[must_use]
 pub fn std_memberships() -> Vec<Membership> {
     [
         (b'q', b'~'), // founder
@@ -124,6 +135,10 @@ pub fn std_memberships() -> Vec<Membership> {
 /// channel.
 ///
 /// If modes is None, channel modes are not updated.
+///
+/// # Errors
+///
+/// Returns an error if the input violates the supported IRC syntax or message constraints.
 pub fn apply_channel_modes(
     mut modes: Option<&mut ChannelModes>,
     members: &mut CaseMappingMap<MembershipSet>,
@@ -153,6 +168,10 @@ pub fn apply_channel_modes(
                         mode_str, plus_minus as char, mode as char
                     ));
                 }
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+                )]
                 let member = &arguments[next_argument];
                 if let Some(m) = members.get_mut(member) {
                     if plus_minus == b'+' {
@@ -208,40 +227,43 @@ pub fn apply_channel_modes(
 }
 
 /// Formats channel modes as a mode string and parameters.
+#[must_use]
 pub fn format_channel_modes(cm: &ChannelModes) -> (String, Vec<String>) {
     let mut with_values = String::new();
     let mut without_values = String::new();
     let mut parameters = Vec::new();
     for (&mode, value) in cm {
-        if !value.is_empty() {
+        if value.is_empty() {
+            without_values.push(mode as char);
+        } else {
             with_values.push(mode as char);
             parameters.push(value.clone());
-        } else {
-            without_values.push(mode as char);
         }
     }
     (format!("+{with_values}{without_values}"), parameters)
 }
 
+#[must_use]
 pub fn format_member_prefix(ms: &MembershipSet, multi_prefix: bool) -> String {
     if !multi_prefix {
         return ms
             .0
             .first()
-            .map(|m| (m.prefix as char).to_string())
-            .unwrap_or_default();
+            .map_or_default(|m| (m.prefix as char).to_string());
     }
     ms.0.iter().map(|m| m.prefix as char).collect()
 }
 
 /// Removes channel membership prefixes from flags.
+#[must_use]
 pub fn strip_member_prefixes(flags: &str, memberships: &[Membership]) -> String {
     flags
         .chars()
-        .filter(|&c| !memberships.iter().any(|m| c as u32 == m.prefix as u32))
+        .filter(|&c| !memberships.iter().any(|m| c as u32 == u32::from(m.prefix)))
         .collect()
 }
 
+#[must_use]
 pub fn copy_client_tags(tags: &Tags) -> Tags {
     tags.iter().filter(|(k, _)| k.starts_with('+')).collect()
 }
@@ -258,19 +280,36 @@ fn is_word_boundary(r: Option<char>) -> bool {
 fn is_uri_prefix(text: &str) -> bool {
     let mut text = text;
     if let Some((i, _)) = text.char_indices().rev().find(|(_, c)| c.is_whitespace()) {
-        text = &text[i..];
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
+            text = &text[i..];
+        }
     }
     let Some(i) = text.find("://") else {
         return false;
     };
     // See RFC 3986 section 3
-    match text[..i].chars().next_back() {
-        Some('+' | '-' | '.') => true,
-        Some(r) => r.is_ascii_alphanumeric(),
-        None => false,
+    {
+        #![expect(
+            clippy::string_slice,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
+        match text[..i].chars().next_back() {
+            Some('+' | '-' | '.') => true,
+            Some(r) => r.is_ascii_alphanumeric(),
+            None => false,
+        }
     }
 }
 
+///
+/// # Panics
+///
+/// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
+#[must_use]
 pub fn is_highlight(text: &str, nick: &str) -> bool {
     assert!(!nick.is_empty(), "is_highlight called with empty nick");
     let mut text = text;
@@ -278,16 +317,37 @@ pub fn is_highlight(text: &str, nick: &str) -> bool {
         let Some(i) = text.find(nick) else {
             return false;
         };
+        #[expect(
+            clippy::string_slice,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
         let left = text[..i].chars().next_back();
+        #[expect(
+            clippy::string_slice,
+            reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+        )]
         let right = text[i + nick.len()..].chars().next();
-        if is_word_boundary(left) && is_word_boundary(right) && !is_uri_prefix(&text[..i]) {
-            return true;
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
+            if is_word_boundary(left) && is_word_boundary(right) && !is_uri_prefix(&text[..i]) {
+                return true;
+            }
         }
-        text = &text[i + nick.len()..];
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "Lexer positions are bounded by input length and advance only at ASCII syntax or UTF-8 boundaries."
+            )]
+            text = &text[i + nick.len()..];
+        }
     }
 }
 
 /// Parses a CHATHISTORY parameter as a bound.
+#[must_use]
 pub fn parse_chathistory_bound(param: &str) -> Option<Timestamp> {
     let (kind, value) = param.split_once('=')?;
     match kind {
@@ -296,10 +356,12 @@ pub fn parse_chathistory_bound(param: &str) -> Option<Timestamp> {
     }
 }
 
+#[must_use]
 pub fn is_numeric(cmd: &str) -> bool {
     cmd.len() == 3 && cmd.bytes().all(|b| b.is_ascii_digit())
 }
 
+#[must_use]
 pub fn generate_away_reply(away: bool) -> Message {
     if away {
         crate::msg!(RPL_NOWAWAY, "*", "You have been marked as being away")
@@ -310,6 +372,10 @@ pub fn generate_away_reply(away: bool) -> Message {
 
 /// Splits a service command line into words, following POSIX shell quoting
 /// rules (port of upstream's splitWords).
+///
+/// # Errors
+///
+/// Returns an error if the input violates the supported IRC syntax or message constraints.
 pub fn split_words(s: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut last_word = String::new();
@@ -479,6 +545,10 @@ mod tests {
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
     )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn channel_modes() {
         let avail = std_memberships();
         let chmodes = std_channel_modes();
@@ -487,7 +557,7 @@ mod tests {
         let mut modes = ChannelModes::new();
         let args: Vec<String> = ["alice", "*!*@x", "key", "10"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         apply_channel_modes(
             Some(&mut modes),
@@ -516,6 +586,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn member_prefix() {
         let avail = std_memberships();
         let ms = MembershipSet(vec![avail[2], avail[4]]);

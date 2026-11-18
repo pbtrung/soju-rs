@@ -159,6 +159,10 @@ fn content_type_for(path: &str) -> Option<&'static str> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 fn handle_websocket(
     srv: Arc<Server>,
     mut req: Request<Incoming>,
@@ -169,8 +173,7 @@ fn handle_websocket(
     let has_token = |name: header::HeaderName, token: &str| {
         headers.get_all(name).iter().any(|v| {
             v.to_str()
-                .map(|s| s.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)))
-                .unwrap_or(false)
+                .is_ok_and(|s| s.split(',').any(|t| t.trim().eq_ignore_ascii_case(token)))
         })
     };
     if !has_token(header::CONNECTION, "upgrade") {
@@ -337,6 +340,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     async fn websocket_large_lines() {
         let (a, b) = tokio::io::duplex(1 << 16);

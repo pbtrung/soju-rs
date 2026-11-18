@@ -10,6 +10,10 @@ use crate::{logf, msg};
 
 impl User {
     pub fn store_channel(&mut self, ni: usize, name: &str) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let net_id = net.id();
         if let Some(ch) = net.channels.get_mut(name)
@@ -25,6 +29,10 @@ impl User {
 
     /// Detaches a channel.
     pub fn detach_channel(&mut self, ni: usize, name: &str) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(ch) = net.channels.get_mut(name) else {
             return;
@@ -66,6 +74,10 @@ impl User {
 
     /// Attaches a detached channel.
     pub fn attach_channel(&mut self, ni: usize, name: &str) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(ch) = net.channels.get_mut(name) else {
             return;
@@ -88,21 +100,35 @@ impl User {
             let Some(i) = self.dc_index(dc_id) else {
                 continue;
             };
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let dc = &mut self.downstreams[i];
             let prefix = dc.prefix();
             dc.send_message(msg!("JOIN", ch_name.clone()).with_prefix(prefix));
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let net = &self.networks[ni];
             if let Some(uc) = net.upstream()
                 && let Some(uch) = uc.channels.get(&ch_name)
             {
-                downstream::forward_channel(
-                    &self.srv.db,
-                    &mut self.downstreams[i],
-                    uch,
-                    net.id(),
-                    net.casemap,
-                );
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    downstream::forward_channel(
+                        &self.srv.db,
+                        &mut self.downstreams[i],
+                        uch,
+                        net.id(),
+                        net.casemap,
+                    );
+                }
             }
 
             if !detached_msg_id.is_empty() {
@@ -111,7 +137,15 @@ impl User {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn delete_channel(&mut self, ni: usize, name: &str) -> Result<()> {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         let Some(ch) = net.channels.get(name) else {
             bail!("unknown channel {name:?}");
@@ -124,11 +158,21 @@ impl User {
             uch.stop_auto_detach();
         }
         self.srv.db.delete_channel(ch_id)?;
-        self.networks[ni].channels.del(name);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            self.networks[ni].channels.del(name);
+        }
         Ok(())
     }
 
     pub fn update_casemapping(&mut self, ni: usize, cm: CaseMapping) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         net.casemap = cm;
         net.channels.set_casemapping(cm);

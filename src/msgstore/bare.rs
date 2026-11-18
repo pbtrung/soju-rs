@@ -1,4 +1,4 @@
-//! Minimal BARE (https://baremessages.org) encoding, as used by upstream for
+//! Minimal BARE (<https://baremessages.org>) encoding, as used by upstream for
 //! internal message IDs.
 
 use anyhow::{Result, bail};
@@ -40,7 +40,7 @@ impl Reader<'_> {
             if i == 9 && b > 1 {
                 bail!("varint overflows a 64-bit integer");
             }
-            v |= ((b & 0x7f) as u64) << (7 * i);
+            v |= u64::from(b & 0x7f) << (7 * i);
             if b < 0x80 {
                 return Ok(v);
             }

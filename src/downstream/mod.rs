@@ -12,7 +12,21 @@ use sha2::{Digest, Sha512};
 
 use crate::conn::{Conn, ConnInfo, ConnReader};
 use crate::database::{self as db, get_nick, get_realname};
-use crate::irc::{Message, Prefix, Tags, numerics::*};
+use crate::irc::{
+    Message, Prefix, Tags,
+    numerics::{
+        ERR_ALREADYREGISTERED, ERR_BADCHANMASK, ERR_BADMASK, ERR_ERRONEUSNICKNAME,
+        ERR_INVALIDCAPCMD, ERR_MONLISTFULL, ERR_NEEDMOREPARAMS, ERR_NICKNAMEINUSE, ERR_NOMOTD,
+        ERR_NONICKNAMEGIVEN, ERR_NOSUCHCHANNEL, ERR_NOSUCHSERVER, ERR_PASSWDMISMATCH,
+        ERR_SASLABORTED, ERR_SASLFAIL, ERR_SASLTOOLONG, ERR_UNKNOWNCOMMAND, ERR_UNKNOWNERROR,
+        ERR_USERSDONTMATCH, RPL_CHANNELMODEIS, RPL_CREATIONTIME, RPL_ENDOFINFO, RPL_ENDOFMONLIST,
+        RPL_ENDOFNAMES, RPL_ENDOFWHO, RPL_ENDOFWHOIS, RPL_INFO, RPL_KEYVALUE, RPL_LOGGEDIN,
+        RPL_LOGGEDOUT, RPL_METADATASUBOK, RPL_METADATASUBS, RPL_METADATAUNSUBOK, RPL_MONLIST,
+        RPL_MONOFFLINE, RPL_MONONLINE, RPL_MYINFO, RPL_NOTOPIC, RPL_SASLSUCCESS, RPL_TOPIC,
+        RPL_TOPICWHOTIME, RPL_UMODEIS, RPL_VISIBLEHOST, RPL_WELCOME, RPL_WHOISACCOUNT,
+        RPL_WHOISBOT, RPL_WHOISOPERATOR, RPL_WHOISSERVER, RPL_WHOISUSER, RPL_YOURHOST,
+    },
+};
 use crate::ircutil;
 use crate::logger::Logger;
 use crate::metrics;
@@ -43,6 +57,7 @@ pub const SERVICE_NICK: &str = "BouncerServ";
 pub const SERVICE_NICK_CM: &str = "bouncerserv";
 pub const SERVICE_REALNAME: &str = "soju bouncer service";
 
+#[must_use]
 pub fn service_prefix() -> Prefix {
     Prefix::full(SERVICE_NICK, SERVICE_NICK, SERVICE_NICK)
 }
@@ -61,22 +76,27 @@ impl std::fmt::Display for IrcError {
 
 impl std::error::Error for IrcError {}
 
+#[must_use]
 pub fn irc_error(m: Message) -> anyhow::Error {
     IrcError(m).into()
 }
 
+#[must_use]
 pub fn unknown_command(cmd: &str) -> anyhow::Error {
     irc_error(msg!(ERR_UNKNOWNCOMMAND, "*", cmd, "Unknown command"))
 }
 
+#[must_use]
 pub fn unknown_irc_error(cmd: &str, text: &str) -> anyhow::Error {
     irc_error(msg!(ERR_UNKNOWNERROR, "*", cmd, text))
 }
 
+#[must_use]
 pub fn need_more_params(cmd: &str) -> IrcError {
     IrcError(msg!(ERR_NEEDMOREPARAMS, "*", cmd, "Not enough parameters"))
 }
 
+#[must_use]
 pub fn chathistory_error(subcommand: &str, target: &str) -> anyhow::Error {
     irc_error(msg!(
         "FAIL",
@@ -102,6 +122,10 @@ impl DownstreamConn {
 }
 
 /// Checks that a message has at least n parameters.
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn need_params(msg: &Message, n: usize) -> Result<()> {
     if msg.params.len() < n {
         return Err(need_more_params(&msg.command).into());
@@ -109,6 +133,10 @@ pub fn need_params(msg: &Message, n: usize) -> Result<()> {
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn parse_bouncer_net_id(subcommand: &str, s: &str) -> Result<i64> {
     match s.parse::<i64>() {
         Ok(id) if id > 0 => Ok(id),
@@ -165,6 +193,10 @@ fn network_addr_from_attrs(attrs: &Tags) -> String {
     addr
 }
 
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn update_network_attrs(
     record: &mut db::Network,
     attrs: &Tags,
@@ -180,11 +212,11 @@ pub fn update_network_attrs(
                 update_addr = true;
                 addr_attrs.set(k, v);
             }
-            "name" => record.name = v.to_owned(),
-            "nickname" => record.nick = v.to_owned(),
-            "username" => record.username = v.to_owned(),
-            "realname" => record.realname = v.to_owned(),
-            "pass" => record.pass = v.to_owned(),
+            "name" => v.clone_into(&mut record.name),
+            "nickname" => v.clone_into(&mut record.nick),
+            "username" => v.clone_into(&mut record.username),
+            "realname" => v.clone_into(&mut record.realname),
+            "pass" => v.clone_into(&mut record.pass),
             _ => {
                 return Err(irc_error(msg!(
                     "FAIL",
@@ -224,11 +256,11 @@ pub fn update_network_attrs(
 ///   - ',' breaks lists
 ///   - '.' is reserved for server names
 ///
-/// See https://modern.ircdocs.horse/#clients
+/// See <https://modern.ircdocs.horse/#clients>
 pub const ILLEGAL_NICK_CHARS: &[char] = &[' ', ':', '@', '!', '*', '?', '$', ',', '.'];
 
 /// Characters forbidden in a channel name, see
-/// https://modern.ircdocs.horse/#channels
+/// <https://modern.ircdocs.horse/#channels>
 pub const ILLEGAL_CHAN_CHARS: &[char] = &[' ', ',', '\x07'];
 
 /// The state of a labeled-response for the command being handled.
@@ -251,9 +283,9 @@ pub struct Registration {
     pub negotiating_caps: bool,
     pub auth_username: String,
     /// Whether the server of the requested new network was found reachable,
-    /// see check_new_network.
+    /// see `check_new_network`.
     pub server_checked: bool,
-    /// Failed SASL attempts, see MAX_AUTH_FAILURES
+    /// Failed SASL attempts, see `MAX_AUTH_FAILURES`
     pub auth_failures: u32,
 }
 
@@ -278,7 +310,7 @@ pub struct DownstreamConn {
     pub realname: String,
     pub username: String,
     pub hostname: String,
-    /// RPL_LOGGEDIN/OUT state
+    /// `RPL_LOGGEDIN/OUT` state
     pub account: String,
     pub away: Option<String>,
 
@@ -286,7 +318,7 @@ pub struct DownstreamConn {
     pub caps: CapRegistry,
     pub isupport: Isupport,
     pub sasl: Option<DownstreamSasl>,
-    /// None after RPL_WELCOME
+    /// None after `RPL_WELCOME`
     pub registration: Option<Registration>,
 
     last_batch_ref: u64,
@@ -305,6 +337,7 @@ pub struct DownstreamConn {
 /// Don't replay all messages, because that would mess up client state. For
 /// instance we just sent the list of users, sending PART messages for one
 /// of these users would be incorrect.
+#[must_use]
 pub fn message_supports_backlog(msg: &Message) -> bool {
     matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE")
 }
@@ -320,7 +353,8 @@ pub fn send_service_privmsg(dc: &mut DownstreamConn, text: &str) {
 }
 
 /// Splits a raw username into username, client name and network name:
-/// "<username>[/<network>][@<client>]" in any order.
+/// `<username>[/<network>][@<client>]` in any order.
+#[must_use]
 pub fn unmarshal_username(raw: &str) -> (String, String, String) {
     let mut username = raw.to_owned();
     let mut client = String::new();
@@ -328,22 +362,64 @@ pub fn unmarshal_username(raw: &str) -> (String, String, String) {
     let i = raw.find(['/', '@']);
     let j = raw.rfind(['/', '@']);
     if let Some(i) = i {
-        username = raw[..i].to_owned();
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            raw[..i].clone_into(&mut username);
+        }
     }
     if let Some(j) = j {
-        if raw.as_bytes()[j] == b'@' {
-            client = raw[j + 1..].to_owned();
-        } else {
-            network = raw[j + 1..].to_owned();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            if raw.as_bytes()[j] == b'@' {
+                {
+                    #![expect(
+                        clippy::string_slice,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    raw[j + 1..].clone_into(&mut client);
+                }
+            } else {
+                {
+                    #![expect(
+                        clippy::string_slice,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    raw[j + 1..].clone_into(&mut network);
+                }
+            }
         }
     }
     if let (Some(i), Some(j)) = (i, j)
         && i < j
     {
-        if raw.as_bytes()[i] == b'@' {
-            client = raw[i + 1..j].to_owned();
-        } else {
-            network = raw[i + 1..j].to_owned();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            if raw.as_bytes()[i] == b'@' {
+                {
+                    #![expect(
+                        clippy::string_slice,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    raw[i + 1..j].clone_into(&mut client);
+                }
+            } else {
+                {
+                    #![expect(
+                        clippy::string_slice,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    raw[i + 1..j].clone_into(&mut network);
+                }
+            }
         }
     }
     (username, client, network)
@@ -364,6 +440,10 @@ fn begin_message(dc: &mut DownstreamConn, msg: &Message) {
 }
 
 /// Sends an IRC error to the client, or propagates other errors.
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn finish_message(dc: &mut DownstreamConn, res: Result<()>) -> Result<()> {
     if let Err(e) = res {
         match e.downcast::<IrcError>() {
@@ -391,9 +471,19 @@ const MAX_MULTILINE_BATCHES: usize = 8;
 /// upstream server.
 fn multiline_limits(u: &User, i: usize) -> Option<xirc::MultilineLimits> {
     let ni = dc_network(u, i)?;
-    u.networks[ni].upstream()?.multiline_limits()
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        u.networks[ni].upstream()?.multiline_limits()
+    }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 /// Handles a client-initiated batch. Only draft/multiline batches are
 /// supported: once complete, they are handled as a single message.
 fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
@@ -402,6 +492,10 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let tag = msg.param(0);
     if let Some(r) = tag.strip_prefix('+') {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         let res = if msg.param(1) != xirc::MULTILINE_BATCH_TYPE
             || !dc.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE)
@@ -432,10 +526,18 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
         return finish_message(dc, res);
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let batch = tag
         .strip_prefix('-')
         .and_then(|r| u.downstreams[i].multiline_batches.remove(r));
     let Some(batch) = batch else {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         begin_message(dc, msg);
         let err = fail(&[
@@ -451,7 +553,8 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     let limits = multiline_limits(u, i);
     let res = batch.finish().and_then(|m| {
         // We may split lines differently from the client
-        let uc = dc_network(u, i).and_then(|ni| u.networks[ni].upstream());
+        #[expect(clippy::indexing_slicing, reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler.")]
+let uc = dc_network(u, i).and_then(|ni| u.networks[ni].upstream());
         match (uc, limits) {
             (Some(uc), Some(limits)) if uc.multiline_line_count(&m) > limits.max_lines => {
                 Err(xirc::MultilineError::MaxLines)
@@ -483,6 +586,10 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
                     fail(&["BATCH", e.code(), "Invalid multiline batch"])
                 }
             };
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let dc = &mut u.downstreams[i];
             begin_message(dc, &opener);
             finish_message(dc, Err(err))
@@ -491,6 +598,10 @@ fn handle_batch(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
 }
 
 /// Handles a message from a registered downstream connection.
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     metrics::inc(&u.srv.metrics.downstream_in_messages_total);
     let i = u
@@ -499,14 +610,26 @@ pub fn handle_message(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     if msg.command == "BATCH" {
         return handle_batch(u, dc_id, msg);
     }
-    if let Some(r) = msg.tags.get("batch")
-        && u.downstreams[i].multiline_batches.contains_key(r)
     {
-        let limits = multiline_limits(u, i).unwrap_or_default();
-        if let Some(b) = u.downstreams[i].multiline_batches.get_mut(r) {
-            b.push(msg, &limits);
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if let Some(r) = msg.tags.get("batch")
+            && u.downstreams[i].multiline_batches.contains_key(r)
+        {
+            let limits = multiline_limits(u, i).unwrap_or_default();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if let Some(b) = u.downstreams[i].multiline_batches.get_mut(r) {
+                    b.push(msg, &limits);
+                }
+            }
+            return Ok(());
         }
-        return Ok(());
     }
     handle_message_labeled(u, dc_id, msg)
 }
@@ -516,22 +639,43 @@ fn handle_message_labeled(u: &mut User, dc_id: u64, msg: &Message) -> Result<()>
     let i = u
         .dc_index(dc_id)
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
-    begin_message(&mut u.downstreams[i], msg);
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        begin_message(&mut u.downstreams[i], msg);
+    }
     let res = match msg.command.as_str() {
         "QUIT" => {
-            u.downstreams[i].conn.shutdown();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].conn.shutdown();
+            }
             // TODO: stop handling commands
             Ok(())
         }
-        "ISUPPORT" => {
-            if !u.downstreams[i].caps.is_enabled("draft/extended-isupport") {
-                Err(unknown_command(&msg.command))
-            } else {
+        "ISUPPORT" =>
+        {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if u.downstreams[i].caps.is_enabled("draft/extended-isupport") {
                 let isupport = build_user_isupport(u, i);
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let dc = &mut u.downstreams[i];
                 send_isupport(dc, &isupport);
                 dc.isupport = isupport;
                 Ok(())
+            } else {
+                Err(unknown_command(&msg.command))
             }
         }
         _ => handle_message_registered(u, dc_id, msg),
@@ -539,18 +683,35 @@ fn handle_message_labeled(u: &mut User, dc_id: u64, msg: &Message) -> Result<()>
     let Some(i) = u.dc_index(dc_id) else {
         return Ok(());
     };
-    finish_message(&mut u.downstreams[i], res)
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        finish_message(&mut u.downstreams[i], res)
+    }
 }
 
 /// The network a downstream connection is bound to, if any.
+#[must_use]
 pub fn dc_network(u: &User, dc_idx: usize) -> Option<usize> {
-    u.downstreams[dc_idx]
-        .network_id
-        .and_then(|id| u.net_index(id))
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        u.downstreams[dc_idx]
+            .network_id
+            .and_then(|id| u.net_index(id))
+    }
 }
 
 /// Returns the network index of the downstream's upstream connection, or
 /// an error replied to the client.
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn upstream_for_command(u: &User, dc_idx: usize, cmd: &str) -> Result<usize> {
     let Some(ni) = dc_network(u, dc_idx) else {
         return Err(unknown_irc_error(
@@ -559,8 +720,14 @@ pub fn upstream_for_command(u: &User, dc_idx: usize, cmd: &str) -> Result<usize>
                 use a specific network?",
         ));
     };
-    if u.networks[ni].upstream().is_none() {
-        return Err(unknown_irc_error(cmd, "Disconnected from upstream network"));
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if u.networks[ni].upstream().is_none() {
+            return Err(unknown_irc_error(cmd, "Disconnected from upstream network"));
+        }
     }
     Ok(ni)
 }
@@ -568,17 +735,43 @@ pub fn upstream_for_command(u: &User, dc_idx: usize, cmd: &str) -> Result<usize>
 /// Sends a labeled message to the upstream server of a downstream
 /// connection, consuming the downstream's label.
 pub fn send_upstream_labeled(u: &mut User, dc_idx: usize, ni: usize, msg: Message) {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let label = u.downstreams[dc_idx].take_label();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc_id = u.downstreams[dc_idx].id;
-    if let Some(uc) = u.networks[ni].upstream_mut() {
-        uc.send_message_labeled(dc_id, &label, msg);
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if let Some(uc) = u.networks[ni].upstream_mut() {
+            uc.send_message_labeled(dc_id, &label, msg);
+        }
     }
 }
 
 /// Queues a command whose replies are routed to the downstream connection.
 pub fn enqueue_upstream_command(u: &mut User, dc_idx: usize, ni: usize, msg: Message) {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let label = u.downstreams[dc_idx].take_label();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc_id = u.downstreams[dc_idx].id;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(uc) = u.networks[ni].upstream_mut() else {
         return;
     };
@@ -588,26 +781,61 @@ pub fn enqueue_upstream_command(u: &mut User, dc_idx: usize, ni: usize, msg: Mes
     }
 }
 
+#[must_use]
 pub fn parse_nickserv_credentials(text: &str, nick: &str) -> Option<(String, String)> {
     let fields: Vec<&str> = text.split_whitespace().collect();
     if fields.len() < 2 {
         return None;
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+    )]
     let cmd = fields[0].to_uppercase();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+    )]
     let params = &fields[1..];
     match cmd.as_str() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         "REGISTER" => Some((nick.to_owned(), params[0].to_owned())),
         "IDENTIFY" => {
             if params.len() == 1 {
-                Some((nick.to_owned(), params[0].to_owned()))
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    Some((nick.to_owned(), params[0].to_owned()))
+                }
             } else {
-                Some((params[0].to_owned(), params[1].to_owned()))
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    Some((params[0].to_owned(), params[1].to_owned()))
+                }
             }
         }
         // Upstream also reports success for other SET subcommands, with
         // empty credentials which then overwrite the saved ones
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         "SET" if params.len() == 2 && params[0].eq_ignore_ascii_case("PASSWORD") => {
-            Some((nick.to_owned(), params[1].to_owned()))
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                Some((nick.to_owned(), params[1].to_owned()))
+            }
         }
         _ => None,
     }
@@ -708,7 +936,7 @@ pub async fn serve(
             }
         }
     }
-    user.send(crate::user::Event::DownstreamDisconnected { dc_id: id });
+    user.notify(crate::user::Event::DownstreamDisconnected { dc_id: id });
     conn.shutdown();
 }
 

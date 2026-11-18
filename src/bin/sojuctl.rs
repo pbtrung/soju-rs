@@ -1,4 +1,4 @@
-//! sojuctl sends a BouncerServ command to a running soju instance via its
+//! sojuctl sends a `BouncerServ` command to a running soju instance via its
 //! admin socket.
 
 use std::process::ExitCode;
@@ -9,9 +9,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const USAGE: &str = "usage: sojuctl [-config path] <command>\n";
 
-/// Quotes a word for split_words, which only understands backslash escapes
+/// Quotes a word for `split_words`, which only understands backslash escapes
 /// of the next character: other characters are kept as-is. CR, LF and NUL
-/// can't be sent in an IRC line, see check_words.
+/// can't be sent in an IRC line, see `check_words`.
 fn quote(word: &str) -> String {
     let mut s = String::from("\"");
     for c in word.chars() {
@@ -104,7 +104,7 @@ fn main() -> ExitCode {
         args.remove(0);
         let name = a.trim_start_matches('-');
         match name.split_once('=') {
-            Some(("config", v)) => config_path = v.to_owned(),
+            Some(("config", v)) => v.clone_into(&mut config_path),
             None if name == "config" => {
                 if args.is_empty() {
                     eprintln!("flag needs an argument: -config");
@@ -169,7 +169,7 @@ mod tests {
     fn quoting() {
         let words: Vec<String> = ["user", "create", "-password", "a \"b\"\\"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         assert_eq!(
             quote_words(&words),
@@ -182,6 +182,10 @@ mod tests {
     #[test]
     #[expect(
         clippy::unwrap_used,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
         reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn quoting_roundtrip() {

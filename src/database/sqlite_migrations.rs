@@ -2,13 +2,13 @@
 
 /// Migration #0 is reserved for schema initialization.
 pub const MIGRATIONS: &[&str] = &[
-    r#""#,
-    r#"ALTER TABLE Network ADD COLUMN connect_commands VARCHAR(1023)"#,
-    r#"ALTER TABLE Channel ADD COLUMN detached INTEGER NOT NULL DEFAULT 0"#,
-    r#"ALTER TABLE Network ADD COLUMN sasl_external_cert BLOB DEFAULT NULL"#,
-    r#"ALTER TABLE Network ADD COLUMN sasl_external_key BLOB DEFAULT NULL"#,
-    r#"ALTER TABLE User ADD COLUMN admin INTEGER NOT NULL DEFAULT 0"#,
-    r#"
+    r"",
+    r"ALTER TABLE Network ADD COLUMN connect_commands VARCHAR(1023)",
+    r"ALTER TABLE Channel ADD COLUMN detached INTEGER NOT NULL DEFAULT 0",
+    r"ALTER TABLE Network ADD COLUMN sasl_external_cert BLOB DEFAULT NULL",
+    r"ALTER TABLE Network ADD COLUMN sasl_external_key BLOB DEFAULT NULL",
+    r"ALTER TABLE User ADD COLUMN admin INTEGER NOT NULL DEFAULT 0",
+    r"
 		CREATE TABLE UserNew (
 			id INTEGER PRIMARY KEY,
 			username VARCHAR(255) NOT NULL UNIQUE,
@@ -18,8 +18,8 @@ pub const MIGRATIONS: &[&str] = &[
 		INSERT INTO UserNew SELECT rowid, username, password, admin FROM User;
 		DROP TABLE User;
 		ALTER TABLE UserNew RENAME TO User;
-	"#,
-    r#"
+	",
+    r"
 		CREATE TABLE NetworkNew (
 			id INTEGER PRIMARY KEY,
 			name VARCHAR(255),
@@ -48,14 +48,14 @@ pub const MIGRATIONS: &[&str] = &[
 			JOIN User ON Network.user = User.username;
 		DROP TABLE Network;
 		ALTER TABLE NetworkNew RENAME TO Network;
-	"#,
-    r#"
+	",
+    r"
 		ALTER TABLE Channel ADD COLUMN relay_detached INTEGER NOT NULL DEFAULT 0;
 		ALTER TABLE Channel ADD COLUMN reattach_on INTEGER NOT NULL DEFAULT 0;
 		ALTER TABLE Channel ADD COLUMN detach_after INTEGER NOT NULL DEFAULT 0;
 		ALTER TABLE Channel ADD COLUMN detach_on INTEGER NOT NULL DEFAULT 0;
-	"#,
-    r#"
+	",
+    r"
 		CREATE TABLE DeliveryReceipt (
 			id INTEGER PRIMARY KEY,
 			network INTEGER NOT NULL,
@@ -65,11 +65,11 @@ pub const MIGRATIONS: &[&str] = &[
 			FOREIGN KEY(network) REFERENCES Network(id),
 			UNIQUE(network, target, client)
 		);
-	"#,
-    r#"ALTER TABLE Channel ADD COLUMN detached_internal_msgid VARCHAR(255)"#,
-    r#"ALTER TABLE Network ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"#,
-    r#"ALTER TABLE User ADD COLUMN realname VARCHAR(255)"#,
-    r#"
+	",
+    r"ALTER TABLE Channel ADD COLUMN detached_internal_msgid VARCHAR(255)",
+    r"ALTER TABLE Network ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+    r"ALTER TABLE User ADD COLUMN realname VARCHAR(255)",
+    r"
 		CREATE TABLE NetworkNew (
 			id INTEGER PRIMARY KEY,
 			name TEXT,
@@ -98,8 +98,8 @@ pub const MIGRATIONS: &[&str] = &[
 			FROM Network;
 		DROP TABLE Network;
 		ALTER TABLE NetworkNew RENAME TO Network;
-	"#,
-    r#"
+	",
+    r"
 		CREATE TABLE ReadReceipt (
 			id INTEGER PRIMARY KEY,
 			network INTEGER NOT NULL,
@@ -108,8 +108,8 @@ pub const MIGRATIONS: &[&str] = &[
 			FOREIGN KEY(network) REFERENCES Network(id),
 			UNIQUE(network, target)
 		);
-	"#,
-    r#"
+	",
+    r"
 		CREATE TABLE WebPushConfig (
 			id INTEGER PRIMARY KEY,
 			created_at TEXT NOT NULL,
@@ -130,21 +130,21 @@ pub const MIGRATIONS: &[&str] = &[
 			FOREIGN KEY(network) REFERENCES Network(id),
 			UNIQUE(network, endpoint)
 		);
-	"#,
-    r#"
+	",
+    r"
 		ALTER TABLE WebPushSubscription ADD COLUMN user INTEGER REFERENCES User(id);
 		UPDATE WebPushSubscription AS wps SET user = (SELECT n.user FROM Network AS n WHERE n.id = wps.network);
-	"#,
-    r#"ALTER TABLE User ADD COLUMN nick TEXT;"#,
-    r#"ALTER TABLE Network ADD COLUMN auto_away INTEGER NOT NULL DEFAULT 1;"#,
-    r#"ALTER TABLE Network ADD COLUMN certfp TEXT;"#,
-    r#"
+	",
+    r"ALTER TABLE User ADD COLUMN nick TEXT;",
+    r"ALTER TABLE Network ADD COLUMN auto_away INTEGER NOT NULL DEFAULT 1;",
+    r"ALTER TABLE Network ADD COLUMN certfp TEXT;",
+    r"
 		ALTER TABLE User ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
 		UPDATE User SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
-	"#,
-    r#"ALTER TABLE User ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"#,
-    r#"ALTER TABLE User ADD COLUMN downstream_interacted_at TEXT;"#,
-    r#"
+	",
+    r"ALTER TABLE User ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+    r"ALTER TABLE User ADD COLUMN downstream_interacted_at TEXT;",
+    r"
 		CREATE TABLE Message (
 			id INTEGER PRIMARY KEY,
 			target INTEGER NOT NULL,
@@ -179,13 +179,13 @@ pub const MIGRATIONS: &[&str] = &[
 			INSERT INTO MessageFTS(MessageFTS, rowid, text) VALUES ('delete', old.id, old.text);
 			INSERT INTO MessageFTS(rowid, text) VALUES (new.id, new.text);
 		END;
-	"#,
-    r#"ALTER TABLE User ADD COLUMN max_networks INTEGER NOT NULL DEFAULT -1"#,
-    r#"
+	",
+    r"ALTER TABLE User ADD COLUMN max_networks INTEGER NOT NULL DEFAULT -1",
+    r"
 		ALTER TABLE MessageTarget ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 		ALTER TABLE MessageTarget ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
-	"#,
-    r#"
+	",
+    r"
 		CREATE INDEX Network_user_index ON Network(user);
 		CREATE INDEX Channel_network_index ON Channel(network);
 		CREATE INDEX DeliveryReceipt_network_index ON DeliveryReceipt(network);
@@ -194,9 +194,9 @@ pub const MIGRATIONS: &[&str] = &[
 		CREATE INDEX WebPushSubscription_network_index ON WebPushSubscription(network);
 		CREATE INDEX Message_target_index ON Message(target);
 		CREATE INDEX MessageTarget_network_index ON MessageTarget(network);
-	"#,
-    r#"ALTER TABLE MessageTarget ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0"#,
-    r#"
+	",
+    r"ALTER TABLE MessageTarget ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0",
+    r"
 		CREATE TABLE DeviceCertificate (
 			id INTEGER PRIMARY KEY,
 			user INTEGER NOT NULL,
@@ -205,23 +205,23 @@ pub const MIGRATIONS: &[&str] = &[
 			last_used TEXT NOT NULL,
 			FOREIGN KEY(user) REFERENCES User(id)
 		);
-	"#,
-    r#"ALTER TABLE DeviceCertificate ADD COLUMN last_ip TEXT NOT NULL DEFAULT ''"#,
+	",
+    r"ALTER TABLE DeviceCertificate ADD COLUMN last_ip TEXT NOT NULL DEFAULT ''",
     // Skip event rows when loading history without draft/event-playback.
     // IF NOT EXISTS also handles databases where this index was added manually.
-    r#"
+    r"
         CREATE INDEX IF NOT EXISTS MessageTextIndex ON Message(target, time) WHERE text IS NOT NULL;
         ANALYZE MessageTextIndex;
-    "#,
+    ",
     include_str!("query_indexes.sql"),
-    r#"
+    r"
         CREATE TABLE IF NOT EXISTS MessageIdHighWater (
             id INTEGER PRIMARY KEY CHECK (id = 0),
             last_id INTEGER NOT NULL
         );
-    "#,
+    ",
     // Cluster messages by target and time, preserving IDs and receipt cursors.
-    r#"
+    r"
         INSERT INTO MessageIdHighWater(id, last_id)
             SELECT 0, id FROM Message WHERE true ORDER BY id DESC LIMIT 1
             ON CONFLICT(id) DO UPDATE SET last_id = excluded.last_id
@@ -258,7 +258,7 @@ pub const MIGRATIONS: &[&str] = &[
             INSERT INTO MessageFTS(rowid, text)
                 SELECT new.id, new.text WHERE new.text IS NOT NULL;
         END;
-    "#,
+    ",
     TARGET_HIGHLIGHT,
 ];
 

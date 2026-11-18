@@ -6,6 +6,10 @@ use super::*;
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn multiline() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -119,6 +123,10 @@ pub(super) async fn multiline() {
 
 /// Messages from a user blocked with METADATA are hidden, from the flags
 /// the user's event loop keeps without querying the database per message.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn blocked_users() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

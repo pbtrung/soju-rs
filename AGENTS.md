@@ -76,20 +76,21 @@ scenarios use both current-thread and multi-thread Tokio runtimes; retain both.
 Socket tests need permission to bind local TCP/Unix sockets. Report sandbox
 failures separately and use the available approval mechanism to rerun them.
 
-`Cargo.toml` enforces the STEP-008 core compiler/Clippy policy, including the
-unsafe prohibition and must-use/future checks. Keep exceptions on the specific
-statement or test that needs them, using `#[expect(..., reason = "...")]`.
-Current exceptions cover delivery after receiver cancellation, the final stderr
-log sink, fixed UTF-8/constants, fail-closed poisoned state locks, fixture cleanup
-and deliberate test failures. `src/state_lock.rs` defines actor/auth poison policy;
-SQLite separately recovers after transaction rollback, with regression coverage. Operational errors must
-be handled or propagated. Numeric cast checks are enforced after STEP-009. Unwrap/expect checks are enforced after STEP-010. Remaining internal indexing,
-pedantic and error-mapping policy is staged in STEP-011; passing the core policy does not close
-the full LINT-001 finding.
+`Cargo.toml` enforces the complete practical compiler/Clippy baseline after
+STEP-011, including unsafe prohibition, pedantic, numeric/indexing, unwrap/expect,
+must-use/future and error-mapping checks. Keep exceptions on the specific
+statement, block, parameter or test that needs them, with an explicit reason.
+Current exceptions describe validated actor/IRC indices, bounded parser cursors,
+fixed UTF-8/constants, cancelled deliveries, the final stderr sink, deliberate
+fixture failures and selected ordered dispatchers. They do not close ARCH-001's
+separate handler extraction work. Never add crate/module-wide suppressions.
 
-- Rustdoc changes: run `cargo doc --workspace --all-features --no-deps --locked`.
-  The audit records existing rustdoc warnings; do not claim warning-clean docs
-  without a strict successful run.
+`src/state_lock.rs` defines fail-closed actor/auth poison policy. SQLite separately
+recovers after transaction rollback, with regression coverage. Operational errors
+must be handled or propagated.
+
+- Rustdoc changes: run `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`.
+  Strict rustdoc passes after STEP-011; retain a warning-clean documentation build.
 - Markdown-only changes: check relative links/anchors, obsolete references
   and `git diff --check`; a full Rust rebuild is unnecessary.
 - Shell changes: `bash -n` changed shell scripts; use ShellCheck if installed.

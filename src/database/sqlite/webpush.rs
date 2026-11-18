@@ -9,6 +9,10 @@ use crate::database::{WebPushConfig, WebPushKeys, WebPushSubscription};
 use crate::xirc;
 
 impl Database {
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_web_push_configs(&self) -> Result<Vec<WebPushConfig>> {
         let conn = self.conn();
         let mut stmt =
@@ -23,6 +27,10 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_web_push_config(&self, config: &mut WebPushConfig) -> Result<()> {
         if config.id != 0 {
             bail!("cannot update a WebPushConfig");
@@ -43,6 +51,10 @@ impl Database {
 
     /// Lists the networks a user has subscriptions for (0 for the bouncer
     /// connection).
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_web_push_networks(&self, user_id: i64) -> Result<Vec<i64>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -54,6 +66,10 @@ impl Database {
 
     /// Lists subscriptions for a user and network (0 means the bouncer
     /// connection, not bound to any network).
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_web_push_subscriptions(
         &self,
         user_id: i64,
@@ -94,6 +110,10 @@ impl Database {
         Ok(subs)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_web_push_subscription(
         &self,
         user_id: i64,
@@ -139,6 +159,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_web_push_subscription(&self, id: i64) -> Result<()> {
         self.conn()
             .execute("DELETE FROM WebPushSubscription WHERE id = ?", [id])?;

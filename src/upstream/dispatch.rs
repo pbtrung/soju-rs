@@ -1,20 +1,43 @@
 //! Message validation, label routing, multiline assembly and handler dispatch.
 
-use super::*;
+use super::{
+    LabelContext, Message, Result, Timestamp, UpstreamBatch, UpstreamConn, User, anyhow, bail,
+    channels, dcs_for, debugf, downstream, ircutil, logf, messages, registration, users, xirc,
+};
 
 pub(super) fn parse_label(label: &str) -> Result<(u64, String)> {
     if label.is_empty() {
         return Ok((0, String::new()));
     }
     let parts: Vec<&str> = label.splitn(4, '-').collect();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+    )]
     let res = if parts.len() < 4 {
         Err(anyhow!("not enough arguments"))
     } else if parts[0] != "sd" {
-        Err(anyhow!("expected sd, got {}", parts[0]))
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            Err(anyhow!("expected sd, got {}", parts[0]))
+        }
     } else {
-        parts[1].parse::<u64>().map_err(|e| anyhow!("{e}"))
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            parts[1].parse::<u64>().map_err(|e| anyhow!("{e}"))
+        }
     };
     match res {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Ok(id) => Ok((id, parts[3].to_owned())),
         Err(e) => {
             bail!("unexpected message label: invalid downstream reference for label {label:?}: {e}")
@@ -112,6 +135,10 @@ fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline>
 
 /// Handles a message from the upstream server. Like upstream, it may remove
 /// tags from the message (e.g. label and batch).
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> {
     match assemble_multiline(uc!(u, ni), msg)? {
         Multiline::Passthrough => {}
@@ -119,6 +146,10 @@ pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> 
         Multiline::Complete(mut m) => return handle_message(u, ni, &mut m),
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
     let mut label = msg.tags.remove("label").unwrap_or_default();
 
@@ -162,9 +193,21 @@ pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> 
     for id in labeled_dcs {
         if let Some(i) = u.dc_index(id) {
             if !batch_label {
-                u.downstreams[i].flush_batch();
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    u.downstreams[i].flush_batch();
+                }
             }
-            u.downstreams[i].label = None;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].label = None;
+            }
         }
     }
     res
@@ -178,6 +221,10 @@ fn handle_message_inner(
     downstream_label: &str,
     label: &str,
 ) -> Result<()> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
 
     if msg.prefix.is_none() {

@@ -33,17 +33,18 @@ pub struct Network {
     pub casemap: CaseMapping,
     pub push_targets: Arc<Mutex<CaseMappingMap<Timestamp>>>,
     /// Shared with the runner, so it can pick up record changes (e.g. a new
-    /// CertFP certificate) on reconnect.
+    /// `CertFP` certificate) on reconnect.
     pub record_snapshot: Arc<Mutex<db::Network>>,
     /// The pinned, muted or blocked targets, by stored (case-mapped) name.
     /// The user's event loop is their only writer: incoming messages check
     /// them without a database query.
     pub message_targets: HashMap<String, db::MessageTarget>,
-    /// Mentions to store, by conversation, see upstream::record_mention
+    /// Mentions to store, by conversation, see `upstream::record_mention`
     pub pending_mentions: Arc<Mutex<HashMap<String, Timestamp>>>,
 }
 
 impl Network {
+    #[must_use]
     pub fn new(user_logger: &Logger, record: db::Network, channels: Vec<db::Channel>) -> Network {
         let logger = user_logger.with_prefix(format!("network {:?}: ", record.get_name()));
 
@@ -171,6 +172,7 @@ impl Network {
 
 /// Whether a message of a detached channel is relayed to downstreams,
 /// given whether it's a highlight.
+#[must_use]
 pub fn relays_detached_message(ch: &db::Channel, highlight: bool) -> bool {
     match ch.relay_detached {
         db::MessageFilter::Message => true,
@@ -181,6 +183,7 @@ pub fn relays_detached_message(ch: &db::Channel, highlight: bool) -> bool {
 
 /// Whether a message reattaches a detached channel, given whether it's a
 /// highlight.
+#[must_use]
 pub fn reattaches_detached_channel(ch: &db::Channel, highlight: bool) -> bool {
     match ch.reattach_on {
         db::MessageFilter::Message => true,
@@ -204,11 +207,21 @@ impl User {
     /// Starts the runner task of a network, if the user and network are
     /// enabled.
     pub(super) fn start_network(&mut self, i: usize) {
-        if !self.record.enabled || !self.networks[i].record.enabled {
-            return;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if !self.record.enabled || !self.networks[i].record.enabled {
+                return;
+            }
         }
         let runner_id = self.next_runner_id;
         self.next_runner_id += 1;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[i];
         net.runner_id = runner_id;
         tokio::spawn(upstream::run_network(upstream::RunnerParams {
@@ -240,7 +253,7 @@ impl User {
     fn add_network(&mut self, network: Network) -> usize {
         let id = network.id();
         self.networks.push(network);
-        self.networks.sort_by_key(|n| n.id());
+        self.networks.sort_by_key(Network::id);
         let i = self.networks.partition_point(|network| network.id() < id);
         self.start_network(i);
         i
@@ -262,6 +275,10 @@ impl User {
         net
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn can_enable_new_network(&self) -> Result<()> {
         let mut max = self.record.max_networks;
         if max < 0 {
@@ -277,6 +294,10 @@ impl User {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn check_network(&self, record: &db::Network) -> Result<()> {
         let url = record.url()?;
         if url.has_user {
@@ -332,6 +353,14 @@ impl User {
         Ok(())
     }
 
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn create_network(
         &mut self,
         mut record: db::Network,
@@ -352,6 +381,14 @@ impl User {
             .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))
     }
 
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn update_network(
         &mut self,
         mut record: db::Network,
@@ -379,18 +416,40 @@ impl User {
 
         // Most network changes require us to re-connect to the upstream
         // server
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let channels: Vec<db::Channel> = self.networks[i].channels.values().cloned().collect();
         let mut updated = Network::new(&self.logger, record, channels);
 
         // If we're currently connected, disconnect and perform the
         // necessary bookkeeping
-        self.networks[i].stop.cancel();
-        if self.networks[i].upstream().is_some() {
-            self.handle_upstream_disconnected(i);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            self.networks[i].stop.cancel();
         }
-        if let Some(uc) = self.networks[i].conn.take() {
-            uc.conn.close();
-            uc.stop_timers();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if self.networks[i].upstream().is_some() {
+                self.handle_upstream_disconnected(i);
+            }
+        }
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if let Some(uc) = self.networks[i].conn.take() {
+                uc.conn.close();
+                uc.stop_timers();
+            }
         }
 
         // Remove the old network without closing downstream connections:
@@ -418,7 +477,13 @@ impl User {
             .iter_mut()
             .filter(|d| d.network_id == Some(id))
         {
-            dc.update_casemapping(self.networks[i].casemap);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                dc.update_casemapping(self.networks[i].casemap);
+            }
         }
 
         // TODO: only broadcast attributes that have changed
@@ -428,6 +493,10 @@ impl User {
             .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn delete_network(&mut self, id: i64) -> Result<()> {
         let i = self
             .net_index(id)
@@ -448,6 +517,10 @@ impl User {
     }
 
     pub fn auto_save_sasl_plain(&mut self, ni: usize, username: &str, password: &str) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut self.networks[ni];
         // User may have e.g. EXTERNAL mechanism configured. We do not want to
         // automatically erase the key pair or any other credentials.
@@ -458,16 +531,21 @@ impl User {
             net.logger,
             "auto-saving SASL PLAIN credentials with username {username:?}"
         );
-        net.record.sasl.mechanism = "PLAIN".to_owned();
-        net.record.sasl.plain_username = username.to_owned();
-        net.record.sasl.plain_password = password.to_owned();
+        "PLAIN".clone_into(&mut net.record.sasl.mechanism);
+        username.clone_into(&mut net.record.sasl.plain_username);
+        password.clone_into(&mut net.record.sasl.plain_password);
         net.sync_snapshot();
         if let Err(e) = self.srv.db.store_network(self.record.id, &mut net.record) {
             logf!(net.logger, "failed to save SASL PLAIN credentials: {e}");
         }
     }
 
+    #[must_use]
     pub fn network_attrs(&self, ni: usize) -> Tags {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &self.networks[ni];
         let state = if net.upstream().is_some() {
             "connected"

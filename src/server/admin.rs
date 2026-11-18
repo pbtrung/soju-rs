@@ -2,7 +2,7 @@
 
 use super::Server;
 use crate::conn::{Conn, ConnReader};
-use crate::irc::numerics::*;
+use crate::irc::numerics::{ERR_NEEDMOREPARAMS, ERR_UNKNOWNCOMMAND};
 use crate::logger::Logger;
 use crate::{logf, msg};
 use anyhow::anyhow;
@@ -44,6 +44,10 @@ impl Server {
                         ));
                         continue;
                     }
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
                     let text = msg.params[0].clone();
                     let srv = self.clone();
                     let (res, prints, deferred) = tokio::task::spawn_blocking(move || {

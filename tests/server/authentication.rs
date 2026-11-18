@@ -1,7 +1,12 @@
 //! Authentication regression scenarios.
 
 use super::*;
+use base64::Engine;
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn sasl_errors() {
     let env = setup(db_store()).await;
 
@@ -28,7 +33,6 @@ pub(super) async fn sasl_errors() {
     assert_eq!(m.params[1], "Invalid base64-encoded response");
 
     // A new exchange still works
-    use base64::Engine;
     let creds = format!("\0{TEST_USERNAME}\0{TEST_PASSWORD}");
     dc.send(msg!("AUTHENTICATE", "PLAIN"));
     dc.expect("AUTHENTICATE").await;
@@ -64,8 +68,11 @@ pub(super) async fn sasl_errors() {
     env.srv.shutdown().await;
 }
 
+#[expect(
+    clippy::string_slice,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn sasl_chunk_boundaries() {
-    use base64::Engine;
     let username = "u".repeat(300);
     let env = setup_with(db_store(), |_, user| user.username = username.clone()).await;
     let mut dc = connect_downstream(&env.srv);
@@ -99,7 +106,6 @@ pub(super) async fn sasl_chunk_boundaries() {
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn disabled_admin_impersonation() {
-    use base64::Engine;
     let env = setup_with(
         MsgStore {
             driver: MsgStoreDriver::Db,

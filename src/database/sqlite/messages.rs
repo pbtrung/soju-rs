@@ -1,5 +1,7 @@
 //! Message targets, logged messages and their full-text search.
 
+use std::fmt::Write as _;
+
 use anyhow::{Result, anyhow};
 use jiff::Timestamp;
 use rusqlite::{OptionalExtension, TransactionBehavior, named_params};
@@ -12,11 +14,15 @@ use crate::xirc;
 impl Database {
     /// Returns the ID of the last text message stored for a target, or 0.
     ///
-    /// Delivery receipts are cursors in insertion order (see after_id in
-    /// list_messages): this is the last message stored, not the one with the
+    /// Delivery receipts are cursors in insertion order (see `after_id` in
+    /// `list_messages)`: this is the last message stored, not the one with the
     /// latest time, which upstream servers may send out of order. Backlog
     /// replays only text messages after the cursor, so skipping later events
     /// selects the same messages; only text message IDs are indexed.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_message_last_id(&self, network_id: i64, name: &str) -> Result<i64> {
         let conn = self.conn();
         Ok(conn
@@ -34,6 +40,10 @@ impl Database {
 
     /// Returns the message target. If it doesn't exist, a target with a zero
     /// ID is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_message_target(&self, network_id: i64, target: &str) -> Result<MessageTarget> {
         let conn = self.conn();
         let mut mt = MessageTarget {
@@ -57,6 +67,10 @@ impl Database {
         Ok(mt)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_message_targets(&self, network_id: i64) -> Result<Vec<MessageTarget>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -76,6 +90,10 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_message_target(&self, network_id: i64, mt: &mut MessageTarget) -> Result<()> {
         let conn = self.conn();
         if mt.id != 0 {
@@ -116,6 +134,10 @@ impl Database {
     /// someone else: the latest one's time, compared to the read marker,
     /// tells clients which conversations have mentions without loading
     /// their history. One guarded write per mention, none on read.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_message_target_highlight(
         &self,
         network_id: i64,
@@ -136,6 +158,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_messages(
         &self,
         network_id: i64,
@@ -192,6 +218,10 @@ impl Database {
         Ok(ids)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_message_last_per_target(
         &self,
         network_id: i64,
@@ -284,6 +314,10 @@ impl Database {
         Ok(l)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_messages(
         &self,
         network_id: i64,
@@ -302,22 +336,22 @@ impl Database {
         let target = "(SELECT id FROM MessageTarget WHERE network = :network AND target = :target)";
         let text_only = !options.events || !options.text.is_empty();
         let mut query = String::from("SELECT m.raw FROM ");
-        if !options.text.is_empty() {
-            // Seek each search result by ID, rather than scanning the
-            // target's history for them
-            query.push_str(
-                "(SELECT rowid AS r FROM MessageFTS WHERE MessageFTS MATCH :text) AS f
-                CROSS JOIN Message AS m ON m.id = f.r ",
-            );
-        } else {
+        if options.text.is_empty() {
             query.push_str("Message AS m ");
             if text_only && options.after_id == 0 {
                 // Without statistics, SQLite prefers the primary key,
                 // reading every event between text messages.
                 query.push_str("INDEXED BY MessageTextIndex ");
             }
+        } else {
+            // Seek each search result by ID, rather than scanning the
+            // target's history for them
+            query.push_str(
+                "(SELECT rowid AS r FROM MessageFTS WHERE MessageFTS MATCH :text) AS f
+                CROSS JOIN Message AS m ON m.id = f.r ",
+            );
         }
-        query.push_str(&format!("WHERE m.target = {target} "));
+        write!(query, "WHERE m.target = {target} ")?;
         // Values beyond SQLite's signed LIMIT range retain the explicit unlimited policy.
         let limit = i64::try_from(options.limit).unwrap_or(-1);
         let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> =
@@ -328,10 +362,11 @@ impl Database {
         if options.after_id > 0 {
             if text_only {
                 // Delivery cursors: seek the text message ID index
-                query.push_str(&format!(
+                write!(
+                    query,
                     "AND (m.time, m.id) IN (SELECT time, id FROM Message
                     WHERE target = {target} AND text IS NOT NULL AND id > :afterID) "
-                ));
+                )?;
             } else {
                 query.push_str("AND m.id > :afterID ");
             }
@@ -384,6 +419,10 @@ impl Database {
     /// The database is locked meanwhile: deleting in chunks lets other
     /// queries run in between. Expired messages are the oldest of each
     /// target: each chunk finds them at the start of its targets' ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_messages_before(&self, before: Timestamp, limit: usize) -> Result<usize> {
         if limit == 0 {
             return Ok(0);
@@ -413,6 +452,10 @@ fn message_time_text(msg: &Message) -> Result<(String, Option<String>)> {
         None => Timestamp::now(),
     };
     let text = match msg.command.as_str() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         "PRIVMSG" | "NOTICE" if msg.params.len() > 1 => Some(strip_ansi(&msg.params[1])),
         _ => None,
     };
@@ -423,7 +466,7 @@ fn message_time_text(msg: &Message) -> Result<(String, Option<String>)> {
 /// tokenizer: general categories L*, N* and Co.
 fn is_fts_token_char(c: char) -> bool {
     c.is_alphanumeric()
-        || matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)
+        || matches!(c as u32, 0xE000..=0xF8FF | 0xF_0000..=0xF_FFFD | 0x10_0000..=0x10_FFFD)
 }
 
 /// Quotes each token of a search query so that FTS5 operators are matched

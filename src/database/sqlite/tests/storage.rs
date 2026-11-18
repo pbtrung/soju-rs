@@ -1,11 +1,16 @@
 //! Storage regression scenarios.
 
 use super::*;
+use crate::database::{MessageOptions, Network, User};
 
 #[test]
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn message_ids_not_reused() {
     let db = db();

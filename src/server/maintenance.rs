@@ -13,7 +13,7 @@ use std::{
 };
 
 /// Message expiry deletes this many messages at a time, pausing for
-/// EXPIRY_CHUNK_PAUSE in between, so that users waiting on the database
+/// `EXPIRY_CHUNK_PAUSE` in between, so that users waiting on the database
 /// aren't blocked for the whole deletion.
 const EXPIRY_CHUNK_SIZE: usize = 2000;
 const EXPIRY_CHUNK_PAUSE: Duration = Duration::from_millis(10);

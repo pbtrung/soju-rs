@@ -39,6 +39,7 @@ impl Default for MultilineLimits {
 impl MultilineLimits {
     /// Parses a capability value such as "max-bytes=4096,max-lines=24".
     /// Missing or invalid limits default to soju's own upper bounds.
+    #[must_use]
     pub fn parse(v: &str) -> MultilineLimits {
         let mut limits = MultilineLimits::default();
         for kv in v.split(',') {
@@ -56,13 +57,15 @@ impl MultilineLimits {
     }
 
     /// Formats the limits as a capability value.
+    #[must_use]
     pub fn cap_value(&self) -> String {
         format!("max-bytes={},max-lines={}", self.max_bytes, self.max_lines)
     }
 }
 
 /// Returns the maximum length of the text of a PRIVMSG/NOTICE line, so that
-/// the full line fits in an IRC message with a prefix of prefix_len bytes.
+/// the full line fits in an IRC message with a prefix of `prefix_len` bytes.
+#[must_use]
 pub fn max_text_length(prefix_len: usize, command: &str, target: &str) -> usize {
     // ":<prefix> <command> <target> :<text>\r\n"
     let overhead = 1 + prefix_len + 1 + command.len() + 1 + target.len() + 2 + 2;
@@ -71,7 +74,7 @@ pub fn max_text_length(prefix_len: usize, command: &str, target: &str) -> usize 
         .max(MIN_LINE_LENGTH)
 }
 
-/// How to send a message to a peer, see prepare_text_message.
+/// How to send a message to a peer, see `prepare_text_message`.
 pub enum TextMessage {
     /// The message as is
     Single(Message),
@@ -95,23 +98,38 @@ pub fn prepare_text_message(
     if !matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") || msg.params.len() < 2 {
         return TextMessage::Single(msg);
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let breaks = msg.params[1].contains('\n');
     if !breaks && !multiline {
         return TextMessage::Single(msg);
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let max = max_text_length(prefix_len(), &msg.command, &msg.params[0]);
-    if multiline && (breaks || msg.params[1].len() > max) {
-        TextMessage::Batch(generate_multiline_batch(&msg, &batch_ref(), max))
-    } else if breaks {
-        TextMessage::Lines(generate_multiline_fallback(&msg, max))
-    } else {
-        TextMessage::Single(msg)
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        if multiline && (breaks || msg.params[1].len() > max) {
+            TextMessage::Batch(generate_multiline_batch(&msg, &batch_ref(), max))
+        } else if breaks {
+            TextMessage::Lines(generate_multiline_fallback(&msg, max))
+        } else {
+            TextMessage::Single(msg)
+        }
     }
 }
 
 /// Splits the text of a multiline message into lines of at most max bytes.
 /// Lines which had to be split are continued with lines flagged for
 /// concatenation.
+#[must_use]
 pub fn split_multiline(text: &str, max: usize) -> Vec<(&str, bool)> {
     let max = max.max(MIN_LINE_LENGTH);
     let mut lines = Vec::new();
@@ -130,8 +148,20 @@ pub fn split_multiline(text: &str, max: usize) -> Vec<(&str, bool)> {
             while !rest.is_char_boundary(i) {
                 i -= 1;
             }
-            lines.push((&rest[..i], concat));
-            rest = &rest[i..];
+            {
+                #![expect(
+                    clippy::string_slice,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                lines.push((&rest[..i], concat));
+            }
+            {
+                #![expect(
+                    clippy::string_slice,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                rest = &rest[i..];
+            }
             concat = true;
         }
     }
@@ -140,7 +170,12 @@ pub fn split_multiline(text: &str, max: usize) -> Vec<(&str, bool)> {
 
 /// Converts a multiline message into a draft/multiline batch. The tags of
 /// the message are carried by the BATCH command.
+#[must_use]
 pub fn generate_multiline_batch(msg: &Message, batch_ref: &str, max: usize) -> Vec<Message> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let target = msg.params[0].clone();
     let mut l = vec![
         Message::new(
@@ -153,17 +188,29 @@ pub fn generate_multiline_batch(msg: &Message, batch_ref: &str, max: usize) -> V
         )
         .with_tags(msg.tags.clone()),
     ];
-    l[0].prefix = msg.prefix.clone();
-    for (line, concat) in split_multiline(&msg.params[1], max) {
-        let mut tags = Tags::new();
-        tags.set("batch", batch_ref);
-        if concat {
-            tags.set(MULTILINE_CONCAT_TAG, "");
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
+        l[0].prefix.clone_from(&msg.prefix);
+    }
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        for (line, concat) in split_multiline(&msg.params[1], max) {
+            let mut tags = Tags::new();
+            tags.set("batch", batch_ref);
+            if concat {
+                tags.set(MULTILINE_CONCAT_TAG, "");
+            }
+            let mut m = Message::new(msg.command.clone(), vec![target.clone(), line.to_owned()])
+                .with_tags(tags);
+            m.prefix.clone_from(&msg.prefix);
+            l.push(m);
         }
-        let mut m = Message::new(msg.command.clone(), vec![target.clone(), line.to_owned()])
-            .with_tags(tags);
-        m.prefix = msg.prefix.clone();
-        l.push(m);
     }
     l.push(Message::new("BATCH", vec![format!("-{batch_ref}")]));
     l
@@ -172,22 +219,41 @@ pub fn generate_multiline_batch(msg: &Message, batch_ref: &str, max: usize) -> V
 /// Converts a multiline message into separate messages, for clients and
 /// servers which don't support draft/multiline. Only the first message
 /// carries the message ID. Blank lines are dropped.
+#[must_use]
 pub fn generate_multiline_fallback(msg: &Message, max: usize) -> Vec<Message> {
     let mut l = Vec::new();
-    for (line, _) in split_multiline(&msg.params[1], max) {
-        if line.is_empty() {
-            continue;
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        for (line, _) in split_multiline(&msg.params[1], max) {
+            if line.is_empty() {
+                continue;
+            }
+            let mut m = msg.clone();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                line.clone_into(&mut m.params[1]);
+            }
+            if !l.is_empty() {
+                m.tags.remove("msgid");
+            }
+            l.push(m);
         }
-        let mut m = msg.clone();
-        m.params[1] = line.to_owned();
-        if !l.is_empty() {
-            m.tags.remove("msgid");
-        }
-        l.push(m);
     }
     if l.is_empty() {
         l.push(msg.clone());
-        l[0].params[1].clear();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            l[0].params[1].clear();
+        }
     }
     l
 }
@@ -203,6 +269,7 @@ pub enum MultilineError {
 }
 
 impl MultilineError {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             MultilineError::MaxBytes => "MULTILINE_MAX_BYTES",
@@ -227,8 +294,9 @@ pub struct MultilineBatch {
 }
 
 impl MultilineBatch {
-    /// Starts a batch from its "BATCH +<ref> draft/multiline <target>"
+    /// Starts a batch from its `BATCH +<ref> draft/multiline <target>`
     /// opener.
+    #[must_use]
     pub fn new(opener: Message) -> MultilineBatch {
         let target = opener.param(2).to_owned();
         let error = if target.is_empty() {
@@ -270,9 +338,19 @@ impl MultilineBatch {
         {
             return Err(MultilineError::Invalid);
         }
-        if msg.params[0] != self.target {
-            return Err(MultilineError::InvalidTarget);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            if msg.params[0] != self.target {
+                return Err(MultilineError::InvalidTarget);
+            }
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         let line = &msg.params[1];
         let concat = msg.tags.contains(MULTILINE_CONCAT_TAG);
         if concat && line.is_empty() {
@@ -290,12 +368,16 @@ impl MultilineBatch {
             self.text.push('\n');
         }
         self.text.push_str(line);
-        self.command = msg.command.clone();
+        self.command.clone_from(&msg.command);
         Ok(())
     }
 
     /// Completes the batch, returning the logical message. Its tags are the
     /// ones of the BATCH opener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input violates the supported IRC syntax or message constraints.
     pub fn finish(self) -> Result<Message, MultilineError> {
         if let Some(e) = self.error {
             return Err(e);
@@ -337,6 +419,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn split() {
         assert_eq!(
             split_multiline("a\n\nb", 100),
@@ -355,6 +441,10 @@ mod tests {
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
     )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn assemble() {
         let opener = Message::parse("@label=x;+reply=1 :a BATCH +r draft/multiline #c").unwrap();
         let mut b = MultilineBatch::new(opener);
@@ -371,7 +461,7 @@ mod tests {
         assert_eq!(m.prefix_name(), "a");
 
         let batch = generate_multiline_batch(&m, "1", 100);
-        let lines: Vec<String> = batch.iter().map(|m| m.to_string()).collect();
+        let lines: Vec<String> = batch.iter().map(std::string::ToString::to_string).collect();
         assert_eq!(
             lines,
             [

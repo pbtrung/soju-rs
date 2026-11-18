@@ -38,7 +38,7 @@ pub use network::{Network, reattaches_detached_channel, relays_detached_message}
 pub use webpush::{send_web_push, send_web_push_to, web_push_subscriptions};
 
 pub const RETRY_CONNECT_MIN_DELAY: Duration = Duration::from_secs(60);
-pub const RETRY_CONNECT_MAX_DELAY: Duration = Duration::from_secs(10 * 60);
+pub const RETRY_CONNECT_MAX_DELAY: Duration = Duration::from_mins(10);
 pub const RETRY_CONNECT_JITTER: Duration = Duration::from_secs(60);
 
 pub(crate) const MAX_PENDING_WEB_PUSH_CHECKS: usize = 4;
@@ -106,7 +106,7 @@ pub enum Event {
         params: Vec<String>,
         tx: mpsc::UnboundedSender<UserRunMsg>,
     },
-    /// A line of output of a deferred BouncerServ command run by a
+    /// A line of output of a deferred `BouncerServ` command run by a
     /// downstream.
     ServiceReply {
         dc_id: u64,
@@ -124,11 +124,11 @@ pub enum Event {
         network_id: i64,
         sub: db::WebPushSubscription,
         res: Result<(), String>,
-        /// The ID of the check, see User::web_push_checks
+        /// The ID of the check, see `User::web_push_checks`
         check: u64,
     },
     /// Runs a function on the user's event loop, e.g. to apply the result of
-    /// a deferred BouncerServ command.
+    /// a deferred `BouncerServ` command.
     Run(Box<dyn FnOnce(&mut User) + Send>),
 }
 
@@ -149,10 +149,22 @@ pub struct UserHandle {
 }
 
 impl UserHandle {
+    #[must_use]
     pub fn send(&self, ev: Event) -> bool {
         self.tx.send(ev).is_ok()
     }
 
+    /// Sends an ephemeral notification when no response is required.
+    /// A stopped receiver needs neither replay nor retry of this notification.
+    pub(crate) fn notify(&self, event: Event) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "This is an ephemeral notification to a user that may already have stopped."
+        )]
+        let _ = self.tx.send(event);
+    }
+
+    #[must_use]
     pub fn record(&self) -> db::User {
         crate::state_lock::lock(&self.record).clone()
     }
@@ -171,16 +183,27 @@ impl UserHandle {
 /// The ident sent to upstream servers. For privacy reasons, it doesn't
 /// expose any meaningful user metadata: it's derived from a hash of the
 /// user ID.
+#[must_use]
 pub fn user_ident(u: &db::User) -> String {
     use sha2::Digest;
     let mut b = [0u8; 64];
     b[..8].copy_from_slice(&u.id.to_le_bytes());
     let h = sha2::Sha256::digest(b);
-    hex::encode(&h[..16])
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
+        hex::encode(&h[..16])
+    }
 }
 
 /// Returns the local address to use when connecting to a remote IP, for
 /// per-user source addresses. None means the OS picks one.
+///
+/// # Errors
+///
+/// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
 pub fn local_tcp_addr(
     upstream_user_ips: &[ipnet::IpNet],
     user_id: i64,
@@ -198,9 +221,9 @@ pub fn local_tcp_addr(
         .ok_or_else(|| anyhow!("user ID overflow"))?;
     let ip = match net.network() {
         IpAddr::V4(v4) => {
-            let v = (u32::from(v4) as u128)
+            let v = u128::from(u32::from(v4))
                 .checked_add(offset)
-                .filter(|v| *v <= u32::MAX as u128);
+                .filter(|v| *v <= u128::from(u32::MAX));
             v.and_then(|v| u32::try_from(v).ok())
                 .map(|v| IpAddr::V4(v.into()))
         }
@@ -281,34 +304,44 @@ impl User {
         }
     }
 
+    #[must_use]
     pub fn username(&self) -> &str {
         &self.record.username
     }
 
+    #[must_use]
     pub fn net_index(&self, id: i64) -> Option<usize> {
         self.networks.iter().position(|n| n.id() == id)
     }
 
+    #[must_use]
     pub fn dc_index(&self, id: u64) -> Option<usize> {
         self.downstreams.iter().position(|d| d.id == id)
     }
 
     /// Finds a network by address or name.
+    #[must_use]
     pub fn get_network(&self, name: &str) -> Option<usize> {
         self.networks.iter().position(|n| {
             n.record.addr == name || (!n.record.name.is_empty() && n.record.name == name)
         })
     }
 
+    #[must_use]
     pub fn has_persistent_msg_store(&self) -> bool {
         !self.msg_store.is_memory()
     }
 
+    #[must_use]
     pub fn has_chathistory_store(&self) -> bool {
         self.msg_store.supports_chathistory()
     }
 
     /// Updates the user record and applies side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn update_user(&mut self, update: impl FnOnce(&mut db::User) -> Result<()>) -> Result<()> {
         let mut record = self.record.clone();
         update(&mut record)?;
@@ -318,10 +351,10 @@ impl User {
         let enabled_updated = self.record.enabled != record.enabled;
         // The stored password hash may have been upgraded since the record
         // was loaded: only write it when it's changed
-        let res = if self.record.password != record.password {
-            self.srv.db.store_user(&mut record)
-        } else {
+        let res = if self.record.password == record.password {
             self.srv.db.store_user_keep_password(&record)
+        } else {
+            self.srv.db.store_user(&mut record)
         };
         res.map_err(|e| anyhow!("failed to update user {:?}: {e}", self.record.username))?;
         self.record = record;
@@ -410,7 +443,7 @@ pub fn dcs_for(
     dcs.iter_mut().filter(move |d| d.network_id == Some(net_id))
 }
 
-/// Runs the rest of a BouncerServ command run by a downstream, replying to
+/// Runs the rest of a `BouncerServ` command run by a downstream, replying to
 /// it through the user's event loop.
 pub fn spawn_deferred_service_command(
     tx: mpsc::UnboundedSender<Event>,
@@ -437,6 +470,7 @@ pub fn spawn_deferred_service_command(
     });
 }
 
+#[must_use]
 pub fn dc_ids_for(dcs: &[DownstreamConn], net_id: i64) -> Vec<u64> {
     dcs.iter()
         .filter(|d| d.network_id == Some(net_id))
@@ -452,6 +486,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn local_addr() {
         let nets: Vec<ipnet::IpNet> = vec![

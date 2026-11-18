@@ -43,7 +43,13 @@ fn changes(
     }
     for (i, receipt) in receipts.iter().enumerate() {
         if let Some((id, message)) = existing.remove(&receipt.target) {
-            ids[i] = id;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                ids[i] = id;
+            }
             if message != receipt.internal_msg_id {
                 changes.push(Change::Update(id, i));
             }
@@ -69,25 +75,49 @@ fn execute_changes(
                 conn.execute("DELETE FROM DeliveryReceipt WHERE id=?", [id])?;
             }
             Change::Update(id, i) => {
-                conn.execute(
-                    "UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?",
-                    params![receipts[i].internal_msg_id, id],
-                )?;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    conn.execute(
+                        "UPDATE DeliveryReceipt SET internal_msgid=? WHERE id=?",
+                        params![receipts[i].internal_msg_id, id],
+                    )?;
+                }
             }
             Change::Insert(i) => {
-                conn.execute(
-                    "INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) \
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    conn.execute(
+                        "INSERT INTO DeliveryReceipt(id,network,target,client,internal_msgid) \
                     VALUES(?,?,?,?,?)",
-                    params![
-                        if ids[i] == 0 { None } else { Some(ids[i]) },
-                        network,
-                        receipts[i].target,
-                        null_string(client),
-                        receipts[i].internal_msg_id
-                    ],
-                )?;
-                if ids[i] == 0 {
-                    ids[i] = conn.last_insert_rowid();
+                        params![
+                            if ids[i] == 0 { None } else { Some(ids[i]) },
+                            network,
+                            receipts[i].target,
+                            null_string(client),
+                            receipts[i].internal_msg_id
+                        ],
+                    )?;
+                }
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    if ids[i] == 0 {
+                        {
+                            #![expect(
+                                clippy::indexing_slicing,
+                                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                            )]
+                            ids[i] = conn.last_insert_rowid();
+                        }
+                    }
                 }
             }
         }
@@ -96,6 +126,10 @@ fn execute_changes(
 }
 
 impl Database {
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_delivery_receipts(&self, network_id: i64) -> Result<Vec<DeliveryReceipt>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -114,6 +148,10 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_client_delivery_receipts(
         &self,
         network_id: i64,
@@ -169,6 +207,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn get_read_receipt(&self, network_id: i64, name: &str) -> Result<Option<ReadReceipt>> {
         let conn = self.conn();
         let res = conn
@@ -189,6 +231,10 @@ impl Database {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_read_receipt(&self, network_id: i64, receipt: &mut ReadReceipt) -> Result<()> {
         let conn = self.conn();
         let ts = time_to_sql(receipt.timestamp);

@@ -1,7 +1,21 @@
 //! Messages relayed to downstreams, batches, errors and the message store.
 
-use super::*;
+use super::{
+    Duration, ERR_ERRONEUSNICKNAME, ERR_NEEDMOREPARAMS, ERR_NICKCOLLISION, ERR_NICKNAMEINUSE,
+    ERR_NOPERMFORHOST, ERR_NOSUCHNICK, ERR_NOSUCHSERVER, ERR_PASSWDMISMATCH, ERR_UNAVAILRESOURCE,
+    ERR_UNKNOWNCOMMAND, ERR_UNKNOWNERROR, ERR_YOUREBANNEDCREEP, Message, RPL_CREATED,
+    RPL_GLOBALUSERS, RPL_LOCALUSERS, RPL_LUSERCHANNELS, RPL_LUSERCLIENT, RPL_LUSERME, RPL_LUSEROP,
+    RPL_LUSERUNKNOWN, RPL_MOTD, RPL_MOTDSTART, RPL_NOWAWAY, RPL_STATSBLINE, RPL_STATSDLINE,
+    RPL_STATSPING, RPL_STATSVLINE, RPL_TRYAGAIN, RPL_UNAWAY, RPL_YOURHOST, RegistrationError,
+    Result, STORABLE_MESSAGE_TAGS, Timestamp, UpstreamBatch, User, bail, current_pending_command,
+    db, dcs_for, dequeue_command, downstream, end_command_early, forward_msg_by_id, is_our_nick,
+    logf, msg, need_params, parse_label, update_channel_auto_detach, xirc,
+};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 /// Handles messages, batches and errors. Returns false if the message isn't one
 /// of them.
 pub(super) fn handle_message(
@@ -12,7 +26,15 @@ pub(super) fn handle_message(
     downstream_label: &str,
     label: &str,
 ) -> Result<bool> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let cm = u.networks[ni].casemap;
     let prefix_name = msg.prefix_name().to_owned();
 
@@ -25,6 +47,10 @@ pub(super) fn handle_message(
             need_params(msg, if is_text { 2 } else { 1 })?;
             let uc = uc!(u, ni);
             // remove STATUSMSG sigils from target
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let target = msg.params[0]
                 .trim_start_matches(|c| uc.available_status_msg.contains(c))
                 .to_owned();
@@ -73,13 +99,23 @@ pub(super) fn handle_message(
             let self_msg = is_our_nick(cm, uc, &prefix_name);
             let mut highlight = false;
             let mut detached = false;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let ch = (u.networks[ni].channels.get(&buffer_name))
                 .map(|c| (c.detached, c.detach_on, c.relay_detached));
             if let Some((was_detached, detach_on, relay_detached)) = ch
                 && is_text
                 && !self_msg
             {
-                highlight = u.networks[ni].is_highlight(&u.record, msg);
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    highlight = u.networks[ni].is_highlight(&u.record, msg);
+                }
                 if was_detached {
                     handle_detached_message(u, ni, &buffer_name, msg, highlight);
                 }
@@ -90,6 +126,10 @@ pub(super) fn handle_message(
                     update_channel_auto_detach(u, ni, &buffer_name);
                 }
                 // The message may have reattached the channel
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let (is_detached, relay_detached) = (u.networks[ni].channels.get(&buffer_name))
                     .map_or((was_detached, relay_detached), |c| {
                         (c.detached, c.relay_detached)
@@ -106,6 +146,10 @@ pub(super) fn handle_message(
                 && u.has_web_push_subscriptions(net_id);
 
             let source_cm = cm(&prefix_name);
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let mt = u.networks[ni].message_target(&source_cm);
             if mt.muted || mt.blocked {
                 send_web_push = false;
@@ -123,6 +167,10 @@ pub(super) fn handle_message(
             let private_mention = direct_message
                 && msg.command == "PRIVMSG"
                 && (!msg.param(1).starts_with('\u{1}') || msg.param(1).starts_with("\u{1}ACTION"));
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let mention = is_text
                 && !self_msg
                 && !blocked
@@ -141,7 +189,15 @@ pub(super) fn handle_message(
                 let target_cm = cm(&buffer_name);
                 let srv = u.srv.clone();
                 let user_id = u.record.id;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let logger = u.networks[ni].logger.clone();
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let push_targets = u.networks[ni].push_targets.clone();
                 let buffer = buffer_name.clone();
                 let m = msg.clone();
@@ -173,6 +229,10 @@ pub(super) fn handle_message(
         }
         "BATCH" => {
             need_params(msg, 1)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let tag = msg.params[0].clone();
             if let Some(tag) = tag.strip_prefix('+') {
                 let uc = uc!(u, ni);
@@ -238,6 +298,10 @@ pub(super) fn handle_message(
             // one argument WHOIS variant errors with NOSUCHNICK
             // two argument WHOIS variant errors with NOSUCHSERVER
             need_params(msg, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let nick = &msg.params[1];
             let is_whois_target = current_pending_command(u, ni, "WHOIS")
                 .and_then(|cmd| cmd.msg.params.last())
@@ -246,7 +310,13 @@ pub(super) fn handle_message(
                 if let Some((dc_id, _)) = end_command_early(u, ni, "WHOIS")
                     && let Some(i) = u.dc_index(dc_id)
                 {
-                    u.downstreams[i].send_message(msg.clone());
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        u.downstreams[i].send_message(msg.clone());
+                    }
                 }
             } else {
                 forward_msg_by_id(u, net_id, downstream_id, msg);
@@ -254,6 +324,10 @@ pub(super) fn handle_message(
         }
         ERR_UNKNOWNERROR | ERR_UNKNOWNCOMMAND | ERR_NEEDMOREPARAMS | RPL_TRYAGAIN => {
             need_params(msg, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let command = msg.params[1].clone();
             if let Some((dc_id, _)) = end_command_early(u, ni, &command)
                 && downstream_id == 0
@@ -270,7 +344,15 @@ pub(super) fn handle_message(
         }
         "FAIL" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let command = msg.params[0].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let code = msg.params[1].clone();
             if !uc!(u, ni).registered && command == "*" && code == "ACCOUNT_REQUIRED" {
                 return Err(RegistrationError(msg.clone()).into());
@@ -298,7 +380,13 @@ pub(super) fn handle_message(
         }
         "ERROR" => {
             need_params(msg, 1)?;
-            bail!("fatal server error: {}", msg.params[0]);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                bail!("fatal server error: {}", msg.params[0]);
+            }
         }
         ERR_NICKNAMEINUSE | ERR_PASSWDMISMATCH | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION
         | ERR_UNAVAILRESOURCE | ERR_NOPERMFORHOST | ERR_YOUREBANNEDCREEP => {
@@ -328,16 +416,22 @@ pub(super) fn handle_message(
                 ERR_NICKNAMEINUSE | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION | ERR_UNAVAILRESOURCE
             );
             let uc = uc!(u, ni);
-            if nick_error
-                && uc.registered
-                && msg.params.len() >= 2
-                && !uc.pending_regain_nick.is_empty()
-                && cm(&uc.pending_regain_nick) == cm(&msg.params[1])
             {
-                // This message comes from our own logic to try to regain our
-                // desired nick, don't relay to downstream connections
-                uc.pending_regain_nick.clear();
-                return Ok(true);
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                if nick_error
+                    && uc.registered
+                    && msg.params.len() >= 2
+                    && !uc.pending_regain_nick.is_empty()
+                    && cm(&uc.pending_regain_nick) == cm(&msg.params[1])
+                {
+                    // This message comes from our own logic to try to regain our
+                    // desired nick, don't relay to downstream connections
+                    uc.pending_regain_nick.clear();
+                    return Ok(true);
+                }
             }
             if !uc!(u, ni).registered {
                 return Err(RegistrationError(msg.clone()).into());
@@ -350,6 +444,10 @@ pub(super) fn handle_message(
 }
 
 fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message, highlight: bool) {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni];
     let Some(ch) = net.channels.get(name) else {
         return;
@@ -375,6 +473,10 @@ const MENTION_FLUSH_DELAY: Duration = Duration::from_secs(1);
 /// Records the latest mention of a conversation, stored by one background
 /// task per network along with the others of the period.
 fn record_mention(u: &mut User, ni: usize, target_cm: String, time: Timestamp) {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni];
     let mut pending = crate::state_lock::lock(&net.pending_mentions);
     let first = pending.is_empty();
@@ -420,6 +522,10 @@ pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> Strin
     if entity.starts_with('$') {
         return String::new();
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &mut u.networks[ni];
     let entity_cm = net.casemap(entity);
     if entity_cm == "nickserv" {
@@ -459,7 +565,7 @@ pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> Strin
 /// Appends a message to the logs and forwards it to connected downstream
 /// connections.
 ///
-/// origin_id is the ID of the downstream that sent the message. If it's not
+/// `origin_id` is the ID of the downstream that sent the message. If it's not
 /// 0 and the origin doesn't support echo-message, the message is forwarded
 /// to all connections except the origin.
 pub fn produce(
@@ -470,13 +576,17 @@ pub fn produce(
     origin_id: u64,
     blocked: bool,
 ) {
-    let msg_id = if !target.is_empty() {
-        append_log(u, ni, target, msg)
-    } else {
+    let msg_id = if target.is_empty() {
         String::new()
+    } else {
+        append_log(u, ni, target, msg)
     };
 
     // Don't forward messages if it's a detached channel
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni];
     let detached = net.is_detached(target);
     let net_id = net.id();

@@ -21,6 +21,7 @@ fn escape_tag_value(v: &str, out: &mut impl fmt::Write) -> fmt::Result {
 }
 
 /// Parses an encoded tag value.
+#[must_use]
 pub fn parse_tag_value(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     let mut chars = v.chars();
@@ -43,17 +44,19 @@ pub fn parse_tag_value(v: &str) -> String {
     out
 }
 
-/// IRCv3 message tags. Insertion order is preserved.
+/// `IRCv3` message tags. Insertion order is preserved.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tags(Vec<(String, String)>);
 
 impl Tags {
+    #[must_use]
     pub fn new() -> Tags {
         Tags(Vec::new())
     }
 
     /// Parses a tag string (without the leading '@'). A duplicate key keeps
     /// its first position and its last value.
+    #[must_use]
     pub fn parse(s: &str) -> Tags {
         let split = |tag: &'_ str| match tag.split_once('=') {
             Some((k, v)) => (k.to_owned(), parse_tag_value(v)),
@@ -73,6 +76,10 @@ impl Tags {
         for tag in s.split(';') {
             let (k, v) = split(tag);
             match index.entry(k) {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
                 Entry::Occupied(e) => tags.0[*e.get()].1 = v,
                 Entry::Vacant(e) => {
                     tags.0.push((e.key().clone(), v));
@@ -83,6 +90,7 @@ impl Tags {
         tags
     }
 
+    #[must_use]
     pub fn get(&self, k: &str) -> Option<&str> {
         self.0
             .iter()
@@ -91,10 +99,12 @@ impl Tags {
     }
 
     /// Returns the value of a tag, or an empty string if it's missing.
+    #[must_use]
     pub fn get_or_empty(&self, k: &str) -> &str {
         self.get(k).unwrap_or("")
     }
 
+    #[must_use]
     pub fn contains(&self, k: &str) -> bool {
         self.0.iter().any(|(key, _)| key == k)
     }
@@ -118,10 +128,12 @@ impl Tags {
         self.0.retain(|(k, v)| f(k, v));
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -190,6 +202,7 @@ impl Prefix {
     }
 
     /// The length of the formatted prefix, without formatting it.
+    #[must_use]
     pub fn formatted_len(&self) -> usize {
         let mut n = self.name.len();
         if !self.user.is_empty() {
@@ -201,6 +214,7 @@ impl Prefix {
         n
     }
 
+    #[must_use]
     pub fn parse(s: &str) -> Prefix {
         let (mut name, host) = match s.split_once('@') {
             Some((n, h)) => (n, h),
@@ -269,22 +283,29 @@ impl Message {
         }
     }
 
+    #[must_use]
     pub fn with_prefix(mut self, prefix: Prefix) -> Message {
         self.prefix = Some(prefix);
         self
     }
 
+    #[must_use]
     pub fn with_tags(mut self, tags: Tags) -> Message {
         self.tags = tags;
         self
     }
 
+    #[must_use]
     pub fn with_tag(mut self, k: impl Into<String>, v: impl Into<String>) -> Message {
         self.tags.set(k, v);
         self
     }
 
     /// Parses a raw IRC line. Trailing CR/LF characters are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input violates the supported IRC syntax or message constraints.
     pub fn parse(line: &str) -> Result<Message, ParseError> {
         let mut line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
@@ -334,18 +355,19 @@ impl Message {
     }
 
     /// Returns the name of the message source, or an empty string.
+    #[must_use]
     pub fn prefix_name(&self) -> &str {
-        self.prefix.as_ref().map(|p| p.name.as_str()).unwrap_or("")
+        self.prefix.as_ref().map_or("", |p| p.name.as_str())
     }
 
     /// Returns the i'th parameter or an empty string.
     pub fn param(&self, i: usize) -> &str {
-        self.params.get(i).map(String::as_str).unwrap_or("")
+        self.params.get(i).map_or("", String::as_str)
     }
 
     /// Returns the last parameter or an empty string.
     pub fn trailing(&self) -> &str {
-        self.params.last().map(String::as_str).unwrap_or("")
+        self.params.last().map_or("", String::as_str)
     }
 }
 
@@ -465,7 +487,7 @@ mod tests {
         let m = Message::parse("CMD :").unwrap();
         assert_eq!(m.params, vec![""]);
         let m = Message::parse("PING").unwrap();
-        assert!(m.params.is_empty());
+        assert_eq!(m.params, [] as [std::string::String; 0]);
     }
 
     #[test]

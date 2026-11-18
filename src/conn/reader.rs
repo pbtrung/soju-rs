@@ -8,10 +8,14 @@ use anyhow::Result;
 impl ConnReader {
     /// Reads an incoming message. Ok(None) is returned when there are no
     /// more messages (EOF or the connection was closed).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub async fn read_message(&mut self) -> Result<Option<Message>> {
         let res = tokio::select! {
             res = self.reader.read_raw(&mut self.line_buf) => res,
-            _ = self.cancel.cancelled() => return Ok(None),
+            () = self.cancel.cancelled() => return Ok(None),
         };
         if let Ok(Some(msg)) = &res {
             debugf!(
@@ -23,12 +27,16 @@ impl ConnReader {
         res
     }
 
-    /// Like read_message, but the message is returned once less than
-    /// MAX_INPUT_IN_FLIGHT messages previously returned by this function
+    /// Like `read_message`, but the message is returned once less than
+    /// `MAX_INPUT_IN_FLIGHT` messages previously returned by this function
     /// still have their permit alive. The permit is meant to be dropped once
     /// the message is processed. PING and PONG use a separate small pool:
     /// the connection stays alive while its other input waits without
     /// allowing an unbounded keepalive backlog. Cancel-safe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub async fn read_message_limited(&mut self) -> Result<Option<(Message, InputPermit)>> {
         if self.pending.is_none() {
             match self.read_message().await? {
@@ -47,7 +55,7 @@ impl ConnReader {
         };
         let permit = tokio::select! {
             p = input.clone().acquire_owned() => Some(p?),
-            _ = self.cancel.cancelled() => return Ok(None),
+            () = self.cancel.cancelled() => return Ok(None),
         };
         Ok(self.pending.take().map(|msg| (msg, permit)))
     }

@@ -1,6 +1,14 @@
 //! Connecting to upstream servers, and reconnecting.
 
-use super::*;
+use sha2::Digest;
+
+use super::{
+    Arc, AtomicBool, Backoffer, BoxIo, CONNECT_TIMEOUT, CancellationToken, Conn, ConnOutcome,
+    Duration, Event, IndexedRandom, Instant, IpAddr, KEEP_ALIVE, Logger, Mutex, NEXT_CONN_ID,
+    NewConn, Ordering, OutcomeError, REGISTER_TIMEOUT, RateLimit, RateLimitFlag, Result, Server,
+    SocketAddr, TlsHandshakeError, UPSTREAM_MESSAGE_BURST, UPSTREAM_MESSAGE_DELAY, anyhow, bail,
+    db, logf, metrics, mpsc, oneshot, split_host_port,
+};
 
 pub struct RunnerParams {
     pub srv: Arc<Server>,
@@ -15,6 +23,10 @@ pub struct RunnerParams {
 
 /// Connects to the upstream server and reconnects with exponential backoff,
 /// until the network is stopped.
+///
+/// # Panics
+///
+/// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
 pub async fn run_network(p: RunnerParams) {
     let mut last_try: Option<Instant> = None;
     #[expect(
@@ -35,9 +47,9 @@ pub async fn run_network(p: RunnerParams) {
         }
 
         let delay = backoff.next_delay();
-        let elapsed = last_try.map(|t| t.elapsed()).unwrap_or(Duration::MAX);
+        let elapsed = last_try.map_or(Duration::MAX, |t| t.elapsed());
         if delay > elapsed {
-            let delay = delay - elapsed;
+            let delay = delay.saturating_sub(elapsed);
             let addr = crate::state_lock::lock(&p.record).addr.clone();
             logf!(
                 p.logger,
@@ -45,9 +57,9 @@ pub async fn run_network(p: RunnerParams) {
                 delay.as_secs()
             );
             tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = p.stop.cancelled() => return,
-                _ = p.tx.closed() => return,
+                () = tokio::time::sleep(delay) => {}
+                () = p.stop.cancelled() => return,
+                () = p.tx.closed() => return,
             }
         }
         last_try = Some(Instant::now());
@@ -84,6 +96,10 @@ pub async fn run_network(p: RunnerParams) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeError> {
     let to_err = |e: anyhow::Error| {
         let text = format!("failed to connect: {e}");
@@ -100,7 +116,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
     let identd = p.srv.identd();
     let connected = tokio::select! {
         res = tokio::time::timeout(CONNECT_TIMEOUT, connect(p, record, &logger, identd.as_deref())) => res,
-        _ = p.stop.cancelled() => return Ok(()),
+        () = p.stop.cancelled() => return Ok(()),
     };
     let (io, _identd_entry) = match connected {
         Ok(Ok(c)) => c,
@@ -156,7 +172,7 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
     let read_error = loop {
         let res = tokio::select! {
             res = reader.read_message_limited() => res,
-            _ = tokio::time::sleep_until(register_deadline), if !registered.is_cancelled() => {
+            () = tokio::time::sleep_until(register_deadline), if !registered.is_cancelled() => {
                 // Registration may have completed after this select! began
                 if registered.is_cancelled() {
                     continue;
@@ -164,11 +180,11 @@ async fn run_conn(p: &RunnerParams, record: &db::Network) -> Result<(), OutcomeE
                 conn.close();
                 Err(anyhow!("registration timed out"))
             }
-            _ = p.stop.cancelled() => {
+            () = p.stop.cancelled() => {
                 conn.close();
                 Ok(None)
             }
-            _ = p.tx.closed() => {
+            () = p.tx.closed() => {
                 conn.close();
                 Ok(None)
             }
@@ -223,7 +239,11 @@ async fn resolve_ip_addr(host: &str) -> Result<IpAddr> {
         .await?
         .map(|a| a.ip())
         .collect();
-    let v6: Vec<IpAddr> = addrs.iter().copied().filter(|a| a.is_ipv6()).collect();
+    let v6: Vec<IpAddr> = addrs
+        .iter()
+        .copied()
+        .filter(std::net::IpAddr::is_ipv6)
+        .collect();
     let pool = if v6.is_empty() { addrs } else { v6 };
     pool.choose(&mut rand::rng())
         .copied()
@@ -232,9 +252,14 @@ async fn resolve_ip_addr(host: &str) -> Result<IpAddr> {
 
 /// Formats an OS error like Go's syscall.Errno: the C error message with a
 /// lowercase first letter, without Rust's " (os error N)" suffix.
+#[must_use]
 pub fn go_errno_message(e: &std::io::Error) -> String {
     let s = e.to_string();
     let s = match s.rfind(" (os error ") {
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Some(i) => &s[..i],
         None => &s,
     };
@@ -250,7 +275,9 @@ async fn connect_tcp(addr: &str) -> Result<tokio::net::TcpStream> {
     let host = crate::conn::host_of(addr);
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host(addr)
         .await
-        .map_err(|_| anyhow!("dial tcp: lookup {host}: no such host"))?
+        .map_err(|error| {
+            anyhow::anyhow!(error).context(anyhow!("dial tcp: lookup {host}: no such host"))
+        })?
         .collect();
     let mut last_err = anyhow!("dial tcp: lookup {host}: no such host");
     for a in addrs {
@@ -330,7 +357,6 @@ async fn connect<'a>(
                 let Some(key) = &record.sasl.external_key else {
                     bail!("missing private key for authentication");
                 };
-                use sha2::Digest;
                 logf!(
                     logger,
                     "using TLS client certificate {}",

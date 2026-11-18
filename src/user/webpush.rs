@@ -42,9 +42,19 @@ impl User {
 
     /// Broadcasts a Web Push notification for a message, in the background.
     pub fn broadcast_web_push(&mut self, ni: usize, msg: Message) {
-        if !self.has_web_push_subscriptions(self.networks[ni].id()) {
-            return;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if !self.has_web_push_subscriptions(self.networks[ni].id()) {
+                return;
+            }
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &self.networks[ni];
         let (srv, user_id, net_id) = (self.srv.clone(), self.record.id, net.id());
         let logger = net.logger.clone();
@@ -151,6 +161,10 @@ pub async fn send_web_push_to(
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error for invalid keys, rejected endpoints, cryptographic errors, or HTTP delivery/setup failures.
 pub async fn send_web_push(
     sender: &crate::webpush::Sender,
     sub: &db::WebPushSubscription,

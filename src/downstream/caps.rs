@@ -1,6 +1,9 @@
 //! Capabilities and ISUPPORT tokens advertised to downstream connections.
 
-use super::*;
+use super::{
+    CaseMapping, DownstreamConn, ERR_INVALIDCAPCMD, Isupport, Message, Prefix, Result,
+    UpstreamConn, User, anyhow, dc_network, irc_error, msg, need_params, xirc,
+};
 
 /// Always-supported downstream capabilities.
 pub(super) const PERMANENT_DOWNSTREAM_CAPS: &[(&str, &str)] = &[
@@ -123,7 +126,7 @@ impl DownstreamConn {
     /// Sends a CAP LS or LIST reply. With CAP 302, it's split over several
     /// lines if needed, all but the last marked with "*", so that each line
     /// fits in an IRC message.
-    fn send_cap_list(&mut self, subcmd: &str, caps: &[String], prefix: Prefix) {
+    fn send_cap_list(&mut self, subcmd: &str, caps: &[String], prefix: &Prefix) {
         // Room for ":<prefix> CAP <nick> <subcmd> * :" in 512 bytes
         // A long bouncer-only nick must not underflow: keep a minimum
         let max = xirc::MAX_MESSAGE_LENGTH
@@ -154,17 +157,34 @@ impl DownstreamConn {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+    )]
+    ///
+    /// # Errors
+    ///
+    /// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
     pub fn handle_cap(&mut self, msg: &Message) -> Result<()> {
         need_params(msg, 1)?;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         let cmd = msg.params[0].to_uppercase();
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         let args = &msg.params[1..];
         let p = self.srv.prefix();
         match cmd.as_str() {
             "LS" => {
                 if let Some(v) = args.first() {
-                    self.cap_version = v
-                        .parse()
-                        .map_err(|_| anyhow!("strconv.Atoi: parsing {v:?}: invalid syntax"))?;
+                    self.cap_version = v.parse::<i64>().map_err(|error| {
+                        anyhow::anyhow!(error)
+                            .context(anyhow!("strconv.Atoi: parsing {v:?}: invalid syntax"))
+                    })?;
                 }
                 if !self.registered && self.cap_version >= 302 {
                     // Let downstream show everything it supports, and trim
@@ -190,7 +210,7 @@ impl DownstreamConn {
                         }
                     })
                     .collect();
-                self.send_cap_list("LS", &caps, p);
+                self.send_cap_list("LS", &caps, &p);
                 if self.cap_version >= 302 {
                     // CAP version 302 implicitly enables cap-notify
                     self.caps.set_enabled("cap-notify", true);
@@ -203,7 +223,7 @@ impl DownstreamConn {
             }
             "LIST" => {
                 let caps: Vec<String> = self.caps.enabled.iter().cloned().collect();
-                self.send_cap_list("LIST", &caps, p);
+                self.send_cap_list("LIST", &caps, &p);
             }
             "REQ" => {
                 let Some(arg) = args.first() else {
@@ -286,7 +306,15 @@ pub struct IsupportCtx<'a> {
 
 /// The ISUPPORT tokens of a registered downstream connection.
 pub(super) fn build_user_isupport(u: &User, i: usize) -> Isupport {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &u.downstreams[i];
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let ctx = IsupportCtx {
         has_user: true,
         network_id: dc.network_id,
@@ -296,6 +324,7 @@ pub(super) fn build_user_isupport(u: &User, i: usize) -> Isupport {
     build_isupport(dc, &ctx)
 }
 
+#[must_use]
 pub fn build_isupport(dc: &DownstreamConn, ctx: &IsupportCtx) -> Isupport {
     let cfg = dc.srv.config();
     let mut isupport = Isupport::new();
@@ -368,8 +397,20 @@ pub fn send_isupport(dc: &mut DownstreamConn, isupport: &Isupport) {
 
 pub fn update_supported_caps(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let uc = net_idx.and_then(|ni| u.networks[ni].upstream());
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let has_network = u.downstreams[i].network_id.is_some();
     let chathistory = u.has_chathistory_store();
 
@@ -378,7 +419,7 @@ pub fn update_supported_caps(u: &mut User, dc_id: u64) {
         .map(|(cap, v)| (*cap, *v, uc.is_none_or(|uc| uc.caps.is_enabled(cap))))
         .collect();
     let sasl_plain = uc.is_some_and(|uc| uc.supports_sasl("PLAIN"));
-    let multiline = uc.and_then(|uc| uc.multiline_limits());
+    let multiline = uc.and_then(super::super::upstream::UpstreamConn::multiline_limits);
     let account_registration = uc.and_then(|uc| {
         if uc.caps.is_enabled("draft/account-registration") {
             Some(
@@ -393,6 +434,10 @@ pub fn update_supported_caps(u: &mut User, dc_id: u64) {
         }
     });
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     for (cap, v, ok) in supported {
         if ok {
@@ -435,6 +480,10 @@ pub fn update_supported_caps(u: &mut User, dc_id: u64) {
 
 pub fn update_isupport(u: &mut User, dc_id: u64) {
     let Some(i) = u.dc_index(dc_id) else { return };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &u.downstreams[i];
     if !dc.registered && !dc.caps.is_enabled("draft/extended-isupport") {
         return;
@@ -454,6 +503,10 @@ pub fn update_isupport(u: &mut User, dc_id: u64) {
         }
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     send_isupport(dc, &changed);
     dc.isupport = isupport;

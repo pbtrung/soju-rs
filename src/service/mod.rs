@@ -1,4 +1,4 @@
-//! BouncerServ, the IRC service used to manage the bouncer (port of
+//! `BouncerServ`, the IRC service used to manage the bouncer (port of
 //! upstream's service.go).
 
 use std::future::Future;
@@ -22,12 +22,23 @@ mod network;
 mod server;
 mod user;
 
-use auth::*;
-use channel::*;
+use auth::{
+    handle_certfp_fingerprints, handle_certfp_generate, handle_device_cert_create,
+    handle_device_cert_delete, handle_device_cert_status, handle_sasl_reset, handle_sasl_set_plain,
+    handle_sasl_status,
+};
+use channel::{
+    handle_channel_create, handle_channel_delete, handle_channel_status, handle_channel_update,
+};
 pub use duration::*;
-use network::*;
-use server::*;
-use user::*;
+use network::{
+    handle_network_create, handle_network_delete, handle_network_info, handle_network_quote,
+    handle_network_status, handle_network_update,
+};
+use server::{handle_server_debug, handle_server_notice, handle_server_status};
+use user::{
+    handle_user_create, handle_user_delete, handle_user_run, handle_user_status, handle_user_update,
+};
 
 /// Where a service command runs from, and how its output is collected.
 pub struct ServiceContext {
@@ -153,7 +164,8 @@ async fn run_on_user<T: Send + 'static>(
     if tx.send(ev).is_err() {
         bail!("user stopped");
     }
-    rx.await.map_err(|_| anyhow!("user stopped"))?
+    rx.await
+        .map_err(|error| anyhow::anyhow!(error).context(anyhow!("user stopped")))?
 }
 
 /// How long a downstream's command may wait on other users, like upstream's
@@ -214,6 +226,10 @@ impl Command {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 fn commands() -> &'static [Command] {
     use std::sync::OnceLock;
     static COMMANDS: OnceLock<Vec<Command>> = OnceLock::new();
@@ -502,11 +518,19 @@ fn append_help(
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error for invalid command arguments, unavailable user/network state, or a failed backend operation.
 pub fn handle_service_privmsg(u: &mut User, ctx: &mut ServiceContext, text: &str) -> Result<()> {
     let words = split_words(text).map_err(|e| anyhow!("failed to parse command: {e}"))?;
     handle_service_command(u, ctx, &words)
 }
 
+///
+/// # Errors
+///
+/// Returns an error for invalid command arguments, unavailable user/network state, or a failed backend operation.
 pub fn handle_service_command(
     u: &mut User,
     ctx: &mut ServiceContext,
@@ -516,6 +540,10 @@ pub fn handle_service_command(
 }
 
 /// Runs a command without a user (from the admin socket).
+///
+/// # Errors
+///
+/// Returns an error for invalid command arguments, unavailable user/network state, or a failed backend operation.
 pub fn handle_global_service_command(ctx: &mut ServiceContext, text: &str) -> Result<()> {
     let words = split_words(text).map_err(|e| anyhow!("failed to parse command: {e}"))?;
     run_command(None, ctx, &words)
@@ -533,22 +561,42 @@ fn run_command(u: Option<&mut User>, ctx: &mut ServiceContext, words: &[String])
 
     let Some(handle) = cmd.handle else {
         if !cmd.children.is_empty() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
             let prefix = &words[..words.len() - params.len()];
             let mut l = Vec::new();
             append_help(&cmd.children, prefix, ctx.admin, u.is_none(), &mut l);
             ctx.print(format!("available commands: {}", l.join(", ")));
             return Ok(());
         }
-        logf!(
-            ctx.srv.logger,
-            "command without handler and subcommands invoked: {}",
-            words[0]
-        );
-        bail!("command {:?} not found", words[0]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            logf!(
+                ctx.srv.logger,
+                "command without handler and subcommands invoked: {}",
+                words[0]
+            );
+        }
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            bail!("command {:?} not found", words[0]);
+        }
     };
 
     match handle(u, ctx, params) {
         Err(e) if e.downcast_ref::<FlagError>() == Some(&FlagError::Help) => {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
             let name = words[..words.len() - params.len()].join(" ");
             bail!("unsupported flag (type \"help {name}\" for a help message)");
         }
@@ -556,27 +604,35 @@ fn run_command(u: Option<&mut User>, ctx: &mut ServiceContext, words: &[String])
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Service dispatch uses a uniform Option<&mut User> callback signature, including read-only commands."
+)]
 fn handle_help(u: Option<&mut User>, ctx: &mut ServiceContext, params: &[String]) -> Result<()> {
     let global = u.is_none();
-    if !params.is_empty() {
+    if params.is_empty() {
+        let mut l = Vec::new();
+        append_help(commands(), &[], ctx.admin, global, &mut l);
+        ctx.print(format!("available commands: {}", l.join(", ")));
+    } else {
         let (cmd, rest) = get(commands(), params)?;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         let words = &params[..params.len() - rest.len()];
-        if !cmd.children.is_empty() {
-            let mut l = Vec::new();
-            append_help(&cmd.children, words, ctx.admin, global, &mut l);
-            ctx.print(format!("available commands: {}", l.join(", ")));
-        } else {
+        if cmd.children.is_empty() {
             let mut text = words.join(" ");
             if !cmd.usage.is_empty() {
                 text = format!("{text} {}", cmd.usage);
             }
             text = format!("{text}: {}", cmd.desc);
             ctx.print(text);
+        } else {
+            let mut l = Vec::new();
+            append_help(&cmd.children, words, ctx.admin, global, &mut l);
+            ctx.print(format!("available commands: {}", l.join(", ")));
         }
-    } else {
-        let mut l = Vec::new();
-        append_help(commands(), &[], ctx.admin, global, &mut l);
-        ctx.print(format!("available commands: {}", l.join(", ")));
     }
     Ok(())
 }
@@ -594,6 +650,10 @@ fn no_args(p: &Parsed) -> Result<()> {
 
 fn pop_arg(params: &[String]) -> (String, &[String]) {
     match params.first() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         Some(p) if !p.starts_with('-') => (p.clone(), &params[1..]),
         _ => (String::new(), params),
     }
@@ -601,6 +661,7 @@ fn pop_arg(params: &[String]) -> (String, &[String]) {
 
 #[cfg(test)]
 mod tests {
+    use super::network::redact_command;
     use super::*;
 
     #[test]
@@ -626,7 +687,7 @@ mod tests {
         let words = w("channel");
         let (c, rest) = get(commands(), &words).unwrap();
         assert_eq!(c.name, "channel");
-        assert!(rest.is_empty());
+        assert_eq!(rest, [] as [String; 0]);
     }
 
     #[test]
@@ -652,8 +713,8 @@ mod tests {
         use std::time::Duration;
         assert_eq!(parse_go_duration("0"), Some(Duration::ZERO));
         assert_eq!(parse_go_duration("300s"), Some(Duration::from_secs(300)));
-        assert_eq!(parse_go_duration("1h30m"), Some(Duration::from_secs(5400)));
-        assert_eq!(parse_go_duration("2.5h"), Some(Duration::from_secs(9000)));
+        assert_eq!(parse_go_duration("1h30m"), Some(Duration::from_mins(90)));
+        assert_eq!(parse_go_duration("2.5h"), Some(Duration::from_mins(150)));
         assert_eq!(parse_go_duration("-1s"), None);
         assert_eq!(parse_go_duration("10"), None);
         assert_eq!(parse_go_duration("x"), None);
@@ -669,7 +730,7 @@ mod tests {
 
         assert_eq!(format_go_duration(Duration::ZERO), "0s");
         assert_eq!(format_go_duration(Duration::from_secs(300)), "5m0s");
-        assert_eq!(format_go_duration(Duration::from_secs(81000)), "22h30m0s");
+        assert_eq!(format_go_duration(Duration::from_mins(1350)), "22h30m0s");
         assert_eq!(format_go_duration(Duration::from_millis(1500)), "1.5s");
         for s in ["0s", "5m0s", "22h30m0s", "1h0m1.25s"] {
             assert_eq!(format_go_duration(parse_go_duration(s).unwrap()), s);

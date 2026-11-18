@@ -39,8 +39,8 @@ impl User {
             tokio::pin!(retry);
             loop {
                 tokio::select! {
-                    _ = &mut retry => break,
-                    _ = stopped.cancelled() => {
+                    () = &mut retry => break,
+                    () = stopped.cancelled() => {
                         self.close_msg_store();
                         return;
                     }
@@ -131,6 +131,10 @@ impl User {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+    )]
     fn handle_event(&mut self, ev: Event) {
         match ev {
             Event::UpstreamConnected {
@@ -142,9 +146,15 @@ impl User {
                     conn.conn.close();
                     return;
                 };
-                if self.networks[ni].runner_id != runner_id || self.networks[ni].is_stopped() {
-                    conn.conn.close();
-                    return;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if self.networks[ni].runner_id != runner_id || self.networks[ni].is_stopped() {
+                        conn.conn.close();
+                        return;
+                    }
                 }
                 self.upstream_connected(ni, *conn);
             }
@@ -169,6 +179,10 @@ impl User {
                 let Some(ni) = self.net_index(net_id) else {
                     return;
                 };
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let net = &mut self.networks[ni];
                 if net.runner_id != runner_id {
                     return;
@@ -181,7 +195,13 @@ impl User {
                         send_service_notice(dc, &text);
                     }
                 }
-                self.networks[ni].last_error = Some(err.clone());
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    self.networks[ni].last_error = Some(err.clone());
+                }
                 let attrs = Tags::from_iter([("error", err)]);
                 self.notify_bouncer_network_state(net_id, &attrs);
             }
@@ -189,8 +209,14 @@ impl User {
                 let Some(ni) = self.net_index(net_id) else {
                     return;
                 };
-                if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
-                    return;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
+                        return;
+                    }
                 }
                 self.attach_upstream(ni);
             }
@@ -203,12 +229,22 @@ impl User {
                     return;
                 };
                 // The timer belongs to a previous connection
-                if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
-                    return;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
+                        return;
+                    }
                 }
                 if !crate::upstream::auto_detach_timer_fired(self, ni, &name) {
                     return;
                 }
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let Some(c) = self.networks[ni].channels.get(&name) else {
                     return;
                 };
@@ -231,23 +267,47 @@ impl User {
                 let Some(i) = self.dc_index(dc_id) else {
                     return;
                 };
-                if self.downstreams[i].conn.is_closed() {
-                    logf!(
-                        self.downstreams[i].logger,
-                        "ignoring message on closed connection: {}",
-                        crate::ircutil::redact_for_log(&msg)
-                    );
-                    return;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if self.downstreams[i].conn.is_closed() {
+                        {
+                            #![expect(
+                                clippy::indexing_slicing,
+                                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                            )]
+                            logf!(
+                                self.downstreams[i].logger,
+                                "ignoring message on closed connection: {}",
+                                crate::ircutil::redact_for_log(&msg)
+                            );
+                        }
+                        return;
+                    }
                 }
                 if let Err(e) = downstream::handle_message(self, dc_id, &msg)
                     && let Some(i) = self.dc_index(dc_id)
                 {
-                    logf!(
-                        self.downstreams[i].logger,
-                        "failed to handle message {:?}: {e}",
-                        crate::ircutil::redact_for_log(&msg)
-                    );
-                    self.downstreams[i].conn.close();
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        logf!(
+                            self.downstreams[i].logger,
+                            "failed to handle message {:?}: {e}",
+                            crate::ircutil::redact_for_log(&msg)
+                        );
+                    }
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        self.downstreams[i].conn.close();
+                    }
                 }
             }
             Event::Broadcast(msg) => {
@@ -301,8 +361,14 @@ impl User {
                 let Some(ni) = self.net_index(net_id) else {
                     return;
                 };
-                if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
-                    return;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if self.networks[ni].conn.as_ref().map(|c| c.id) != Some(conn_id) {
+                        return;
+                    }
                 }
                 self.try_regain_nick(ni, &nick);
             }
@@ -350,7 +416,13 @@ impl User {
             }
             Event::ServiceReply { dc_id, text } => {
                 if let Some(i) = self.dc_index(dc_id) {
-                    downstream::send_service_privmsg(&mut self.downstreams[i], &text);
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        downstream::send_service_privmsg(&mut self.downstreams[i], &text);
+                    }
                 }
             }
             Event::HasNetwork { name, reply } => {
@@ -368,7 +440,7 @@ impl User {
                 res,
                 check,
             } => {
-                crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res, check)
+                crate::downstream::web_push_tested(self, dc_id, label, network_id, sub, res, check);
             }
             Event::Run(f) => f(self),
             Event::Stop => {
@@ -376,13 +448,31 @@ impl User {
                     dc.conn.close();
                 }
                 for ni in 0..self.networks.len() {
-                    self.networks[ni].stop.cancel();
-                    if let Some(uc) = &self.networks[ni].conn {
-                        uc.conn.close();
-                        uc.stop_timers();
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        self.networks[ni].stop.cancel();
                     }
-                    for client in self.networks[ni].delivered.clients() {
-                        self.store_client_delivery_receipts(ni, &client);
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        if let Some(uc) = &self.networks[ni].conn {
+                            uc.conn.close();
+                            uc.stop_timers();
+                        }
+                    }
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        for client in self.networks[ni].delivered.clients() {
+                            self.store_client_delivery_receipts(ni, &client);
+                        }
                     }
                 }
                 self.stopped = true;
@@ -406,8 +496,14 @@ impl User {
         }
 
         for ni in 0..self.networks.len() {
-            if let Some(uc) = self.networks[ni].upstream_mut() {
-                uc.cancel_pending_commands_by_downstream_id(dc_id);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if let Some(uc) = self.networks[ni].upstream_mut() {
+                    uc.cancel_pending_commands_by_downstream_id(dc_id);
+                }
             }
             self.update_away(ni);
             self.update_monitor(ni);
@@ -473,20 +569,40 @@ impl User {
         let Some(i) = self.dc_index(dc_id) else {
             return;
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         if let Some(net_id) = self.downstreams[i].network_id
             && let Some(ni) = self.net_index(net_id)
             && let Some(err) = self.networks[ni].last_error.clone()
         {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let text = format!("disconnected from {}: {err}", self.networks[ni].get_name());
-            send_service_notice(&mut self.downstreams[i], &text);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                send_service_notice(&mut self.downstreams[i], &text);
+            }
         }
 
         for ni in 0..self.networks.len() {
             self.update_away(ni);
         }
 
-        if !self.downstreams[i].impersonating {
-            self.bump_downstream_interaction_time();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if !self.downstreams[i].impersonating {
+                self.bump_downstream_interaction_time();
+            }
         }
     }
 }

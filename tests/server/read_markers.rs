@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn read_marker() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;

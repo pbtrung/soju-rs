@@ -1,4 +1,4 @@
-//! BouncerServ channel commands.
+//! `BouncerServ` channel commands.
 
 use anyhow::{Result, anyhow, bail};
 
@@ -16,11 +16,14 @@ pub(super) fn handle_channel_status(
     params: &[String],
 ) -> Result<()> {
     let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let default_name = ctx
         .network_id
         .and_then(|id| u.net_index(id))
-        .map(|ni| u.networks[ni].get_name().to_owned())
-        .unwrap_or_default();
+        .map_or_default(|ni| u.networks[ni].get_name().to_owned());
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let network_name = p.string_or("network", &default_name);
@@ -64,7 +67,13 @@ pub(super) fn handle_channel_status(
         let Some(ni) = u.get_network(&network_name) else {
             bail!("unknown network {network_name:?}");
         };
-        send_network(ctx, &u.networks[ni]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            send_network(ctx, &u.networks[ni]);
+        }
     }
     if n == 0 {
         ctx.print("No channel configured.");
@@ -143,12 +152,24 @@ pub(super) fn handle_channel_create(
     if params.is_empty() {
         bail!("expected at least one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let p = parse_flags(&channel_flag_set(), &params[1..])?;
     no_args(&p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let (name, ni) = strip_network_suffix(u, ctx, &params[0])?;
     if name.is_empty() || name.contains(ILLEGAL_CHAN_CHARS) {
         bail!("invalid channel name: {name}");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &mut u.networks[ni];
     if let Some(uc) = net.upstream()
         && !uc.is_channel(&name)
@@ -187,9 +208,21 @@ pub(super) fn handle_channel_update(
     if params.is_empty() {
         bail!("expected at least one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let p = parse_flags(&channel_flag_set(), &params[1..])?;
     no_args(&p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let (name, ni) = strip_network_suffix(u, ctx, &params[0])?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(ch) = u.networks[ni].channels.get_mut(&name) else {
         bail!("unknown channel {name:?}");
     };
@@ -205,7 +238,15 @@ pub(super) fn handle_channel_update(
         }
     }
     crate::upstream::update_channel_auto_detach(u, ni, &name);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let ch = u.networks[ni]
         .channels
         .get_mut(&name)
@@ -227,13 +268,23 @@ pub(super) fn handle_channel_delete(
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let (name, ni) = strip_network_suffix(u, ctx, &params[0])?;
     u.delete_channel(ni, &name)
         .map_err(|e| anyhow!("failed to delete channel: {e}"))?;
-    if let Some(uc) = u.networks[ni].upstream()
-        && uc.channels.has(&name)
     {
-        uc.send_message(msg!("PART", name.clone()));
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if let Some(uc) = u.networks[ni].upstream()
+            && uc.channels.has(&name)
+        {
+            uc.send_message(msg!("PART", name.clone()));
+        }
     }
     ctx.print(format!("deleted channel {name:?}"));
     Ok(())

@@ -1,12 +1,16 @@
 //! Commands whose replies are routed back to the downstream which sent them.
 
-use super::*;
+use super::{
+    DownstreamConn, Duration, ERR_SASLABORTED, ERR_UNKNOWNCOMMAND, EndedEarly, HashMap, Instant,
+    Message, PendingCommand, PendingCommandKind, RPL_ENDOFWHO, RPL_ENDOFWHOIS, RPL_LISTEND, Result,
+    UpstreamConn, User, logf, msg,
+};
 
 /// Replies to downstreams waiting on pending commands when the upstream
 /// connection goes away.
-pub fn abort_pending_commands(
+pub fn abort_pending_commands<S: std::hash::BuildHasher>(
     dcs: &mut [DownstreamConn],
-    pending: HashMap<String, Vec<PendingCommand>>,
+    pending: HashMap<String, Vec<PendingCommand>, S>,
 ) {
     // TODO: support labeled-response
     for l in pending.into_values() {
@@ -17,7 +21,7 @@ pub fn abort_pending_commands(
             let nick = dc.nick.clone();
             match cmd.kind {
                 PendingCommandKind::List => {
-                    dc.send_message(msg!(RPL_LISTEND, nick, "Command aborted"))
+                    dc.send_message(msg!(RPL_LISTEND, nick, "Command aborted"));
                 }
                 PendingCommandKind::Who => {
                     let mask = cmd
@@ -87,6 +91,10 @@ const MAX_PENDING_COMMANDS: usize = 64;
 ///
 /// When the command is unsupported or too many of its type are queued, it is
 /// returned instead: the caller is expected to abort it.
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn enqueue_command(
     uc: &mut UpstreamConn,
     dc_id: u64,
@@ -110,17 +118,29 @@ pub fn enqueue_command(
     // TODO: consider sending an abort reply to downstream
     let mut timed_out = 0;
     while timed_out < l.len() {
-        match l[timed_out].sent_at {
-            Some(t) if t.elapsed() > Duration::from_secs(30) => {}
-            _ => break,
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            match l[timed_out].sent_at {
+                Some(t) if t.elapsed() > Duration::from_secs(30) => {}
+                _ => break,
+            }
         }
         // Only log the command name: parameters may be secrets, e.g. the
         // password of REGISTER
-        logf!(
-            uc.logger,
-            "timed out waiting for reply to pending command: {}",
-            l[timed_out].msg.command
-        );
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            logf!(
+                uc.logger,
+                "timed out waiting for reply to pending command: {}",
+                l[timed_out].msg.command
+            );
+        }
         timed_out += 1;
     }
     if timed_out > 0 {
@@ -149,7 +169,13 @@ pub(super) fn current_pending_command<'a>(
     ni: usize,
     cmd: &str,
 ) -> Option<&'a PendingCommand> {
-    u.networks[ni].conn.as_ref()?.pending_cmds.get(cmd)?.first()
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        u.networks[ni].conn.as_ref()?.pending_cmds.get(cmd)?.first()
+    }
 }
 
 /// Returns the downstream ID of the current pending command.
@@ -170,9 +196,9 @@ pub(super) fn dequeue_command(u: &mut User, ni: usize, cmd: &str) -> Option<(u64
     removed.map(|p| (p.downstream_id, p.msg))
 }
 
-/// Dequeues a command ended by an early error reply, e.g. ERR_NOSUCHNICK
-/// for WHOIS or RPL_TRYAGAIN for WHO. Servers usually still send the end
-/// reply of the command afterwards: take_ended_early routes it to the same
+/// Dequeues a command ended by an early error reply, e.g. `ERR_NOSUCHNICK`
+/// for WHOIS or `RPL_TRYAGAIN` for WHO. Servers usually still send the end
+/// reply of the command afterwards: `take_ended_early` routes it to the same
 /// downstream, instead of letting it end the next command in the queue.
 pub(super) fn end_command_early(u: &mut User, ni: usize, cmd: &str) -> Option<(u64, Message)> {
     let (dc_id, msg) = dequeue_command(u, ni, cmd)?;
@@ -181,6 +207,10 @@ pub(super) fn end_command_early(u: &mut User, ni: usize, cmd: &str) -> Option<(u
         "WHOIS" => msg.params.last().map_or("", String::as_str),
         _ => return Some((dc_id, msg)),
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let target = u.networks[ni].casemap(target);
     uc!(u, ni).ended_early = Some(EndedEarly {
         command: cmd.to_owned(),
@@ -193,6 +223,10 @@ pub(super) fn end_command_early(u: &mut User, ni: usize, cmd: &str) -> Option<(u
 /// Returns the downstream of the command ended early, if an end reply for
 /// target belongs to it.
 pub(super) fn take_ended_early(u: &mut User, ni: usize, cmd: &str, target: &str) -> Option<u64> {
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let target = u.networks[ni].casemap(target);
     let uc = uc!(u, ni);
     let e = uc.ended_early.as_ref()?;

@@ -89,6 +89,7 @@ impl MemoryStore {
         self.buffers.retain(|(id, _), _| *id != net_id);
     }
 
+    #[must_use]
     pub fn new() -> MemoryStore {
         MemoryStore::default()
     }
@@ -103,8 +104,7 @@ impl MemoryStore {
         let seq = self
             .buffers
             .get(&(network.id, entity.to_owned()))
-            .map(|rb| rb.last_seq())
-            .unwrap_or(0);
+            .map_or(0, RingBuffer::last_seq);
         format_memory_msg_id(network.id, entity, seq)
     }
 
@@ -157,6 +157,10 @@ mod tests {
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
     )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn ring() {
         let net = Network {
             id: 1,
@@ -181,7 +185,10 @@ mod tests {
             ["7", "8", "9"]
         );
         let id = s.last_msg_id(&net, "#a");
-        assert!(s.load_latest_id(&id, &opts).unwrap().is_empty());
+        assert_eq!(
+            s.load_latest_id(&id, &opts).unwrap(),
+            [] as [crate::irc::Message; 0]
+        );
         // Messages appended after taking the last ID are loaded
         s.append(&net, "#a", &msg!("PRIVMSG", "#a", "10")).unwrap();
         let l = s.load_latest_id(&id, &opts).unwrap();
@@ -198,7 +205,10 @@ mod tests {
             ["6", "7", "8", "9"]
         );
         assert!(rb.load_latest_seq(100, 1).is_err());
-        assert!(rb.load_latest_seq(11, 1).unwrap().is_empty());
+        assert_eq!(
+            rb.load_latest_seq(11, 1).unwrap(),
+            [] as [crate::irc::Message; 0]
+        );
         assert!(rb.load_latest_seq(12, 1).is_err());
     }
 

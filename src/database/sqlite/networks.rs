@@ -9,6 +9,10 @@ use super::{Database, lossy_string, null_string};
 use crate::database::{Channel, MessageFilter, Network, Sasl};
 
 impl Database {
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_networks(&self, user_id: i64) -> Result<Vec<Network>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -49,6 +53,10 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_network(&self, user_id: i64, network: &mut Network) -> Result<()> {
         let (mut mech, mut plain_user, mut plain_pass) = (None, None, None);
         if !network.sasl.mechanism.is_empty() {
@@ -126,6 +134,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_network(&self, id: i64) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -144,6 +156,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn list_channels(&self, network_id: i64) -> Result<Vec<Channel>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -170,6 +186,10 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn store_channel(&self, network_id: i64, ch: &mut Channel) -> Result<()> {
         let seconds = ch
             .detach_after
@@ -216,6 +236,10 @@ impl Database {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns SQLite errors, constraint failures, or errors decoding stored records.
     pub fn delete_channel(&self, id: i64) -> Result<()> {
         self.conn()
             .execute("DELETE FROM Channel WHERE id = ?", [id])?;

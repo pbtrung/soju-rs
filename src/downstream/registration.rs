@@ -1,7 +1,13 @@
 //! Downstream connection registration: authentication and network
 //! selection.
 
-use super::*;
+use super::{
+    ConnReader, Digest, DownstreamConn, DownstreamSasl, ERR_ERRONEUSNICKNAME, ERR_NICKNAMEINUSE,
+    ERR_PASSWDMISMATCH, ERR_SASLABORTED, ERR_SASLFAIL, ILLEGAL_NICK_CHARS, IrcError, IsupportCtx,
+    Message, Result, SERVICE_NICK_CM, Sha512, User, anyhow, bail, begin_message, build_isupport,
+    db, debugf, finish_message, handle_metadata_sub, irc_error, ircutil, logf, metrics, msg,
+    need_params, parse_bouncer_net_id, send_isupport, unknown_command, unmarshal_username, xirc,
+};
 
 /// Reads and handles messages until the connection is registered. Returns
 /// an error (or Ok(false) when the client quit) if registration failed.
@@ -13,9 +19,13 @@ const MAX_AUTH_FAILURES: u32 = 3;
 /// Output waiting to be sent above which an unregistered connection is
 /// closed: a peer sending commands without reading their replies (e.g.
 /// CAP LS, a few bytes for hundreds) would otherwise make the server hold
-/// up to MAX_QUEUED_BYTES per connection before even authenticating.
+/// up to `MAX_QUEUED_BYTES` per connection before even authenticating.
 const MAX_UNREGISTERED_QUEUED_BYTES: usize = 256 << 10;
 
+///
+/// # Errors
+///
+/// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub async fn run_until_registered(
     dc: &mut DownstreamConn,
     reader: &mut ConnReader,
@@ -77,9 +87,7 @@ async fn handle_message_unregistered(dc: &mut DownstreamConn, msg: Message) -> R
             Ok(())
         }
         "ISUPPORT" => {
-            if !dc.caps.is_enabled("draft/extended-isupport") {
-                Err(unknown_command(&msg.command))
-            } else {
+            if dc.caps.is_enabled("draft/extended-isupport") {
                 let ctx = IsupportCtx {
                     has_user: false,
                     network_id: None,
@@ -90,6 +98,8 @@ async fn handle_message_unregistered(dc: &mut DownstreamConn, msg: Message) -> R
                 send_isupport(dc, &isupport);
                 dc.isupport = isupport;
                 Ok(())
+            } else {
+                Err(unknown_command(&msg.command))
             }
         }
         _ => handle_unregistered_command(dc, &msg).await,
@@ -97,19 +107,43 @@ async fn handle_message_unregistered(dc: &mut DownstreamConn, msg: Message) -> R
     finish_message(dc, res)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> Result<()> {
     match msg.command.as_str() {
         "NICK" => {
             need_params(msg, 1)?;
-            dc.registration_state_mut()?.nick = msg.params[0].clone();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                dc.registration_state_mut()?.nick.clone_from(&msg.params[0]);
+            }
         }
         "USER" => {
             need_params(msg, 4)?;
-            dc.registration_state_mut()?.username = msg.params[0].clone();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                dc.registration_state_mut()?
+                    .username
+                    .clone_from(&msg.params[0]);
+            }
         }
         "PASS" => {
             need_params(msg, 1)?;
-            dc.registration_state_mut()?.pass = msg.params[0].clone();
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                dc.registration_state_mut()?.pass.clone_from(&msg.params[0]);
+            }
         }
         "CAP" => return dc.handle_cap(msg),
         "AUTHENTICATE" => {
@@ -154,6 +188,10 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
         }
         "BOUNCER" => {
             need_params(msg, 1)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let subcommand = msg.params[0].clone();
             match subcommand.to_uppercase().as_str() {
                 "BIND" => {
@@ -167,6 +205,10 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
                             "Authentication needed to bind to bouncer network"
                         )));
                     }
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
                     let id = parse_bouncer_net_id(&subcommand, &msg.params[1])?;
                     dc.registration_state_mut()?.network_id = id;
                 }
@@ -188,6 +230,10 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
         }
         "METADATA" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let subcommand = msg.params[1].clone();
             if let Some(res) = handle_metadata_sub(dc, msg, None) {
                 return res;
@@ -297,7 +343,14 @@ async fn authenticate(
 /// Adds the username to an authentication error. Like upstream (which
 /// formats the error with %v), this drops the user-facing message, so the
 /// client gets a generic "Authentication failed".
-fn wrap_auth_err(e: anyhow::Error, username: &str) -> anyhow::Error {
+fn wrap_auth_err(
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Ownership intentionally discards typed AuthError metadata so the caller exposes only a generic failure."
+    )]
+    e: anyhow::Error,
+    username: &str,
+) -> anyhow::Error {
     anyhow!("{e} (username {username:?})")
 }
 
@@ -327,13 +380,12 @@ async fn register(dc: &mut DownstreamConn) -> Result<()> {
                     "ACCOUNT_REQUIRED",
                     "Authentication required"
                 )));
-            } else {
-                return Err(irc_error(msg!(
-                    ERR_PASSWDMISMATCH,
-                    nick,
-                    "Authentication required"
-                )));
             }
+            return Err(irc_error(msg!(
+                ERR_PASSWDMISMATCH,
+                nick,
+                "Authentication required"
+            )));
         }
         let cfg = srv.config();
         let Some(plain_auth) = &cfg.auth.plain else {
@@ -402,7 +454,7 @@ async fn sanity_check_server(addr: &str) -> Result<()> {
         tokio::net::TcpStream::connect(addr),
     )
     .await
-    .map_err(|_| anyhow!("i/o timeout"))??;
+    .map_err(|error| anyhow::anyhow!(error).context(anyhow!("i/o timeout")))??;
     let cfg = crate::tls::client_config("", None)?;
     let name = rustls::pki_types::ServerName::try_from(host)?;
     tokio::time::timeout(
@@ -410,12 +462,12 @@ async fn sanity_check_server(addr: &str) -> Result<()> {
         tokio_rustls::TlsConnector::from(cfg).connect(name, tcp),
     )
     .await
-    .map_err(|_| anyhow!("i/o timeout"))??;
+    .map_err(|error| anyhow::anyhow!(error).context(anyhow!("i/o timeout")))??;
     Ok(())
 }
 
 /// Checks that the server of a new network requested by a connection is
-/// reachable, before load_network auto-creates the network. This runs
+/// reachable, before `load_network` auto-creates the network. This runs
 /// before the connection is handed to its user, as it may take a while:
 /// the user's event loop must not wait on it.
 pub(super) async fn check_new_network(
@@ -455,6 +507,10 @@ pub(super) fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
     let i = u
         .dc_index(dc_id)
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &u.downstreams[i];
     let r = dc
         .registration
@@ -471,7 +527,13 @@ pub(super) fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
                 "Unknown network ID"
             )));
         }
-        u.downstreams[i].network_id = Some(r.network_id);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            u.downstreams[i].network_id = Some(r.network_id);
+        }
         return Ok(());
     }
 
@@ -486,53 +548,68 @@ pub(super) fn load_network(u: &mut User, dc_id: u64) -> Result<()> {
         return Ok(());
     }
 
-    let ni = match u.get_network(&r.network_name) {
-        Some(ni) => ni,
-        None => {
-            // The network was deleted since check_new_network
-            if !r.server_checked {
-                return Err(irc_error(msg!(
-                    ERR_PASSWDMISMATCH,
-                    nick,
-                    format!("Failed to connect to {:?}", r.network_name)
-                )));
-            }
+    let ni = if let Some(ni) = u.get_network(&r.network_name) {
+        ni
+    } else {
+        // The network was deleted since check_new_network
+        if !r.server_checked {
+            return Err(irc_error(msg!(
+                ERR_PASSWDMISMATCH,
+                nick,
+                format!("Failed to connect to {:?}", r.network_name)
+            )));
+        }
 
-            // Some clients only allow specifying the nickname (and use the
-            // nickname as a username too). Strip the network name from the
-            // nickname when auto-saving networks.
-            let (net_nick, _, _) = unmarshal_username(&r.nick);
-            if net_nick.is_empty() || net_nick.contains(ILLEGAL_NICK_CHARS) {
-                return Err(irc_error(msg!(
-                    ERR_ERRONEUSNICKNAME,
-                    nick,
-                    r.nick.clone(),
-                    "Nickname contains illegal characters"
-                )));
-            }
-            if xirc::casemap_ascii(&net_nick) == SERVICE_NICK_CM {
-                return Err(irc_error(msg!(
-                    ERR_NICKNAMEINUSE,
-                    nick,
-                    r.nick.clone(),
-                    "Nickname reserved for bouncer service"
-                )));
-            }
+        // Some clients only allow specifying the nickname (and use the
+        // nickname as a username too). Strip the network name from the
+        // nickname when auto-saving networks.
+        let (net_nick, _, _) = unmarshal_username(&r.nick);
+        if net_nick.is_empty() || net_nick.contains(ILLEGAL_NICK_CHARS) {
+            return Err(irc_error(msg!(
+                ERR_ERRONEUSNICKNAME,
+                nick,
+                r.nick.clone(),
+                "Nickname contains illegal characters"
+            )));
+        }
+        if xirc::casemap_ascii(&net_nick) == SERVICE_NICK_CM {
+            return Err(irc_error(msg!(
+                ERR_NICKNAMEINUSE,
+                nick,
+                r.nick.clone(),
+                "Nickname reserved for bouncer service"
+            )));
+        }
 
-            let mut record = db::Network::new(&r.network_name);
-            record.nick = net_nick;
+        let mut record = db::Network::new(&r.network_name);
+        record.nick = net_nick;
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             logf!(
                 u.downstreams[i].logger,
                 "auto-saving network {:?}",
                 r.network_name
             );
-            u.create_network(record, true)?
         }
+        u.create_network(record, true)?
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
     let i = u
         .dc_index(dc_id)
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
-    u.downstreams[i].network_id = Some(net_id);
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        u.downstreams[i].network_id = Some(net_id);
+    }
     Ok(())
 }

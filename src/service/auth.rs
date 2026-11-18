@@ -1,4 +1,4 @@
-//! BouncerServ certificate and SASL commands.
+//! `BouncerServ` certificate and SASL commands.
 
 use anyhow::{Result, anyhow, bail};
 use sha1::Sha1;
@@ -44,6 +44,10 @@ pub(super) fn handle_certfp_generate(
         bail!("invalid value for -bits");
     }
     let ni = get_network_from_flag(u, ctx, &p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
     let tx = u.tx.clone();
     let srv = ctx.srv.clone();
@@ -51,7 +55,9 @@ pub(super) fn handle_certfp_generate(
         .certfp_generating
         .clone()
         .try_acquire_owned()
-        .map_err(|_| anyhow!("a certificate is already being generated"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(error).context(anyhow!("a certificate is already being generated"))
+        })?;
     // Generating a large RSA key takes seconds
     ctx.defer(move |mut print| async move {
         let _generating = generating;
@@ -63,7 +69,8 @@ pub(super) fn handle_certfp_generate(
             let ni = u
                 .net_index(net_id)
                 .ok_or_else(|| anyhow!("network was deleted"))?;
-            let sasl = db::Sasl {
+            #[expect(clippy::indexing_slicing, reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler.")]
+let sasl = db::Sasl {
                 mechanism: "EXTERNAL".to_owned(),
                 external_cert: Some(cert),
                 external_key: Some(key),
@@ -90,6 +97,10 @@ pub(super) fn handle_certfp_fingerprints(
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let sasl = &u.networks[ni].record.sasl;
     if sasl.mechanism != "EXTERNAL" {
         bail!("CertFP not set up");
@@ -110,6 +121,10 @@ pub(super) fn handle_sasl_status(
     let p = parse_flags(&FlagSet::new().string("network"), params)?;
     no_args(&p)?;
     let ni = get_network_from_flag(u, ctx, &p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni];
     match net.record.sasl.mechanism.as_str() {
         "PLAIN" => ctx.print(format!(
@@ -142,6 +157,10 @@ pub(super) fn handle_sasl_set_plain(
         bail!("expected exactly 2 arguments");
     }
     let ni = get_network_from_flag(u, ctx, &p)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index. Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let sasl = db::Sasl {
         mechanism: "PLAIN".to_owned(),
         plain_username: p.args[0].clone(),
@@ -171,6 +190,10 @@ pub(super) fn handle_sasl_reset(
 /// fails, the network is left unchanged.
 fn store_sasl(u: &mut User, srv: &Server, ni: usize, sasl: db::Sasl) -> Result<()> {
     let user_id = u.record.id;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &mut u.networks[ni];
     let mut record = net.record.clone();
     record.sasl = sasl;
@@ -207,17 +230,23 @@ pub(super) fn handle_device_cert_status(
     }
     for cert in certs {
         let n = DEVICE_CERTIFICATE_DISPLAY_BYTES.min(cert.fingerprint.len());
-        let last_used = cert
-            .last_used
-            .map(|t| t.strftime("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "0001-01-01 00:00:00".to_owned());
-        ctx.print(format!(
-            "{} [{}] [{}] [{}]",
-            colon_hex(&cert.fingerprint[..n]),
-            cert.last_ip,
-            cert.label,
-            last_used
-        ));
+        let last_used = cert.last_used.map_or_else(
+            || "0001-01-01 00:00:00".to_owned(),
+            |t| t.strftime("%Y-%m-%d %H:%M:%S").to_string(),
+        );
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            ctx.print(format!(
+                "{} [{}] [{}] [{}]",
+                colon_hex(&cert.fingerprint[..n]),
+                cert.last_ip,
+                cert.label,
+                last_used
+            ));
+        }
     }
     Ok(())
 }
@@ -279,6 +308,10 @@ pub(super) fn handle_device_cert_delete(
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let fingerprint = &params[0];
     let h = match hex::decode(fingerprint.replace(':', "")) {
         Ok(h) if h.len() <= 64 && h.len() >= DEVICE_CERTIFICATE_DISPLAY_BYTES => h,

@@ -1,8 +1,16 @@
 //! PRIVMSG, NOTICE, TAGMSG and REDACT from registered downstream
 //! connections.
 
-use super::*;
+use super::{
+    ERR_BADMASK, Event, Message, Prefix, Result, SERVICE_NICK_CM, Timestamp, User, irc_error,
+    ircutil, logf, msg, need_params, parse_nickserv_credentials, send_service_privmsg,
+    service_prefix, upstream, upstream_for_command, xirc,
+};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<()> {
     let i = u
         .dc_index(dc_id)
@@ -10,12 +18,22 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
     let is_text = msg.command == "PRIVMSG" || msg.command == "NOTICE";
     need_params(msg, if is_text { 2 } else { 1 })?;
     let text = if is_text {
-        msg.params[1].clone()
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            msg.params[1].clone()
+        }
     } else {
         String::new()
     };
     let tags = ircutil::copy_client_tags(&msg.tags);
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let targets: Vec<String> = msg.params[0].split(',').map(str::to_owned).collect();
     if targets.len() > 1 {
         // We need to potentially mix local and remote messages so we drop
@@ -28,7 +46,13 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
             return Ok(());
         };
         let mut params = vec![name.clone()];
-        params.extend_from_slice(&msg.params[1..]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            params.extend_from_slice(&msg.params[1..]);
+        }
         let bouncer_conn = dc!(u, i).network_id.is_none();
 
         if name == format!("${hostname}") || (name == "$*" && bouncer_conn) {
@@ -54,7 +78,7 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
                 .with_tags(btags)
                 .with_prefix(service_prefix());
             u.srv.for_each_user(|h| {
-                h.send(Event::Broadcast(bmsg.clone()));
+                h.notify(Event::Broadcast(bmsg.clone()));
             });
             continue;
         }
@@ -82,6 +106,10 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
                 );
             }
             if msg.command == "PRIVMSG" {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let dc = &u.downstreams[i];
                 let mut ctx = crate::service::ServiceContext::for_downstream(
                     u.srv.clone(),
@@ -95,10 +123,22 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
                     let deferred = ctx.take_deferred();
                     if let Some(i) = u.dc_index(dc_id) {
                         for line in prints {
-                            send_service_privmsg(&mut u.downstreams[i], &line);
+                            {
+                                #![expect(
+                                    clippy::indexing_slicing,
+                                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                                )]
+                                send_service_privmsg(&mut u.downstreams[i], &line);
+                            }
                         }
                         if let Err(e) = &res {
-                            send_service_privmsg(&mut u.downstreams[i], &format!("error: {e}"));
+                            {
+                                #![expect(
+                                    clippy::indexing_slicing,
+                                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                                )]
+                                send_service_privmsg(&mut u.downstreams[i], &format!("error: {e}"));
+                            }
                         }
                     }
                     if let (Ok(()), Some(deferred)) = (res, deferred) {
@@ -110,6 +150,10 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         }
 
         let ni = upstream_for_command(u, i, &msg.command)?;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let uc = u.networks[ni]
             .upstream()
             .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
@@ -123,12 +167,18 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         let our_nick = uc.nick.clone();
 
         // The lines of a multiline message aren't a single command
-        if msg.command == "PRIVMSG"
-            && !text.contains('\n')
-            && u.networks[ni].casemap(&name) == "nickserv"
-            && let Some((username, password)) = parse_nickserv_credentials(&text, &our_nick)
         {
-            u.auto_save_sasl_plain(ni, &username, &password);
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if msg.command == "PRIVMSG"
+                && !text.contains('\n')
+                && u.networks[ni].casemap(&name) == "nickserv"
+                && let Some((username, password)) = parse_nickserv_credentials(&text, &our_nick)
+            {
+                u.auto_save_sasl_plain(ni, &username, &password);
+            }
         }
 
         // If upstream doesn't support echo-message, we will send it manually
@@ -139,6 +189,10 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         } else {
             String::new()
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let uc = u.networks[ni]
             .upstream_mut()
             .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
@@ -152,6 +206,10 @@ pub(super) fn handle_privmsg(u: &mut User, dc_id: u64, msg: &Message) -> Result<
         // when it is echoed from the upstream. Otherwise, produce/log it
         // here because it's the last time we'll see it.
         if !echo_supported {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let uc = u.networks[ni].upstream().ok_or_else(|| {
                 anyhow::anyhow!("required user or connection state is unavailable")
             })?;

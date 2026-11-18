@@ -1,45 +1,76 @@
 //! CHATHISTORY, READ/MARKREAD and SEARCH from registered downstream
 //! connections.
 
-use super::*;
+use super::{
+    ERR_UNKNOWNCOMMAND, LoadMessageOptions, Message, Result, SERVICE_NICK_CM, SearchMessageOptions,
+    Tags, Timestamp, User, anyhow, chathistory_error, db, dc_network, dcs_for, fail,
+    internal_error, irc_error, ircutil, logf, msg, need_params, xirc,
+};
 use crate::config::MAX_CHAT_HISTORY_LIMIT;
 
 /// History replies are refused while a client has this many messages it
 /// hasn't read yet, so that a client which stops reading can't make us queue
 /// replies without bounds.
 const MAX_QUEUED_FOR_HISTORY: usize = 10 * MAX_CHAT_HISTORY_LIMIT;
+const SEARCH_MAX_LIMIT: usize = 100;
 
 fn check_queue(u: &User, i: usize, cmd: &str) -> Result<()> {
-    if u.downstreams[i].conn.queued() > MAX_QUEUED_FOR_HISTORY {
-        return Err(fail(&[
-            cmd,
-            "TEMPORARILY_UNAVAILABLE",
-            "Too many messages waiting to be sent, try again later",
-        ]));
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if u.downstreams[i].conn.queued() > MAX_QUEUED_FOR_HISTORY {
+            return Err(fail(&[
+                cmd,
+                "TEMPORARILY_UNAVAILABLE",
+                "Too many messages waiting to be sent, try again later",
+            ]));
+        }
     }
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
     check_queue(u, i, "CHATHISTORY")?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let subcommand = msg.params[0].clone();
     let (target, bounds_str, limit_str): (String, [String; 2], String) = match subcommand.as_str() {
         "AFTER" | "BEFORE" | "AROUND" | "LATEST" => {
             need_params(msg, 4)?;
-            (
-                msg.params[1].clone(),
-                [msg.params[2].clone(), String::new()],
-                msg.params[3].clone(),
-            )
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                (
+                    msg.params[1].clone(),
+                    [msg.params[2].clone(), String::new()],
+                    msg.params[3].clone(),
+                )
+            }
         }
         "BETWEEN" => {
             need_params(msg, 5)?;
-            (
-                msg.params[1].clone(),
-                [msg.params[2].clone(), msg.params[3].clone()],
-                msg.params[4].clone(),
-            )
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                (
+                    msg.params[1].clone(),
+                    [msg.params[2].clone(), msg.params[3].clone()],
+                    msg.params[4].clone(),
+                )
+            }
         }
         "TARGETS" => {
             if dc_network(u, i).is_none() {
@@ -47,11 +78,17 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                 return Ok(());
             }
             need_params(msg, 4)?;
-            (
-                String::new(),
-                [msg.params[1].clone(), msg.params[2].clone()],
-                msg.params[3].clone(),
-            )
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                (
+                    String::new(),
+                    [msg.params[1].clone(), msg.params[2].clone()],
+                    msg.params[3].clone(),
+                )
+            }
         }
         _ => {
             return Err(fail(&[
@@ -89,6 +126,10 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
         ]));
     };
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let target = u.networks[ni].casemap(&target);
 
     // TODO: support msgid criteria
@@ -144,6 +185,10 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
     };
 
     let event_playback = dc!(u, i).caps.is_enabled("draft/event-playback");
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net = &u.networks[ni];
     let options = LoadMessageOptions {
         network: &net.record,
@@ -252,7 +297,13 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
                     }
                     m
                 });
-            u.downstreams[i].send_batch("draft/chathistory-targets", &[], msgs);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].send_batch("draft/chathistory-targets", &[], msgs);
+            }
             return Ok(());
         }
         _ => unreachable!(),
@@ -281,6 +332,10 @@ pub(super) fn check_target(cmd: &str, target: &str) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     if msg.params.is_empty() {
         return Err(fail(&[
@@ -289,6 +344,10 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             "Missing parameters",
         ]));
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let target = msg.params[0].clone();
     check_target(&msg.command, &target)?;
     let criteria = msg.params.get(1).cloned().unwrap_or_default();
@@ -308,7 +367,15 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             "Cannot set read markers on bouncer connection",
         ]));
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let target_cm = u.networks[ni].casemap(&target);
 
     let mut r = match u.srv.db.get_read_receipt(net_id, &target_cm) {
@@ -353,6 +420,10 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             let mut limit = now;
             if u.msg_store.supports_chathistory() {
                 let store = &mut u.msg_store;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let options = LoadMessageOptions {
                     network: &u.networks[ni].record,
                     entity: &target_cm,
@@ -414,6 +485,10 @@ pub(super) fn handle_read(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 
     let mut push = false;
     {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let mut pt = crate::state_lock::lock(&u.networks[ni].push_targets);
         if broadcast && pt.has(&target) {
             // TODO: only broadcast if draft/read-marker has been negotiated
@@ -443,9 +518,12 @@ pub(super) fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()>
         )));
     }
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let attrs = Tags::parse(&msg.params[0]);
 
-    const SEARCH_MAX_LIMIT: usize = 100;
     let mut network = None;
     let mut opts = SearchMessageOptions {
         limit: SEARCH_MAX_LIMIT,
@@ -468,7 +546,7 @@ pub(super) fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()>
                     opts.end = Some(t);
                 }
             }
-            "from" => opts.from = value.to_owned(),
+            "from" => value.clone_into(&mut opts.from),
             "in" => {
                 let Some(ni) = dc_network(u, i) else {
                     return Err(fail(&[
@@ -479,9 +557,15 @@ pub(super) fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()>
                     ]));
                 };
                 network = Some(ni);
-                opts.r#in = u.networks[ni].casemap(value);
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    opts.r#in = u.networks[ni].casemap(value);
+                }
             }
-            "text" => opts.text = value.to_owned(),
+            "text" => value.clone_into(&mut opts.text),
             "limit" => match value.parse::<i64>() {
                 Ok(l) if l > 0 => opts.limit = usize::try_from(l)?,
                 _ => return Err(fail(&["SEARCH", "INVALID_PARAMS", name, "Invalid limit"])),
@@ -501,6 +585,10 @@ pub(super) fn handle_search(u: &mut User, i: usize, msg: &Message) -> Result<()>
         opts.limit = SEARCH_MAX_LIMIT;
     }
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let messages = match u.msg_store.search(&u.networks[ni].record, &opts) {
         Ok(m) => m,
         Err(e) => {

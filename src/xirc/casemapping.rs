@@ -15,10 +15,12 @@ fn map_bytes(name: &str, f: impl Fn(u8) -> u8) -> String {
     String::from_utf8(bytes).expect("case-mapping preserves UTF-8")
 }
 
+#[must_use]
 pub fn casemap_ascii(name: &str) -> String {
     map_bytes(name, |b| b.to_ascii_lowercase())
 }
 
+#[must_use]
 pub fn casemap_rfc1459(name: &str) -> String {
     map_bytes(name, |b| match b {
         b'A'..=b'Z' => b.to_ascii_lowercase(),
@@ -30,6 +32,7 @@ pub fn casemap_rfc1459(name: &str) -> String {
     })
 }
 
+#[must_use]
 pub fn casemap_rfc1459_strict(name: &str) -> String {
     map_bytes(name, |b| match b {
         b'A'..=b'Z' => b.to_ascii_lowercase(),
@@ -94,18 +97,22 @@ impl<V> CaseMappingMap<V> {
         }
     }
 
+    #[must_use]
     pub fn has(&self, name: &str) -> bool {
         self.m.contains_key(&*(self.casemap)(name))
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.m.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.m.is_empty()
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&V> {
         self.m.get(&*(self.casemap)(name)).map(|e| &e.value)
     }
@@ -221,6 +228,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn map_spellings() {
         let mut m = CaseMappingMap::new(CASEMAPPING_ASCII);
         // Already case-mapped keys don't store a second spelling

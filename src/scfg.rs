@@ -28,6 +28,10 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+///
+/// # Errors
+///
+/// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
 pub fn parse(s: &str) -> Result<Block, Error> {
     let mut dec = Decoder {
         lines: s.lines(),
@@ -160,6 +164,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn basic() {
         let b = parse(

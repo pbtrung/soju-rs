@@ -1,6 +1,10 @@
 //! Upstream connection initialization, output, timers and cached user queries.
 
-use super::*;
+use super::{
+    CapRegistry, CaseMapping, CaseMappingMap, DetachTimer, Duration, Event, HashMap, Isupport,
+    Logger, Message, NewConn, Prefix, UpstreamConn, UpstreamUser, UserModes, caps_to_request,
+    ircutil, metrics, msg, xirc,
+};
 
 impl UpstreamConn {
     pub fn new(new: NewConn, net_logger: &Logger, casemap: CaseMapping) -> UpstreamConn {
@@ -110,8 +114,7 @@ impl UpstreamConn {
             .caps
             .available
             .get(xirc::MULTILINE_BATCH_TYPE)
-            .map(String::as_str)
-            .unwrap_or("");
+            .map_or("", String::as_str);
         Some(xirc::MultilineLimits::parse(v))
     }
 
@@ -223,8 +226,14 @@ impl UpstreamConn {
             let mut i = l.len();
             while i > 1 {
                 i -= 1;
-                if l[i].downstream_id == downstream_id {
-                    l.remove(i);
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    if l[i].downstream_id == downstream_id {
+                        l.remove(i);
+                    }
                 }
             }
         }
@@ -262,11 +271,11 @@ impl UpstreamConn {
                 self.users.set(&new_nick, uu);
             }
         } else {
-            let key = if !info.nickname.is_empty() {
-                info.nickname.clone()
-            } else {
-                info.nickname = nick.to_owned();
+            let key = if info.nickname.is_empty() {
+                nick.clone_into(&mut info.nickname);
                 nick.to_owned()
+            } else {
+                info.nickname.clone()
             };
             self.users.set(&key, info);
         }

@@ -1,5 +1,5 @@
 //! Generic IRC connections: line-based streams (TCP, TLS, Unix sockets)
-//! and WebSockets, with a dedicated writer task per connection.
+//! and `WebSockets`, with a dedicated writer task per connection.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use transport::{Writer, format_line, redact_line_for_log};
 
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Maximum length of an incoming line or WebSocket message. IRCv3 lines are
+/// Maximum length of an incoming line or WebSocket message. `IRCv3` lines are
 /// at most 8191 bytes of tags plus 512 bytes: leave room for servers with a
 /// larger LINELEN.
 pub const MAX_LINE_LENGTH: usize = 32768;
@@ -40,7 +40,7 @@ pub const MAX_QUEUED_BYTES: usize = 16 << 20;
 const QUEUED_LINE_OVERHEAD: usize = 64;
 
 /// Maximum number of messages read from a connection and still being
-/// processed (see ConnReader::read_message_limited). Once it's reached, the
+/// processed (see `ConnReader::read_message_limited`). Once it's reached, the
 /// connection isn't read anymore: the peer is slowed down by TCP flow
 /// control instead of growing the event queue.
 pub const MAX_INPUT_IN_FLIGHT: usize = 64;
@@ -49,7 +49,7 @@ pub const MAX_INPUT_IN_FLIGHT: usize = 64;
 /// backlog, so PING/PONG floods cannot fill the user's event queue.
 const MAX_KEEPALIVE_IN_FLIGHT: usize = 4;
 
-/// Held while a message returned by ConnReader::read_message_limited is
+/// Held while a message returned by `ConnReader::read_message_limited` is
 /// being processed. Keepalives use their own pool of permits.
 pub type InputPermit = Option<tokio::sync::OwnedSemaphorePermit>;
 
@@ -71,7 +71,7 @@ pub struct ConnInfo {
 }
 
 enum Outgoing {
-    /// A line formatted by format_line
+    /// A line formatted by `format_line`
     Line(String),
     Shutdown,
 }
@@ -80,7 +80,7 @@ struct Shared {
     tx: mpsc::UnboundedSender<Outgoing>,
     /// The number of messages queued and not written yet
     queued: AtomicUsize,
-    /// The accounted size of these messages, see MAX_QUEUED_BYTES
+    /// The accounted size of these messages, see `MAX_QUEUED_BYTES`
     queued_bytes: AtomicUsize,
     closed: AtomicBool,
     cancel: CancellationToken,
@@ -119,6 +119,7 @@ pub type RateLimitFlag = Arc<AtomicBool>;
 impl Conn {
     /// Splits a connection into a reader and a writer handle. The writer
     /// task runs until the connection is closed.
+    #[must_use]
     pub fn new_stream(
         io: BoxIo,
         logger: Logger,
@@ -173,7 +174,7 @@ impl Conn {
             loop {
                 let out = tokio::select! {
                     out = rx.recv() => out,
-                    _ = cancel.cancelled() => None,
+                    () = cancel.cancelled() => None,
                 };
                 let line = match out {
                     Some(Outgoing::Line(l)) => l,
@@ -183,21 +184,21 @@ impl Conn {
                 c.shared
                     .queued_bytes
                     .fetch_sub(line.len() + QUEUED_LINE_OVERHEAD, Ordering::Relaxed);
-                let limited = rate
+                let throttled = rate
                     .as_ref()
                     .is_some_and(|(_, f)| f.load(Ordering::Relaxed));
                 if let Some(l) = limiter.as_mut()
-                    && limited
+                    && throttled
                 {
                     tokio::select! {
-                        _ = l.wait() => {}
-                        _ = cancel.cancelled() => break,
+                        () = l.wait() => {}
+                        () = cancel.cancelled() => break,
                     }
                 }
                 debugf!(c.shared.logger, "sent: {}", redact_line_for_log(&line));
                 // Batch lines in a write when more are ready, e.g. backlog.
                 // Rate limited lines are sent as soon as allowed.
-                let flush = limited || rx.is_empty();
+                let flush = throttled || rx.is_empty();
                 match tokio::time::timeout(WRITE_TIMEOUT, writer.write(line, flush)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -233,9 +234,10 @@ impl Conn {
     }
 
     /// A virtual connection on this one: its messages are sent with the
-    /// tag, and closing it calls on_close instead of closing this
-    /// connection. Unless closed with close_quietly, the peer gets an ERROR
+    /// tag, and closing it calls `on_close` instead of closing this
+    /// connection. Unless closed with `close_quietly`, the peer gets an ERROR
     /// with the tag first.
+    #[must_use]
     pub fn view(
         &self,
         tag_key: &str,
@@ -253,6 +255,7 @@ impl Conn {
         }
     }
 
+    #[must_use]
     pub fn is_closed(&self) -> bool {
         self.shared.closed.load(Ordering::SeqCst)
             || self
@@ -300,7 +303,7 @@ impl Conn {
 
     /// Queues an outgoing message. Messages sent after the connection is
     /// closed are silently dropped. The connection is closed if more than
-    /// MAX_QUEUED_BYTES would be queued.
+    /// `MAX_QUEUED_BYTES` would be queued.
     pub fn send_message(&self, msg: Message) {
         if self.is_closed() {
             return;
@@ -333,11 +336,13 @@ impl Conn {
 
     /// The number of messages queued and not written yet, e.g. because the
     /// peer doesn't read fast enough.
+    #[must_use]
     pub fn queued(&self) -> usize {
         self.shared.queued.load(Ordering::Relaxed)
     }
 
     /// The accounted size of the messages waiting to be sent.
+    #[must_use]
     pub fn queued_bytes(&self) -> usize {
         self.shared.queued_bytes.load(Ordering::Relaxed)
     }
@@ -364,7 +369,7 @@ pub struct ConnReader {
     reader: Reader,
     input: Arc<Semaphore>,
     keepalive_input: Arc<Semaphore>,
-    /// A partial stream line retained across cancellation of read_message.
+    /// A partial stream line retained across cancellation of `read_message`.
     line_buf: Vec<u8>,
     /// A message read while waiting for an input permit
     pending: Option<Message>,
@@ -373,6 +378,7 @@ pub struct ConnReader {
 }
 
 /// Splits host:port and returns the host, or the whole string on failure.
+#[must_use]
 pub fn host_of(addr: &str) -> String {
     match crate::database::split_host_port(addr) {
         Ok((h, _)) => h,

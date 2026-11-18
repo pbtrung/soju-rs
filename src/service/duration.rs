@@ -2,6 +2,7 @@
 
 /// Parses a duration like Go's time.ParseDuration. Negative durations are
 /// rejected.
+#[must_use]
 pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
     let mut s = s.strip_prefix('+').unwrap_or(s);
     if s == "0" {
@@ -15,6 +16,10 @@ pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
         let num_len = s
             .find(|c: char| !c.is_ascii_digit() && c != '.')
             .unwrap_or(s.len());
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         let number = &s[..num_len];
         let (integer, fraction) = number.split_once('.').unwrap_or((number, ""));
         if integer.is_empty() && fraction.is_empty()
@@ -25,12 +30,28 @@ pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
         {
             return None;
         }
-        s = &s[num_len..];
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            s = &s[num_len..];
+        }
         let unit_len = s
             .find(|c: char| c.is_ascii_digit() || c == '.')
             .unwrap_or(s.len());
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         let unit = &s[..unit_len];
-        s = &s[unit_len..];
+        {
+            #![expect(
+                clippy::string_slice,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            s = &s[unit_len..];
+        }
         let multiplier = match unit {
             "ns" => 1u64,
             "us" | "µs" | "μs" => 1_000,
@@ -61,10 +82,11 @@ pub fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
 }
 
 /// The largest Go time.Duration, in seconds (about 292 years).
-pub const MAX_GO_DURATION_SECS: f64 = i64::MAX as f64 / 1e9;
+pub const MAX_GO_DURATION_SECS: f64 = 9_223_372_036.854_776;
 
 /// Formats a duration like Go's time.Duration.String, e.g. "1h30m0s", so that
-/// it can be passed back to parse_go_duration.
+/// it can be passed back to `parse_go_duration`.
+#[must_use]
 pub fn format_go_duration(d: std::time::Duration) -> String {
     if d.is_zero() {
         return "0s".to_owned();
@@ -73,10 +95,12 @@ pub fn format_go_duration(d: std::time::Duration) -> String {
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
     let mut out = String::new();
     if h > 0 {
-        out.push_str(&format!("{h}h"));
+        out.push_str(&h.to_string());
+        out.push('h');
     }
     if h > 0 || m > 0 {
-        out.push_str(&format!("{m}m"));
+        out.push_str(&m.to_string());
+        out.push('m');
     }
     out.push_str(&s.to_string());
     let nanos = d.subsec_nanos();

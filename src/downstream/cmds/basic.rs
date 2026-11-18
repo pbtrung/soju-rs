@@ -1,10 +1,20 @@
 //! NICK, SETNAME, JOIN, PART and MODE from registered downstream
 //! connections.
 
-use super::*;
+use super::{
+    ERR_BADCHANMASK, ERR_ERRONEUSNICKNAME, ERR_NICKNAMEINUSE, ERR_NOSUCHCHANNEL, ERR_UNKNOWNERROR,
+    ERR_USERSDONTMATCH, ILLEGAL_CHAN_CHARS, ILLEGAL_NICK_CHARS, Message, RPL_CHANNELMODEIS,
+    RPL_CREATIONTIME, RPL_UMODEIS, Result, SERVICE_NICK_CM, User, db, dc_network, fail, irc_error,
+    ircutil, logf, msg, need_params, send_upstream_labeled, update_nick, update_realname,
+    upstream_for_command,
+};
 
 pub(super) fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let nick = msg.params[0].clone();
     let dc_nick = dc!(u, i).nick.clone();
     if nick.is_empty() || nick.contains(ILLEGAL_NICK_CHARS) {
@@ -27,12 +37,16 @@ pub(super) fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let ni = dc_network(u, i);
     let res = match ni {
         Some(ni) => {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let mut record = u.networks[ni].record.clone();
-            record.nick = nick.clone();
+            record.nick.clone_from(&nick);
             u.srv.db.store_network(u.record.id, &mut record)
         }
         None => u.update_user(|r| {
-            r.nick = nick.clone();
+            r.nick.clone_from(&nick);
             Ok(())
         }),
     };
@@ -46,10 +60,26 @@ pub(super) fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         )));
     }
 
-    match ni {
-        Some(ni) => {
-            u.networks[ni].record.nick = nick.clone();
+    if let Some(ni) = ni {
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            u.networks[ni].record.nick.clone_from(&nick);
+        }
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             u.networks[ni].sync_snapshot();
+        }
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             if u.networks[ni].upstream().is_some() {
                 send_upstream_labeled(u, i, ni, msg!("NICK", nick));
             } else {
@@ -57,16 +87,15 @@ pub(super) fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                 update_nick(u, id);
             }
         }
-        None => {
-            let ids: Vec<u64> = u
-                .downstreams
-                .iter()
-                .filter(|d| d.network_id.is_none())
-                .map(|d| d.id)
-                .collect();
-            for id in ids {
-                update_nick(u, id);
-            }
+    } else {
+        let ids: Vec<u64> = u
+            .downstreams
+            .iter()
+            .filter(|d| d.network_id.is_none())
+            .map(|d| d.id)
+            .collect();
+        for id in ids {
+            update_nick(u, id);
         }
     }
     Ok(())
@@ -74,6 +103,10 @@ pub(super) fn handle_nick(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 
 pub(super) fn handle_setname(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let realname = msg.params[0].clone();
     if dc!(u, i).realname == realname {
         let prefix = dc!(u, i).prefix();
@@ -86,20 +119,34 @@ pub(super) fn handle_setname(u: &mut User, i: usize, msg: &Message) -> Result<()
         Some(ni) => {
             // If the client just resets to the default, just wipe the
             // per-network preference
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let mut record = u.networks[ni].record.clone();
-            record.realname = realname.clone();
+            record.realname.clone_from(&realname);
             if realname == u.record.realname {
                 record.realname.clear();
             }
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let setname = u.networks[ni]
                 .upstream()
                 .is_some_and(|uc| uc.caps.is_enabled("setname"));
             if setname {
-                u.srv.db.store_network(u.record.id, &mut record).map(|_| {
+                u.srv.db.store_network(u.record.id, &mut record).map(|()| {
                     // Keep subsequent updates and reconnects from restoring
                     // the old preference. Upstream confirms the visible name.
-                    u.networks[ni].record = record;
-                    u.networks[ni].sync_snapshot();
+                    {
+#![expect(clippy::indexing_slicing, reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler.")]
+u.networks[ni].record = record;
+}
+                    {
+#![expect(clippy::indexing_slicing, reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler.")]
+u.networks[ni].sync_snapshot();
+}
                     send_upstream_labeled(u, i, ni, msg!("SETNAME", realname.clone()));
                 })
             } else {
@@ -109,7 +156,7 @@ pub(super) fn handle_setname(u: &mut User, i: usize, msg: &Message) -> Result<()
             }
         }
         None => u.update_user(|r| {
-            r.realname = realname.clone();
+            r.realname.clone_from(&realname);
             Ok(())
         }),
     };
@@ -147,14 +194,21 @@ pub(super) fn handle_join(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let keys: Vec<String> = msg
         .params
         .get(1)
-        .map(|k| k.split(',').map(str::to_owned).collect())
-        .unwrap_or_default();
+        .map_or_default(|k| k.split(',').map(str::to_owned).collect());
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let names: Vec<String> = msg.params[0].split(',').map(str::to_owned).collect();
     if names.len() > 1 {
         // We need to potentially mix local and remote messages so we drop
         // the label
         dc!(u, i).drop_label();
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
     for (idx, name) in names.into_iter().enumerate() {
         let key = keys.get(idx).cloned().unwrap_or_default();
@@ -163,6 +217,10 @@ pub(super) fn handle_join(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             dc!(u, i).send_message(msg!(ERR_BADCHANMASK, nick, name, "Invalid channel name"));
             continue;
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let uc = u.networks[ni]
             .upstream()
             .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
@@ -183,6 +241,10 @@ pub(super) fn handle_join(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             send_upstream_labeled(u, i, ni, Message::new("JOIN", params));
         }
 
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let net = &mut u.networks[ni];
         if let Some(ch) = net.channels.get_mut(&name) {
             // Don't clear the channel key if there's one set
@@ -201,13 +263,19 @@ pub(super) fn handle_join(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                 },
             );
         }
-        if let Some(ch) = u.networks[ni].channels.get_mut(&name)
-            && let Err(e) = u.srv.db.store_channel(net_id, ch)
         {
-            logf!(
-                dc!(u, i).logger,
-                "failed to create or update channel {name:?}: {e}"
-            );
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            if let Some(ch) = u.networks[ni].channels.get_mut(&name)
+                && let Err(e) = u.srv.db.store_channel(net_id, ch)
+            {
+                logf!(
+                    dc!(u, i).logger,
+                    "failed to create or update channel {name:?}: {e}"
+                );
+            }
         }
     }
     Ok(())
@@ -217,32 +285,58 @@ pub(super) fn handle_part(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let ni = upstream_for_command(u, i, &msg.command)?;
     need_params(msg, 1)?;
     let reason = msg.params.get(1).cloned().unwrap_or_default();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let names: Vec<String> = msg.params[0].split(',').map(str::to_owned).collect();
     if names.len() > 1 {
         dc!(u, i).drop_label();
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let net_id = u.networks[ni].id();
     for name in names {
         if reason.eq_ignore_ascii_case("detach") {
-            if u.networks[ni].channels.has(&name) {
-                u.detach_channel(ni, &name);
-            } else {
-                u.networks[ni].channels.set(
-                    &name,
-                    db::Channel {
-                        name: name.clone(),
-                        detached: true,
-                        ..Default::default()
-                    },
-                );
-            }
-            if let Some(ch) = u.networks[ni].channels.get_mut(&name)
-                && let Err(e) = u.srv.db.store_channel(net_id, ch)
             {
-                logf!(
-                    dc!(u, i).logger,
-                    "failed to create or update channel {name:?}: {e}"
-                );
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if u.networks[ni].channels.has(&name) {
+                    u.detach_channel(ni, &name);
+                } else {
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                        )]
+                        u.networks[ni].channels.set(
+                            &name,
+                            db::Channel {
+                                name: name.clone(),
+                                detached: true,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+            }
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if let Some(ch) = u.networks[ni].channels.get_mut(&name)
+                    && let Err(e) = u.srv.db.store_channel(net_id, ch)
+                {
+                    logf!(
+                        dc!(u, i).logger,
+                        "failed to create or update channel {name:?}: {e}"
+                    );
+                }
             }
         } else {
             let mut params = vec![name.clone()];
@@ -253,7 +347,13 @@ pub(super) fn handle_part(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             if let Err(e) = u.delete_channel(ni, &name) {
                 logf!(dc!(u, i).logger, "failed to delete channel {name:?}: {e}");
             }
-            crate::state_lock::lock(&u.networks[ni].push_targets).del(&name);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                crate::state_lock::lock(&u.networks[ni].push_targets).del(&name);
+            }
         }
     }
     Ok(())
@@ -261,25 +361,36 @@ pub(super) fn handle_part(u: &mut User, i: usize, msg: &Message) -> Result<()> {
 
 pub(super) fn handle_mode(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let name = msg.params[0].clone();
     let mode_str = msg.params.get(1).cloned().unwrap_or_default();
     let nick = dc!(u, i).nick.clone();
 
     if dc!(u, i).casemap(&name) == dc!(u, i).nick_cm {
-        if !mode_str.is_empty() {
-            let ni = upstream_for_command(u, i, &msg.command)?;
-            send_upstream_labeled(u, i, ni, msg.clone());
-        } else {
+        if mode_str.is_empty() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
             let user_mode = dc_network(u, i)
                 .and_then(|ni| u.networks[ni].upstream())
-                .map(|uc| uc.modes.0.clone())
-                .unwrap_or_default();
+                .map_or_default(|uc| uc.modes.0.clone());
             dc!(u, i).send_message(msg!(RPL_UMODEIS, nick, format!("+{user_mode}")));
+        } else {
+            let ni = upstream_for_command(u, i, &msg.command)?;
+            send_upstream_labeled(u, i, ni, msg.clone());
         }
         return Ok(());
     }
 
     let ni = upstream_for_command(u, i, &msg.command)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let uc = u.networks[ni]
         .upstream()
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
@@ -291,11 +402,7 @@ pub(super) fn handle_mode(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         )));
     }
 
-    if !mode_str.is_empty() {
-        let mut params = vec![name, mode_str];
-        params.extend_from_slice(&msg.params[2..]);
-        send_upstream_labeled(u, i, ni, Message::new("MODE", params));
-    } else {
+    if mode_str.is_empty() {
         let Some(ch) = uc.channels.get(&name) else {
             // we're not on that channel, pass command to upstream
             send_upstream_labeled(u, i, ni, msg.clone());
@@ -315,6 +422,16 @@ pub(super) fn handle_mode(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         if !creation_time.is_empty() {
             dc!(u, i).send_message(msg!(RPL_CREATIONTIME, nick, name, creation_time));
         }
+    } else {
+        let mut params = vec![name, mode_str];
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            params.extend_from_slice(&msg.params[2..]);
+        }
+        send_upstream_labeled(u, i, ni, Message::new("MODE", params));
     }
     Ok(())
 }

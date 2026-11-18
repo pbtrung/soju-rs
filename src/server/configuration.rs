@@ -7,6 +7,10 @@ use crate::database as db;
 use anyhow::{Result, anyhow, bail};
 
 /// Builds the run-time configuration from the config file.
+///
+/// # Errors
+///
+/// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
 pub async fn load_server_config(raw: &config::Server) -> Result<ServerConfig> {
     // A hostname without a dot can confuse clients
     if !raw.basic.hostname.contains('.') {

@@ -1,7 +1,17 @@
 //! WHO, WHOIS and MONITOR from registered downstream connections.
 
-use super::*;
+use super::{
+    CaseMappingMap, ERR_MONLISTFULL, ERR_NONICKNAMEGIVEN, Message, RPL_ENDOFMONLIST, RPL_ENDOFWHO,
+    RPL_ENDOFWHOIS, RPL_MONLIST, RPL_MONOFFLINE, RPL_MONONLINE, RPL_WHOISACCOUNT, RPL_WHOISBOT,
+    RPL_WHOISOPERATOR, RPL_WHOISSERVER, RPL_WHOISUSER, Result, SERVICE_NICK, SERVICE_NICK_CM,
+    SERVICE_REALNAME, User, WhoxInfo, dc_network, enqueue_upstream_command, irc_error, ircutil,
+    msg, need_params, service_prefix, unknown_command, upstream_for_command, xirc,
+};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     if msg.params.is_empty() {
         dc!(u, i).send_message(msg!(RPL_ENDOFWHO, "*", "*", "End of /WHO list"));
@@ -9,13 +19,25 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     }
 
     // Clients will use the first mask to match RPL_ENDOFWHO
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let end_of_who_token = msg.params[0].clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let mask = msg.params[0].clone();
     let options = msg.params.get(1).cloned().unwrap_or_default();
     let (fields, whox_token) = xirc::parse_whox_options(&options);
     let hostname = u.srv.config().basic.hostname.clone();
 
     // TODO: support mixed bouncer/upstream WHO queries
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &u.downstreams[i];
     let mask_cm = dc.casemap(&mask);
     let ni = dc_network(u, i);
@@ -35,6 +57,10 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             realname: dc.realname.clone(),
             ..Default::default()
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         dc.send_message(xirc::generate_whox_reply(&fields, &info));
         dc.send_message(msg!(
@@ -50,11 +76,17 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
         match ni {
             None => flags.push('B'),
             Some(ni) => {
-                if let Some(uc) = u.networks[ni].upstream()
-                    && let Some(Some(bot)) = uc.isupport.get("BOT")
-                    && bot.len() == 1
                 {
-                    flags.push_str(bot);
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
+                    if let Some(uc) = u.networks[ni].upstream()
+                        && let Some(Some(bot)) = uc.isupport.get("BOT")
+                        && bot.len() == 1
+                    {
+                        flags.push_str(bot);
+                    }
                 }
             }
         }
@@ -70,6 +102,10 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             realname: SERVICE_REALNAME.to_owned(),
             ..Default::default()
         };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         dc.send_message(xirc::generate_whox_reply(&fields, &info));
         dc.send_message(msg!(
@@ -93,10 +129,18 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let ni = upstream_for_command(u, i, &msg.command)?;
 
     // Check if we have the reply cached
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let uc = u.networks[ni]
         .upstream()
         .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if let Some(l) = uc.get_cached_who(&mask, &fields) {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let multi_prefix = u.downstreams[i].caps.is_enabled("multi-prefix");
         let mut replies = Vec::new();
         for uu in l {
@@ -112,14 +156,13 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
                 ..Default::default()
             };
             if uc.is_channel(&mask) {
-                info.channel = mask.clone();
+                info.channel.clone_from(&mask);
                 // Set channel membership prefixes from cached NAMES reply
                 let prefixes = uc
                     .channels
                     .get(&info.channel)
                     .and_then(|ch| ch.members.get(&info.nickname))
-                    .map(|ms| ircutil::format_member_prefix(ms, multi_prefix))
-                    .unwrap_or_default();
+                    .map_or_default(|ms| ircutil::format_member_prefix(ms, multi_prefix));
                 // Channel membership prefixes are listed after away status
                 // ('G'/'H') and optional server operator indicator ('*')
                 match info.flags.find(|f| f != 'G' && f != 'H' && f != '*') {
@@ -129,6 +172,10 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
             }
             replies.push(xirc::generate_whox_reply(&fields, &info));
         }
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         for r in replies {
             dc.send_message(r);
@@ -146,6 +193,10 @@ pub(super) fn handle_who(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_whois(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let nick = dc!(u, i).nick.clone();
     if msg.params.is_empty() {
@@ -156,9 +207,21 @@ pub(super) fn handle_whois(u: &mut User, i: usize, msg: &Message) -> Result<()> 
         )));
     }
     let mut mask = if msg.params.len() == 1 {
-        msg.params[0].clone()
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            msg.params[0].clone()
+        }
     } else {
-        msg.params[1].clone()
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            msg.params[1].clone()
+        }
     };
     // TODO: support multiple WHOIS users
     if let Some(idx) = mask.find(',') {
@@ -166,11 +229,19 @@ pub(super) fn handle_whois(u: &mut User, i: usize, msg: &Message) -> Result<()> 
     }
     let hostname = u.srv.config().basic.hostname.clone();
 
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &u.downstreams[i];
     if dc_network(u, i).is_none() && dc.casemap(&mask) == dc.nick_cm {
         let (host, realname) = (dc.hostname.clone(), dc.realname.clone());
         let username = u.record.username.clone();
         let admin = u.record.admin;
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         dc.send_message(msg!(
             RPL_WHOISUSER,
@@ -213,6 +284,10 @@ pub(super) fn handle_whois(u: &mut User, i: usize, msg: &Message) -> Result<()> 
     }
     if dc.casemap(&mask) == SERVICE_NICK_CM {
         let sp = service_prefix();
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
         let dc = &mut u.downstreams[i];
         dc.send_message(msg!(
             RPL_WHOISUSER,
@@ -258,10 +333,18 @@ pub(super) fn handle_whois(u: &mut User, i: usize, msg: &Message) -> Result<()> 
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     let Some(ni) = dc_network(u, i) else {
         return Err(unknown_command(&msg.command));
     };
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let Some(uc) = u.networks[ni].upstream() else {
         return Err(unknown_command(&msg.command));
     };
@@ -269,7 +352,15 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
         return Err(unknown_command(&msg.command));
     }
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let subcommand = msg.params[0].clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let cm = u.networks[ni].casemap;
     let nick = dc!(u, i).nick.clone();
 
@@ -277,7 +368,12 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
     match subcommand.to_uppercase().as_str() {
         "+" | "-" => {
             need_params(msg, 2)?;
-            for target in msg.params[1].split(',') {
+            for target in msg
+                .params
+                .get(1)
+                .ok_or_else(|| super::need_more_params(&msg.command))?
+                .split(',')
+            {
                 // An empty or spaced name (e.g. "a,,b", or a trailing
                 // parameter "a b") isn't a nickname: it would be relayed to
                 // the upstream server, and listed back in replies
@@ -303,6 +399,10 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
                         dc!(u, i).send_message(msg!(RPL_MONONLINE, nick.clone(), target));
                         continue;
                     }
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                    )]
                     let uc = u.networks[ni].upstream().ok_or_else(|| {
                         anyhow::anyhow!("required user or connection state is unavailable")
                     })?;
@@ -336,6 +436,10 @@ pub(super) fn handle_monitor(u: &mut User, i: usize, msg: &Message) -> Result<()
             // TODO: be less lazy and pack the lists
             let names: Vec<String> = dc!(u, i).monitored.keys().map(str::to_owned).collect();
             for target in names {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
                 let uc = u.networks[ni].upstream().ok_or_else(|| {
                     anyhow::anyhow!("required user or connection state is unavailable")
                 })?;

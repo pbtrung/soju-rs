@@ -63,7 +63,11 @@ fn caps_requested() {
 
 #[test]
 fn cap_ls_continuation() {
-    let params = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let params = |l: &[&str]| {
+        l.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    };
     assert!(registration::cap_ls_continued(&params(&["*", "a b"])));
     assert!(!registration::cap_ls_continued(&params(&["a b"])));
     // The marker is looked up after the subcommand, not in the nick

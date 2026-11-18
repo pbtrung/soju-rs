@@ -55,7 +55,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> ServerConfig {
         let mut basic = config::Server::defaults().basic;
-        basic.hostname = "localhost".to_owned();
+        "localhost".clone_into(&mut basic.hostname);
         ServerConfig {
             basic,
             icon_path: String::new(),
@@ -164,6 +164,10 @@ impl Server {
     }
 
     /// Loads users and starts background tasks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn start(self: &Arc<Self>) -> Result<()> {
         self.load_web_push_config()?;
 
@@ -177,12 +181,12 @@ impl Server {
 
         let srv = self.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(4 * 3600));
+            let mut ticker = tokio::time::interval(Duration::from_hours(4));
             ticker.tick().await;
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {}
-                    _ = srv.stop.cancelled() => return,
+                    () = srv.stop.cancelled() => return,
                 }
                 if let Err(e) = srv.disable_inactive_users().await {
                     logf!(srv.logger, "failed to disable inactive users: {e}");
@@ -194,12 +198,12 @@ impl Server {
         // see startup_maintenance
         let srv = self.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(24 * 3600));
+            let mut ticker = tokio::time::interval(Duration::from_hours(24));
             ticker.tick().await;
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {}
-                    _ = srv.stop.cancelled() => return,
+                    () = srv.stop.cancelled() => return,
                 }
                 srv.run_message_expiry(false).await;
             }
@@ -249,7 +253,7 @@ impl Server {
             .cloned()
             .collect();
         for h in &handles {
-            h.send(Event::Stop);
+            h.notify(Event::Stop);
         }
         logf!(self.logger, "waiting for users to finish");
         for h in handles {
@@ -303,6 +307,10 @@ impl Server {
     }
 
     /// Creates a user in the database and starts it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn create_user(self: &Arc<Self>, mut record: db::User) -> Result<UserHandle> {
         let _creating = crate::state_lock::lock(&self.user_creation);
         if self.is_shutting_down() {
@@ -341,10 +349,14 @@ impl Server {
     pub fn user_records(&self) -> Vec<db::User> {
         crate::state_lock::lock(&self.users)
             .values()
-            .map(|h| h.record())
+            .map(super::user::UserHandle::record)
             .collect()
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub async fn get_or_create_user(self: &Arc<Self>, username: &str) -> Result<UserHandle> {
         if let Some(u) = self.get_user(username) {
             return Ok(u);

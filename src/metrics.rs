@@ -38,7 +38,7 @@ impl Metrics {
     /// Renders all metrics. users is the current number of active users.
     pub fn render(&self, users: usize) -> String {
         let mut s = String::new();
-        let mut gauge = |name: &str, help: &str, v: f64| {
+        let mut gauge = |name: &str, help: &str, v: &dyn std::fmt::Display| {
             #[expect(
                 clippy::expect_used,
                 reason = "Formatting primitive metric values into String is infallible."
@@ -49,17 +49,17 @@ impl Metrics {
         gauge(
             "soju_users_active",
             "Current number of active users",
-            users as f64,
+            &users,
         );
         gauge(
             "soju_downstreams_active",
             "Current number of downstream connections",
-            self.downstreams.load(Ordering::Relaxed) as f64,
+            &self.downstreams.load(Ordering::Relaxed),
         );
         gauge(
             "soju_upstreams_active",
             "Current number of upstream connections",
-            self.upstreams.load(Ordering::Relaxed) as f64,
+            &self.upstreams.load(Ordering::Relaxed),
         );
         let counters = [
             (

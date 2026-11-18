@@ -10,7 +10,7 @@ use jiff::Timestamp;
 )]
 async fn oversized_maintenance_durations_return_errors() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
-    for duration in [Duration::MAX, Duration::from_secs(20_000 * 366 * 86400)] {
+    for duration in [Duration::MAX, Duration::from_hours(175_680_000)] {
         let mut cfg = ServerConfig::default();
         cfg.basic.message_expiry = duration;
         cfg.basic.disable_inactive_users_delay = duration;
@@ -28,7 +28,7 @@ async fn oversized_maintenance_durations_return_errors() {
 fn vacuum_requires_25_percent_free_and_maintenance_request() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     let mut cfg = ServerConfig::default();
-    cfg.basic.message_expiry = Duration::from_secs(86400);
+    cfg.basic.message_expiry = Duration::from_hours(24);
     srv.set_config(cfg);
     let mut user = db::User::new("vacuum");
     srv.db.store_user(&mut user).unwrap();
@@ -106,7 +106,7 @@ fn msg_store_not_reloaded() {
 }
 
 /// A reload changing message-expiry applies it right away, and a user
-/// listed by start() and created meanwhile runs once.
+/// listed by `start()` and created meanwhile runs once.
 #[tokio::test(flavor = "multi_thread")]
 #[expect(
     clippy::unwrap_used,
@@ -136,7 +136,7 @@ async fn expiry_reload_and_duplicate_users() {
     }
 
     let mut cfg = ServerConfig::default();
-    cfg.basic.message_expiry = Duration::from_secs(86400);
+    cfg.basic.message_expiry = Duration::from_hours(24);
     srv.reload_config(cfg);
     let opts = db::MessageOptions {
         limit: 10,
@@ -153,11 +153,9 @@ async fn expiry_reload_and_duplicate_users() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(
-        srv.db
-            .list_messages(net.id, "#a", &opts)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        srv.db.list_messages(net.id, "#a", &opts).unwrap(),
+        [] as [crate::irc::Message; 0]
     );
     srv.shutdown().await;
 }
@@ -195,6 +193,6 @@ async fn concurrent_creation_cannot_escape_the_shutdown_snapshot() {
                 .await
                 .expect("a new user was left running after server shutdown");
         }
-        assert!(server.user_records().is_empty());
+        assert_eq!(server.user_records(), [] as [crate::database::User; 0]);
     }
 }

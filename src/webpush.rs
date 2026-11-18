@@ -21,7 +21,7 @@ use sha2::Sha256;
 const RECORD_SIZE: u32 = 2048;
 
 /// Returned when the push service reports the subscription has expired, see
-/// is_expired_status.
+/// `is_expired_status`.
 #[derive(Debug)]
 pub struct SubscriptionExpired;
 
@@ -57,6 +57,7 @@ impl Urgency {
 
 /// Generates a VAPID key pair, returning (private, public) keys encoded in
 /// unpadded base64url.
+#[must_use]
 pub fn generate_vapid_keys() -> (String, String) {
     let secret = SecretKey::generate_from_rng(&mut rand::rng());
     let public = secret.public_key().to_sec1_bytes();
@@ -97,6 +98,10 @@ fn hkdf_expand(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Result<Vec<u
 
 /// Encrypts a message for a subscription, producing an aes128gcm body with
 /// a single record padded to the record size.
+///
+/// # Errors
+///
+/// Returns an error for invalid keys, rejected endpoints, cryptographic errors, or HTTP delivery/setup failures.
 pub fn encrypt(message: &[u8], auth: &str, p256dh: &str) -> Result<Vec<u8>> {
     let mut salt = [0u8; 16];
     rand::fill(&mut salt);
@@ -114,12 +119,19 @@ fn encrypt_with(
     auth: &str,
     p256dh: &str,
     salt: &[u8; 16],
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "Owning the ephemeral private key makes it single-use for this record and drops it on return."
+    )]
     local: SecretKey,
 ) -> Result<Vec<u8>> {
     let auth_secret = decode_subscription_key(auth)?;
     let dh = decode_subscription_key(p256dh)?;
-    let remote = PublicKey::from_sec1_bytes(&dh)
-        .map_err(|_| anyhow!("Unmarshal Error: Public key is not a valid point on the curve"))?;
+    let remote = PublicKey::from_sec1_bytes(&dh).map_err(|error| {
+        anyhow::anyhow!(error).context(anyhow!(
+            "Unmarshal Error: Public key is not a valid point on the curve"
+        ))
+    })?;
     let local_public = local.public_key().to_sec1_bytes();
 
     let shared = p256::ecdh::diffie_hellman(local.to_nonzero_scalar(), remote.as_affine());
@@ -151,12 +163,16 @@ fn encrypt_with(
     let nonce = Nonce::try_from(&nonce[..])?;
     let ciphertext = cipher
         .encrypt(&nonce, data.as_slice())
-        .map_err(|_| anyhow!("encryption failed"))?;
+        .map_err(|error| anyhow::anyhow!(error).context(anyhow!("encryption failed")))?;
     record.extend_from_slice(&ciphertext);
     Ok(record)
 }
 
 /// Builds the VAPID Authorization header for an endpoint.
+///
+/// # Errors
+///
+/// Returns an error for invalid keys, rejected endpoints, cryptographic errors, or HTTP delivery/setup failures.
 pub fn vapid_authorization(
     endpoint: &str,
     subscriber: &str,
@@ -184,8 +200,15 @@ pub fn vapid_authorization(
     if priv_bytes.len() > 32 {
         bail!("invalid VAPID private key");
     }
-    padded[32 - priv_bytes.len()..].copy_from_slice(&priv_bytes);
-    let key = SigningKey::from_slice(&padded).map_err(|_| anyhow!("invalid VAPID private key"))?;
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Key/record lengths are validated before accessing fixed cryptographic layouts."
+        )]
+        padded[32 - priv_bytes.len()..].copy_from_slice(&priv_bytes);
+    }
+    let key = SigningKey::from_slice(&padded)
+        .map_err(|error| anyhow::anyhow!(error).context(anyhow!("invalid VAPID private key")))?;
     let sig: Signature = key.sign(signing_input.as_bytes());
     let jwt = format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(sig.to_bytes()));
 
@@ -199,6 +222,7 @@ pub fn vapid_authorization(
 /// Reports whether an IP address is internal and must not be contacted by
 /// the Web Push client: not globally reachable, or a gateway to such an
 /// address (an IPv6 address embedding an IPv4 one).
+#[must_use]
 pub fn is_internal_ip(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(v4) => {
@@ -282,6 +306,10 @@ pub struct Sender {
 }
 
 impl Sender {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid keys, rejected endpoints, cryptographic errors, or HTTP delivery/setup failures.
     pub fn new(vapid_public: &str, vapid_private: &str) -> Result<Sender> {
         let tls = crate::auth::rustls_client_config()?;
         // Internal addresses are rejected: hostnames by the resolver, IP
@@ -314,6 +342,10 @@ impl Sender {
 
     /// Sends a notification. Fails with [`SubscriptionExpired`] if the
     /// subscription is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid keys, rejected endpoints, cryptographic errors, or HTTP delivery/setup failures.
     pub async fn send(
         &self,
         endpoint: &str,
@@ -372,6 +404,10 @@ mod tests {
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
     )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn decrypt(body: &[u8], ua_secret: &SecretKey, auth: &[u8]) -> Vec<u8> {
         let salt = &body[..16];
         let rs = u32::from_be_bytes(body[16..20].try_into().unwrap());
@@ -423,6 +459,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn vapid() {
         let (private, public) = generate_vapid_keys();

@@ -19,7 +19,28 @@ use tokio_util::sync::CancellationToken;
 use crate::conn::{BoxIo, Conn, RateLimit, RateLimitFlag};
 use crate::database::{self as db, get_nick, get_realname, get_username, split_host_port};
 use crate::downstream::{self, DownstreamConn, LabelContext};
-use crate::irc::{Message, Prefix, numerics::*};
+use crate::irc::{
+    Message, Prefix,
+    numerics::{
+        ERR_ERRONEUSNICKNAME, ERR_MONLISTFULL, ERR_NEEDMOREPARAMS, ERR_NICKCOLLISION,
+        ERR_NICKLOCKED, ERR_NICKNAMEINUSE, ERR_NOMOTD, ERR_NOPERMFORHOST, ERR_NOSUCHNICK,
+        ERR_NOSUCHSERVER, ERR_PASSWDMISMATCH, ERR_SASLABORTED, ERR_SASLALREADY, ERR_SASLFAIL,
+        ERR_SASLTOOLONG, ERR_UNAVAILRESOURCE, ERR_UNKNOWNCOMMAND, ERR_UNKNOWNERROR,
+        ERR_YOUREBANNEDCREEP, RPL_AWAY, RPL_BANLIST, RPL_CHANNELMODEIS, RPL_CREATED,
+        RPL_CREATIONTIME, RPL_ENDOFBANLIST, RPL_ENDOFEXCEPTLIST, RPL_ENDOFINVITELIST,
+        RPL_ENDOFMOTD, RPL_ENDOFNAMES, RPL_ENDOFWHO, RPL_ENDOFWHOIS, RPL_EXCEPTLIST,
+        RPL_GLOBALUSERS, RPL_INVITELIST, RPL_INVITING, RPL_ISUPPORT, RPL_LIST, RPL_LISTEND,
+        RPL_LISTSTART, RPL_LOCALUSERS, RPL_LOGGEDIN, RPL_LOGGEDOUT, RPL_LUSERCHANNELS,
+        RPL_LUSERCLIENT, RPL_LUSERME, RPL_LUSEROP, RPL_LUSERUNKNOWN, RPL_MONOFFLINE, RPL_MONONLINE,
+        RPL_MOTD, RPL_MOTDSTART, RPL_MYINFO, RPL_NAMREPLY, RPL_NOTOPIC, RPL_NOWAWAY,
+        RPL_SASLSUCCESS, RPL_STATSBLINE, RPL_STATSDLINE, RPL_STATSPING, RPL_STATSVLINE, RPL_TOPIC,
+        RPL_TOPICWHOTIME, RPL_TRYAGAIN, RPL_UMODEIS, RPL_UNAWAY, RPL_VISIBLEHOST, RPL_WELCOME,
+        RPL_WHOISACCOUNT, RPL_WHOISACTUALLY, RPL_WHOISCERTFP, RPL_WHOISCHANNELS, RPL_WHOISHOST,
+        RPL_WHOISIDLE, RPL_WHOISMODES, RPL_WHOISOPERATOR, RPL_WHOISREGNICK, RPL_WHOISSECURE,
+        RPL_WHOISSERVER, RPL_WHOISSPECIAL, RPL_WHOISUSER, RPL_WHOREPLY, RPL_WHOSPCRPL,
+        RPL_YOURHOST,
+    },
+};
 use crate::ircutil::{self, ChannelModeType, ChannelModes, UserModes};
 use crate::logger::Logger;
 use crate::metrics;
@@ -33,9 +54,15 @@ use crate::xirc::{
 use crate::{debugf, logf, msg};
 
 macro_rules! uc {
-    ($u:expr, $ni:expr) => {
-        $u.networks[$ni].conn.as_mut().unwrap()
-    };
+    ($u:expr, $ni:expr) => {{
+        // Index and connection generation were validated by dispatch.
+        let upstream = $u
+            .networks
+            .get_mut($ni)
+            .and_then(|network| network.conn.as_mut())
+            .expect("validated upstream connection");
+        upstream
+    }};
 }
 
 mod channels;
@@ -65,7 +92,7 @@ use commands::{
 use users::start_regain_nick_timer;
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long an upstream server has to complete registration (RPL_WELCOME)
+/// How long an upstream server has to complete registration (`RPL_WELCOME`)
 /// once connected.
 pub const REGISTER_TIMEOUT: Duration = Duration::from_secs(60);
 /// TCP keep-alive period of upstream connections, like Go's net.Dialer.
@@ -73,12 +100,12 @@ pub const KEEP_ALIVE: Duration = Duration::from_secs(15);
 pub const UPSTREAM_MESSAGE_DELAY: Duration = Duration::from_secs(2);
 pub const UPSTREAM_MESSAGE_BURST: u32 = 10;
 /// The delay after each connect command, to let the server process it, e.g.
-/// for NickServ to log us in.
+/// for `NickServ` to log us in.
 pub const CONNECT_COMMAND_DELAY: Duration = Duration::from_secs(5);
 
 /// The static list of upstream capabilities always requested when
 /// supported. echo-message depends on labeled-response, see
-/// caps_to_request.
+/// `caps_to_request`.
 const PERMANENT_UPSTREAM_CAPS: &[&str] = &[
     "account-notify",
     "account-tag",
@@ -110,6 +137,7 @@ static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 pub struct RegistrationError(pub Message);
 
 impl RegistrationError {
+    #[must_use]
     pub fn reason(&self) -> String {
         match self.0.params.last() {
             Some(p) => p.clone(),
@@ -119,6 +147,7 @@ impl RegistrationError {
 
     /// Only false if we're 100% sure that fixing the error requires a
     /// network configuration change.
+    #[must_use]
     pub fn temporary(&self) -> bool {
         match self.0.command.as_str() {
             ERR_PASSWDMISMATCH | ERR_ERRONEUSNICKNAME => false,
@@ -243,7 +272,7 @@ impl UpstreamUser {
     fn update_from(&mut self, u: &UpstreamUser) {
         let set = |dst: &mut String, src: &String| {
             if !src.is_empty() {
-                *dst = src.clone();
+                dst.clone_from(src);
             }
         };
         set(&mut self.nickname, &u.nickname);
@@ -290,7 +319,7 @@ pub struct PendingCommand {
 }
 
 /// A pending command ended by an early error reply, see
-/// commands::end_command_early.
+/// `commands::end_command_early`.
 #[derive(Debug)]
 struct EndedEarly {
     command: String,
@@ -323,6 +352,10 @@ impl SaslClient {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent negotiated/lifecycle flags represent valid combinations, not mutually exclusive states."
+)]
 pub struct UpstreamConn {
     pub id: u64,
     pub conn: Conn,
@@ -385,7 +418,7 @@ fn caps_to_request(caps: &CapRegistry) -> Vec<String> {
     let mut request: Vec<String> = PERMANENT_UPSTREAM_CAPS
         .iter()
         .filter(|c| caps.is_available(c) && !caps.is_enabled(c))
-        .map(|c| c.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     // Without labels, echoes can't be told apart from other messages:

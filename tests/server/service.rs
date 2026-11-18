@@ -2,9 +2,13 @@
 
 use super::*;
 
-/// BouncerServ commands waiting on another user's event loop.
+/// `BouncerServ` commands waiting on another user's event loop.
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn service_other_user() {
@@ -54,10 +58,14 @@ pub(super) async fn service_other_user() {
     env.srv.shutdown().await;
 }
 
-/// BouncerServ commands doing CPU-heavy work (key generation, password
+/// `BouncerServ` commands doing CPU-heavy work (key generation, password
 /// hashing) off the event loop, then applying it.
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn service_blocking_work() {
@@ -114,6 +122,11 @@ pub(super) async fn service_blocking_work() {
 /// traffic or history, either between users or between a user's networks.
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::too_many_lines,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn user_network_channel_isolation() {

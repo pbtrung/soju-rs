@@ -1,5 +1,5 @@
 //! Command-line flag parsing with the same syntax and error messages as Go's
-//! flag package, used by BouncerServ commands.
+//! flag package, used by `BouncerServ` commands.
 
 use std::collections::HashMap;
 
@@ -56,54 +56,82 @@ pub(crate) fn parse_go_bool(s: &str) -> Option<bool> {
 }
 
 impl FlagSet {
+    #[must_use]
     pub fn new() -> FlagSet {
         FlagSet::default()
     }
 
     /// A boolean flag, which can be set with -name or -name=value.
+    #[must_use]
     pub fn bool(mut self, name: &str) -> FlagSet {
         self.flags.insert(name.to_owned(), Kind::Bool);
         self
     }
 
     /// A boolean flag which requires a value (-name value).
+    #[must_use]
     pub fn bool_value(mut self, name: &str) -> FlagSet {
         self.flags.insert(name.to_owned(), Kind::BoolValue);
         self
     }
 
+    #[must_use]
     pub fn string(mut self, name: &str) -> FlagSet {
         self.flags.insert(name.to_owned(), Kind::String);
         self
     }
 
+    #[must_use]
     pub fn int(mut self, name: &str) -> FlagSet {
         self.flags.insert(name.to_owned(), Kind::Int);
         self
     }
 
+    #[must_use]
     pub fn atoi(mut self, name: &str) -> FlagSet {
         self.flags.insert(name.to_owned(), Kind::Atoi);
         self
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+    )]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if requested state is unavailable, input is invalid, or an underlying operation fails.
     pub fn parse(&self, args: &[String]) -> Result<Parsed, FlagError> {
         let mut parsed = Parsed::default();
         let mut i = 0;
         while i < args.len() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
             let s = &args[i];
             if s.len() < 2 || !s.starts_with('-') {
                 break;
             }
             let mut num_minuses = 1;
-            if s.as_bytes()[1] == b'-' {
-                num_minuses += 1;
-                if s.len() == 2 {
-                    // "--" terminates the flags
-                    i += 1;
-                    break;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                if s.as_bytes()[1] == b'-' {
+                    num_minuses += 1;
+                    if s.len() == 2 {
+                        // "--" terminates the flags
+                        i += 1;
+                        break;
+                    }
                 }
             }
+            #[expect(
+                clippy::string_slice,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
             let name = &s[num_minuses..];
             if name.is_empty() || name.starts_with('-') || name.starts_with('=') {
                 return Err(FlagError::Other(format!("bad flag syntax: {s}")));
@@ -141,7 +169,13 @@ impl FlagSet {
                     Some(v) => v,
                     None if i < args.len() => {
                         i += 1;
-                        args[i - 1].clone()
+                        {
+                            #![expect(
+                                clippy::indexing_slicing,
+                                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                            )]
+                            args[i - 1].clone()
+                        }
                     }
                     None => {
                         return Err(FlagError::Other(format!("flag needs an argument: -{name}")));
@@ -176,7 +210,13 @@ impl FlagSet {
                 .or_default()
                 .push(value);
         }
-        parsed.args = args[i..].to_vec();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            parsed.args = args[i..].to_vec();
+        }
         Ok(parsed)
     }
 }
@@ -199,10 +239,12 @@ impl Parsed {
         self.get(name).and_then(parse_go_bool)
     }
 
+    #[must_use]
     pub fn get_int(&self, name: &str) -> Option<i64> {
         self.get(name).and_then(|v| v.parse().ok())
     }
 
+    #[must_use]
     pub fn string_or(&self, name: &str, default: &str) -> String {
         self.get(name).unwrap_or(default).to_owned()
     }
@@ -213,7 +255,7 @@ mod tests {
     use super::*;
 
     fn args(s: &[&str]) -> Vec<String> {
-        s.iter().map(|s| s.to_string()).collect()
+        s.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

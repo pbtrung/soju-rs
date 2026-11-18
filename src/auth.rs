@@ -1,5 +1,6 @@
 //! Authentication backends.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ impl std::error::Error for AuthError {}
 
 /// Wraps an error and indicates to the user that the provided credentials
 /// were invalid.
+#[must_use]
 pub fn invalid_credentials(err: anyhow::Error) -> anyhow::Error {
     AuthError {
         internal: err,
@@ -38,6 +40,7 @@ pub fn invalid_credentials(err: anyhow::Error) -> anyhow::Error {
 }
 
 /// Returns the user-friendly reason of an authentication failure.
+#[must_use]
 pub fn auth_error_reason(err: &anyhow::Error) -> String {
     match err.downcast_ref::<AuthError>() {
         Some(e) => e.external_msg.clone(),
@@ -45,6 +48,10 @@ pub fn auth_error_reason(err: &anyhow::Error) -> String {
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
 pub fn http_client() -> Result<reqwest::Client> {
     http_client_with_builder(reqwest::Client::builder())
 }
@@ -68,7 +75,7 @@ fn set_forwarded(req: reqwest::RequestBuilder, addr: &str) -> reqwest::RequestBu
     if addr.is_empty() {
         return req;
     }
-    let host = split_host_port(addr).map(|(h, _)| h).unwrap_or_default();
+    let host = split_host_port(addr).map_or_default(|(h, _)| h);
     req.header("Forwarded", format!("for={addr:?}"))
         .header("X-Forwarded-For", host)
 }
@@ -91,6 +98,7 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
+    #[must_use]
     pub fn internal() -> Authenticator {
         Authenticator {
             plain: Some(PlainAuthenticator::Internal),
@@ -99,6 +107,10 @@ impl Authenticator {
     }
 
     /// Builds the authenticator from config directives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
     pub async fn from_config(auths: &[config::Auth]) -> Result<Authenticator> {
         let mut out = Authenticator::default();
         for a in auths {
@@ -143,8 +155,12 @@ impl Authenticator {
 }
 
 impl PlainAuthenticator {
-    /// Checks credentials. remote_addr is the downstream address, passed to
+    /// Checks credentials. `remote_addr` is the downstream address, passed to
     /// external services in Forwarded headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
     pub async fn auth_plain(
         &self,
         db: &Arc<Database>,
@@ -241,41 +257,70 @@ fn percent_decode(s: &str) -> String {
     while i < b.len() {
         // Exactly two hex digits: from_str_radix would also accept a sign,
         // e.g. "%+f"
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && let Ok(v) = hex::decode(&b[i + 1..i + 3])
         {
-            out.push(v[0]);
-            i += 3;
-            continue;
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            if b[i] == b'%'
+                && i + 2 < b.len()
+                && let Ok(v) = hex::decode(&b[i + 1..i + 3])
+            {
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                    )]
+                    out.push(v[0]);
+                }
+                i += 3;
+                continue;
+            }
         }
-        out.push(b[i]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            out.push(b[i]);
+        }
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Escapes a string like Go's url.QueryEscape.
+#[must_use]
 pub fn query_escape(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
+                out.push(b as char);
             }
             b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "Formatting a byte into String cannot fail."
+                )]
+                write!(out, "%{b:02X}").expect("formatting a byte into String");
+            }
         }
     }
     out
 }
 
 impl OAuth2 {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
     pub async fn new(auth_url: &str) -> Result<OAuth2> {
         let u = parse_url(auth_url)
             .map_err(|e| anyhow!("failed to parse OAuth 2.0 server URL: {e}"))?;
         let (mut client_id, mut client_secret) = (String::new(), String::new());
-        let rest = auth_url.split_once("://").map(|(_, r)| r).unwrap_or("");
+        let rest = auth_url.split_once("://").map_or("", |(_, r)| r);
         let authority = rest.split('/').next().unwrap_or("");
         if let Some((userinfo, _)) = authority.rsplit_once('@') {
             match userinfo.split_once(':') {
@@ -295,7 +340,11 @@ impl OAuth2 {
         let server =
             tokio::time::timeout(Duration::from_secs(10), discover(&client, &discovery_url))
                 .await
-                .map_err(|_| anyhow!("OAuth 2.0 discovery failed: context deadline exceeded"))?
+                .map_err(|error| {
+                    anyhow::anyhow!(error).context(anyhow!(
+                        "OAuth 2.0 discovery failed: context deadline exceeded"
+                    ))
+                })?
                 .map_err(|e| anyhow!("OAuth 2.0 discovery failed: {e}"))?;
 
         if server.introspection_endpoint.is_empty() {
@@ -322,6 +371,10 @@ impl OAuth2 {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
     pub async fn auth_oauth_bearer(&self, token: &str, remote_addr: &str) -> Result<String> {
         let body = format!("token={}", query_escape(token));
         let mut req = self
@@ -443,6 +496,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     async fn http_auth() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

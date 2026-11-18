@@ -1,6 +1,9 @@
-use crate::irc::{Message, numerics::*};
+use crate::irc::{
+    Message,
+    numerics::{RPL_WHOREPLY, RPL_WHOSPCRPL},
+};
 
-/// All WHOX field letters, by order of appearance in RPL_WHOSPCRPL messages.
+/// All WHOX field letters, by order of appearance in `RPL_WHOSPCRPL` messages.
 const WHOX_FIELDS: &[u8] = b"tcuihsnfdlaor";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -74,6 +77,7 @@ impl WhoxInfo {
     }
 }
 
+#[must_use]
 pub fn generate_whox_reply(fields: &str, info: &WhoxInfo) -> Message {
     if fields.is_empty() {
         let channel = if info.channel.is_empty() {
@@ -105,6 +109,7 @@ pub fn generate_whox_reply(fields: &str, info: &WhoxInfo) -> Message {
 }
 
 /// Parses WHO options, returning the WHOX fields and token.
+#[must_use]
 pub fn parse_whox_options(options: &str) -> (String, String) {
     let mut fields = String::new();
     let mut token = String::new();
@@ -118,12 +123,16 @@ pub fn parse_whox_options(options: &str) -> (String, String) {
         if let Some(t) = t
             && fields.contains('t')
         {
-            token = t.to_owned();
+            t.clone_into(&mut token);
         }
     }
     (fields, token)
 }
 
+///
+/// # Errors
+///
+/// Returns an error if the input violates the supported IRC syntax or message constraints.
 pub fn parse_whox_reply(msg: &Message, fields: &str) -> Result<WhoxInfo, String> {
     if msg.command != RPL_WHOSPCRPL {
         return Err(format!("invalid WHOX reply {:?}", msg.command));
@@ -134,6 +143,10 @@ pub fn parse_whox_reply(msg: &Message, fields: &str) -> Result<WhoxInfo, String>
 
     let field_set = fields.as_bytes();
     let mut info = WhoxInfo::default();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let mut values = msg.params[1..].iter();
     for &field in WHOX_FIELDS {
         if !field_set.contains(&field) {

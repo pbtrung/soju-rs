@@ -1,7 +1,11 @@
 //! Creating downstream connections and sending them messages, within
 //! labeled responses and batches.
 
-use super::*;
+use super::{
+    Arc, CapRegistry, CaseMappingMap, Conn, ConnInfo, DownstreamConn, HashMap, HashSet, Isupport,
+    Logger, Message, PERMANENT_DOWNSTREAM_CAPS, Prefix, RPL_SASLSUCCESS, Registration, Server,
+    Tags, ircutil, message_supports_backlog, metrics, msg, xirc,
+};
 
 impl DownstreamConn {
     pub fn new(
@@ -76,6 +80,7 @@ impl DownstreamConn {
         }
     }
 
+    #[must_use]
     pub fn prefix(&self) -> Prefix {
         Prefix::full(
             self.nick.clone(),
@@ -84,6 +89,7 @@ impl DownstreamConn {
         )
     }
 
+    #[must_use]
     pub fn casemap(&self, s: &str) -> String {
         (self.casemap)(s)
     }
@@ -147,7 +153,10 @@ impl DownstreamConn {
 
         let multiline =
             self.caps.is_enabled("batch") && self.caps.is_enabled(xirc::MULTILINE_BATCH_TYPE);
-        let prefix_len = msg.prefix.as_ref().map(|p| p.formatted_len());
+        let prefix_len = msg
+            .prefix
+            .as_ref()
+            .map(super::super::irc::Prefix::formatted_len);
         let srv = &self.srv;
         let last_batch_ref = &mut self.last_batch_ref;
         let prepared = xirc::prepare_text_message(
@@ -189,9 +198,21 @@ impl DownstreamConn {
             self.last_batch_ref += 1;
             let batch = self.last_batch_ref.to_string();
             let label_str = label.label.clone();
-            label.batch = batch.clone();
-            if pending[0].tags.get_or_empty("batch").is_empty() {
-                pending[0].tags.set("batch", batch.clone());
+            label.batch.clone_from(&batch);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                if pending[0].tags.get_or_empty("batch").is_empty() {
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                        )]
+                        pending[0].tags.set("batch", batch.clone());
+                    }
+                }
             }
             self.raw_send(
                 msg!("BATCH", format!("+{batch}"), "labeled-response").with_tag("label", label_str),
@@ -204,17 +225,29 @@ impl DownstreamConn {
         let Some(label) = self.label.as_mut() else {
             return;
         };
-        if !label.batch.is_empty() {
+        if label.batch.is_empty() {
+            // first reply we're sending: buffer it
+            label.pending_msg = Some(reply);
+        } else {
             // send the current reply in the batch
-            if reply[0].tags.get_or_empty("batch").is_empty() {
-                reply[0].tags.set("batch", label.batch.clone());
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                if reply[0].tags.get_or_empty("batch").is_empty() {
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                        )]
+                        reply[0].tags.set("batch", label.batch.clone());
+                    }
+                }
             }
             for m in reply {
                 self.raw_send(m);
             }
-        } else {
-            // first reply we're sending: buffer it
-            label.pending_msg = Some(reply);
         }
     }
 
@@ -226,7 +259,13 @@ impl DownstreamConn {
         };
         let label_str = label.label.clone();
         if let Some(mut pending) = label.pending_msg.take() {
-            pending[0].tags.set("label", label_str);
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The surrounding length check or bounded iteration establishes this local collection index."
+                )]
+                pending[0].tags.set("label", label_str);
+            }
             for m in pending {
                 self.raw_send(m);
             }

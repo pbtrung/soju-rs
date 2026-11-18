@@ -1,6 +1,9 @@
 //! WEBPUSH (soju.im/webpush) from registered downstream connections.
 
-use super::*;
+use super::{
+    Event, LabelContext, Message, Result, Tags, Timestamp, User, db, fail, finish_message,
+    internal_error, logf, msg, need_params, unknown_command,
+};
 
 /// Maximum number of Web Push subscriptions per user and network.
 const MAX_SUBSCRIPTIONS: usize = 25;
@@ -97,16 +100,30 @@ pub fn web_push_tested(
         dc!(u, i).send_message(msg!("WEBPUSH", "REGISTER", sub.endpoint.clone()));
         Ok(())
     })();
-    if let Err(e) = finish_message(&mut u.downstreams[i], res) {
-        logf!(dc!(u, i).logger, "failed to handle WEBPUSH REGISTER: {e}");
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if let Err(e) = finish_message(&mut u.downstreams[i], res) {
+            logf!(dc!(u, i).logger, "failed to handle WEBPUSH REGISTER: {e}");
+        }
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     if !dc!(u, i).caps.is_enabled("soju.im/webpush") {
         return Err(unknown_command(&msg.command));
     }
     need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let subcommand = msg.params[0].clone();
     let user_id = u.record.id;
     let network_id = dc!(u, i).network_id.unwrap_or(0);
@@ -117,7 +134,15 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
     match subcommand.as_str() {
         "REGISTER" => {
             need_params(msg, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let endpoint = msg.params[1].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let raw_keys = Tags::parse(&msg.params[2]);
             let (Some(auth), Some(p256dh)) = (raw_keys.get("auth"), raw_keys.get("p256dh")) else {
                 return Err(fail(&[
@@ -198,6 +223,10 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
                         "Too many pending subscriptions, try again later",
                     ]));
                 }
+                #[expect(
+                    clippy::map_err_ignore,
+                    reason = "The fixed IRC response deliberately preserves protocol text and omits decoder/capacity details."
+                )]
                 let slot = u
                     .web_push_check_slots
                     .clone()
@@ -248,6 +277,10 @@ pub(super) fn handle_webpush(u: &mut User, i: usize, msg: &Message) -> Result<()
         }
         "UNREGISTER" => {
             need_params(msg, 2)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
             let endpoint = msg.params[1].clone();
             u.web_push_checks.remove(&(network_id, endpoint.clone()));
             let subs = match u.srv.db.list_web_push_subscriptions(user_id, network_id) {
@@ -304,7 +337,14 @@ fn sanity_check_web_push_endpoint(endpoint: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::Server;
     use crate::user::UserHandle;
+    use crate::{
+        conn::{Conn, ConnInfo},
+        downstream::DownstreamConn,
+        logger::Logger,
+    };
+    use std::sync::Arc;
     use std::sync::{Mutex, atomic::AtomicI64};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;

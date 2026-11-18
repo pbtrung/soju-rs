@@ -1,12 +1,23 @@
 fn starts_hex_color(s: &[u8]) -> bool {
-    s.len() >= 6 && s[..6].iter().all(|b| b.is_ascii_hexdigit())
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Remaining byte length is checked before each ASCII control-sequence access."
+        )]
+        s.len() >= 6 && s[..6].iter().all(u8::is_ascii_hexdigit)
+    }
 }
 
 /// Strips IRC formatting characters from a string.
+///
+/// # Panics
+///
+/// Panics only if the documented fixed-data invariant is violated; operational errors are handled separately.
 #[expect(
     clippy::expect_used,
     reason = "Only ASCII control bytes and their ASCII arguments are removed from valid UTF-8."
 )]
+#[must_use]
 pub fn strip_ansi(s: &str) -> String {
     const FORMAT_CHARS: &[char] = &[
         '\x02', '\x1D', '\x1F', '\x1E', '\x11', '\x16', '\x0F', '\x03', '\x04',
@@ -19,27 +30,66 @@ pub fn strip_ansi(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        match b[i] {
+        let Some(&byte) = b.get(i) else {
+            break;
+        };
+        match byte {
             0x02 | 0x1D | 0x1F | 0x1E | 0x11 | 0x16 | 0x0F => {}
-            0x03 => {
+            0x03 =>
+            {
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                )]
                 if b.len() > i + 1 && b[i + 1].is_ascii_digit() {
                     i += 1;
-                    if b.len() > i + 1 && b[i + 1].is_ascii_digit() {
-                        i += 1;
-                    }
-                    if b.len() > i + 2 && b[i + 1] == b',' && b[i + 2].is_ascii_digit() {
-                        i += 2;
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                        )]
                         if b.len() > i + 1 && b[i + 1].is_ascii_digit() {
                             i += 1;
+                        }
+                    }
+                    {
+                        #![expect(
+                            clippy::indexing_slicing,
+                            reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                        )]
+                        if b.len() > i + 2 && b[i + 1] == b',' && b[i + 2].is_ascii_digit() {
+                            i += 2;
+                            {
+                                #![expect(
+                                    clippy::indexing_slicing,
+                                    reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                                )]
+                                if b.len() > i + 1 && b[i + 1].is_ascii_digit() {
+                                    i += 1;
+                                }
+                            }
                         }
                     }
                 }
             }
             0x04 => {
-                if starts_hex_color(&b[i + 1..]) {
-                    i += 6;
-                    if b.len() > i + 1 && b[i + 1] == b',' && starts_hex_color(&b[i + 2..]) {
-                        i += 7;
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                    )]
+                    if starts_hex_color(&b[i + 1..]) {
+                        i += 6;
+                        {
+                            #![expect(
+                                clippy::indexing_slicing,
+                                reason = "Remaining byte length is checked before each ASCII control-sequence access."
+                            )]
+                            if b.len() > i + 1 && b[i + 1] == b',' && starts_hex_color(&b[i + 2..])
+                            {
+                                i += 7;
+                            }
+                        }
                     }
                 }
             }

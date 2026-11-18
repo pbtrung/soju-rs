@@ -11,8 +11,12 @@ use rustls::pki_types::PrivatePkcs8KeyDer;
 /// Generates a private key and a self-signed certificate. Returns the
 /// PKCS#8 private key and the certificate, both DER-encoded.
 ///
-/// key_type is "rsa", "ecdsa" (NIST P-521) or "ed25519". bits is the RSA
+/// `key_type` is "rsa", "ecdsa" (NIST P-521) or "ed25519". bits is the RSA
 /// key size: 2048, 3072, 4096 or 8192.
+///
+/// # Errors
+///
+/// Returns an error if certificate/key data or TLS configuration is invalid, or file/key processing fails.
 pub fn generate_certfp(key_type: &str, bits: usize) -> Result<(Vec<u8>, Vec<u8>)> {
     let key = match key_type {
         "rsa" => {
@@ -25,11 +29,12 @@ pub fn generate_certfp(key_type: &str, bits: usize) -> Result<(Vec<u8>, Vec<u8>)
                     "unsupported RSA key size {bits} (supported sizes: 2048, 3072, 4096, 8192)"
                 ),
             };
-            let kp = aws_lc_rs::rsa::KeyPair::generate(size)
-                .map_err(|_| anyhow!("failed to generate RSA key"))?;
-            let der = kp
-                .as_der()
-                .map_err(|_| anyhow!("failed to encode RSA key"))?;
+            let kp = aws_lc_rs::rsa::KeyPair::generate(size).map_err(|error| {
+                anyhow::anyhow!(error).context(anyhow!("failed to generate RSA key"))
+            })?;
+            let der = kp.as_der().map_err(|error| {
+                anyhow::anyhow!(error).context(anyhow!("failed to encode RSA key"))
+            })?;
             let der = PrivatePkcs8KeyDer::from(der.as_ref().to_vec());
             KeyPair::from_pkcs8_der_and_sign_algo(&der, &PKCS_RSA_SHA256)?
         }

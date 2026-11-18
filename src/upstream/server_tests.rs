@@ -79,6 +79,10 @@ async fn setup() -> Env {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn setup_with(channels: Vec<db::Channel>, caps: &str) -> Env {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
@@ -185,9 +189,13 @@ async fn setup_with(channels: Vec<db::Channel>, caps: &str) -> Env {
     }
 }
 
-/// The RPL_ENDOFWHOIS servers send after ERR_NOSUCHNICK belongs to the
+/// The `RPL_ENDOFWHOIS` servers send after `ERR_NOSUCHNICK` belongs to the
 /// failed WHOIS, not to the next one in the queue.
 #[tokio::test]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn whois_no_such_nick() {
     let mut env = setup().await;
     env.downstream.send(msg!("WHOIS", "ghost"));
@@ -219,8 +227,12 @@ async fn whois_no_such_nick() {
     env.srv.shutdown().await;
 }
 
-/// Same for RPL_TRYAGAIN followed by RPL_ENDOFWHO.
+/// Same for `RPL_TRYAGAIN` followed by `RPL_ENDOFWHO`.
 #[tokio::test]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn who_try_again() {
     let mut env = setup().await;
     env.downstream.send(msg!("WHO", "#busy"));
@@ -260,6 +272,10 @@ async fn who_try_again() {
 /// Messages in a channel postpone its auto-detach, which happens once the
 /// channel has been quiet for detach-after.
 #[tokio::test]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn auto_detach() {
     let detach_after = Duration::from_millis(600);
     let ch = db::Channel {
@@ -292,7 +308,7 @@ async fn auto_detach() {
     let last = tokio::time::Instant::now();
     let m = env.downstream.read_until("PART").await;
     assert_eq!(m.params, ["#chan", "Detach"]);
-    assert!(last.elapsed() >= detach_after - Duration::from_millis(50));
+    assert!(last.elapsed() >= detach_after.saturating_sub(Duration::from_millis(50)));
     assert!(start.elapsed() > detach_after * 2);
     env.srv.shutdown().await;
 }
@@ -381,6 +397,10 @@ async fn registration_timeout() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 async fn sasl_cap_nak_ends_capability_negotiation() {
     let database = Database::open_in_memory().unwrap();
     let mut user = db::User::new(USERNAME);
@@ -419,6 +439,10 @@ async fn sasl_cap_nak_ends_capability_negotiation() {
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 async fn unsupported_pending_command_is_rejected_without_queueing() {
     let mut env = setup().await;
@@ -462,6 +486,10 @@ async fn unsupported_pending_command_is_rejected_without_queueing() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 async fn duplicate_regain_nick_start_preserves_running_retry() {
     let env = setup().await;

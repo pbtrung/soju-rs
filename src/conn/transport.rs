@@ -68,7 +68,7 @@ pub(super) fn redact_line_for_log(line: &str) -> String {
 }
 
 impl Writer {
-    /// Writes a line formatted by format_line. With flush unset, it may
+    /// Writes a line formatted by `format_line`. With flush unset, it may
     /// stay buffered until the next flushed write.
     pub(super) async fn write(&mut self, line: String, flush: bool) -> Result<()> {
         match self {
@@ -117,6 +117,10 @@ impl Writer {
 /// WebSocket frame can't smuggle several IRC lines.
 pub(super) fn parse_line(line: &str) -> Result<Option<Message>> {
     let line = match line.find(['\r', '\n']) {
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         Some(i) => &line[..i],
         None => line,
     };
@@ -164,7 +168,7 @@ impl Reader {
                     WsMessage::Binary(b) => String::from_utf8_lossy(b),
                     WsMessage::Close(frame) => {
                         return match frame.as_ref().map(|f| f.code) {
-                            None | Some(CloseCode::Normal) | Some(CloseCode::Away) => Ok(None),
+                            None | Some(CloseCode::Normal | CloseCode::Away) => Ok(None),
                             Some(code) => Err(anyhow!("websocket closed with status {code}")),
                         };
                     }
@@ -195,7 +199,13 @@ async fn read_line_limited(r: &mut BufReader<ReadHalf<BoxIo>>, buf: &mut Vec<u8>
         if buf.len() + used > MAX_LINE_LENGTH {
             return Err(anyhow!("line too long"));
         }
-        buf.extend_from_slice(&available[..used]);
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The surrounding length check or bounded iteration establishes this local collection index."
+            )]
+            buf.extend_from_slice(&available[..used]);
+        }
         r.consume(used);
         if done {
             return Ok(buf.len());

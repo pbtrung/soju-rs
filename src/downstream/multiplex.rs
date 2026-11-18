@@ -3,11 +3,13 @@
 //! doc/multiplex.md.
 //!
 //! Each attached network is a virtual downstream connection: a
-//! DownstreamConn whose Conn is a view of the bouncer connection's, which
+//! `DownstreamConn` whose Conn is a view of the bouncer connection's, which
 //! tags its messages with soju.im/network. Messages from the client with
 //! that tag are handled as messages of the virtual connection.
 
-use super::*;
+use super::{
+    DownstreamConn, Message, Registration, User, begin_message, cmds, finish_message, logf,
+};
 
 pub const MULTIPLEX_CAP: &str = "soju.im/multiplex";
 pub const NETWORK_TAG: &str = "soju.im/network";
@@ -18,6 +20,7 @@ pub const NETWORK_TAG: &str = "soju.im/network";
 const NOT_INHERITED_CAPS: &[&str] = &[MULTIPLEX_CAP, "soju.im/bouncer-networks-notify"];
 
 /// The virtual connection of a network attached to a bouncer connection.
+#[must_use]
 pub fn find_attached(u: &User, parent_id: u64, net_id: i64) -> Option<u64> {
     u.downstreams
         .iter()
@@ -38,8 +41,14 @@ pub fn route_message(u: &mut User, dc_id: u64, mut msg: Message) -> Option<(u64,
     let Some(tag) = msg.tags.get(NETWORK_TAG).map(str::to_owned) else {
         return Some((dc_id, msg));
     };
-    if !u.downstreams[i].caps.is_enabled(MULTIPLEX_CAP) {
-        return Some((dc_id, msg));
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if !u.downstreams[i].caps.is_enabled(MULTIPLEX_CAP) {
+            return Some((dc_id, msg));
+        }
     }
     msg.tags.remove(NETWORK_TAG);
     let child = tag
@@ -51,6 +60,10 @@ pub fn route_message(u: &mut User, dc_id: u64, mut msg: Message) -> Option<(u64,
     }
     // Late messages for a network the client just detached are expected.
     // The reply (an ACK for PING/PONG) carries the message's label.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let dc = &mut u.downstreams[i];
     begin_message(dc, &msg);
     let res = if msg.command == "PING" || msg.command == "PONG" {
@@ -81,6 +94,10 @@ pub fn attach_network(u: &mut User, parent_id: u64, net_id: i64) {
     };
     let id = u.srv.next_downstream_id();
     let tx = u.tx.clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
     let parent = &u.downstreams[i];
     let conn = parent.conn.view(NETWORK_TAG, &net_id.to_string(), move || {
         #[expect(clippy::let_underscore_must_use, reason = "The user may already have stopped; a virtual disconnect has no remaining receiver.")]
@@ -95,13 +112,13 @@ pub fn attach_network(u: &mut User, parent_id: u64, net_id: i64) {
     );
     dc.parent_id = Some(parent_id);
     dc.registered = true;
-    dc.client_name = parent.client_name.clone();
+    dc.client_name.clone_from(&parent.client_name);
     dc.impersonating = parent.impersonating;
-    dc.nick = parent.nick.clone();
-    dc.nick_cm = parent.nick_cm.clone();
-    dc.realname = parent.realname.clone();
-    dc.username = parent.username.clone();
-    dc.away = parent.away.clone();
+    dc.nick.clone_from(&parent.nick);
+    dc.nick_cm.clone_from(&parent.nick_cm);
+    dc.realname.clone_from(&parent.realname);
+    dc.username.clone_from(&parent.username);
+    dc.away.clone_from(&parent.away);
     dc.cap_version = parent.cap_version;
     dc.caps = parent.caps.clone();
     for cap in NOT_INHERITED_CAPS {
@@ -121,7 +138,13 @@ pub fn attach_network(u: &mut User, parent_id: u64, net_id: i64) {
 /// the client: it asked for it.
 pub fn detach_network(u: &mut User, dc_id: u64) {
     if let Some(i) = u.dc_index(dc_id) {
-        u.downstreams[i].conn.close_quietly();
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            u.downstreams[i].conn.close_quietly();
+        }
     }
     u.remove_downstream(dc_id);
 }

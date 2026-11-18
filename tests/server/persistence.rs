@@ -9,6 +9,10 @@ use super::*;
     clippy::unwrap_used,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
 pub(super) async fn disconnected_client_history() {
     let env = setup(db_store()).await;
     let mut uc = accept_upstream(&env).await;
@@ -71,6 +75,10 @@ pub(super) async fn disconnected_client_history() {
 /// must remain available, and new messages must extend the old history.
 #[expect(
     clippy::unwrap_used,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+)]
+#[expect(
+    clippy::indexing_slicing,
     reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 pub(super) async fn sqlite_history_survives_restart() {

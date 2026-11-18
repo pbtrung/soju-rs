@@ -1,6 +1,7 @@
 //! Targets regression scenarios.
 
 use super::*;
+use crate::database::{MessageOptions, MessageTarget, Network, ReadReceipt, User};
 
 #[test]
 #[expect(

@@ -27,6 +27,10 @@ fn sig_algs() -> WebPkiSupportedAlgorithms {
 }
 
 /// Loads a PEM certificate chain and private key.
+///
+/// # Errors
+///
+/// Returns an error if certificate/key data or TLS configuration is invalid, or file/key processing fails.
 pub fn load_certified_key(cert_path: &str, key_path: &str) -> Result<CertifiedKey> {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
         .with_context(|| format!("failed to read {cert_path}"))?
@@ -63,7 +67,7 @@ impl ResolvesServerCert for CertStore {
 }
 
 /// Requests (but doesn't verify) a client certificate when client
-/// certificate authentication is enabled, like Go's RequestClientCert.
+/// certificate authentication is enabled, like Go's `RequestClientCert`.
 #[derive(Debug)]
 struct OptionalClientCert {
     enabled: Arc<AtomicBool>,
@@ -116,6 +120,10 @@ impl ClientCertVerifier for OptionalClientCert {
 
 /// Builds a server config using the shared certificate store. alpn lists
 /// the advertised protocols.
+///
+/// # Errors
+///
+/// Returns an error if certificate/key data or TLS configuration is invalid, or file/key processing fails.
 pub fn server_config(
     certs: Arc<CertStore>,
     client_cert_auth: Arc<AtomicBool>,
@@ -210,8 +218,12 @@ impl ServerCertVerifier for PinnedCert {
 
 /// Builds a client config for an upstream connection.
 ///
-/// certfp is the pinned fingerprint ("algo:hex"), if any. client_cert is a
+/// certfp is the pinned fingerprint ("algo:hex"), if any. `client_cert` is a
 /// DER certificate and PKCS#8 private key for SASL EXTERNAL.
+///
+/// # Errors
+///
+/// Returns an error if certificate/key data or TLS configuration is invalid, or file/key processing fails.
 pub fn client_config(
     certfp: &str,
     client_cert: Option<(&[u8], &[u8])>,

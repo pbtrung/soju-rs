@@ -24,13 +24,14 @@ pub const DEFAULT_UNIX_ADMIN_PATH: &str = match option_env!("SOJU_ADMIN_SOCKET_P
 pub struct IpSet(pub Vec<IpNet>);
 
 impl IpSet {
+    #[must_use]
     pub fn contains(&self, ip: IpAddr) -> bool {
         let ip = ip.to_canonical();
         self.0.iter().any(|n| n.contains(&ip))
     }
 }
 
-/// The loopback networks 127.0.0.0/8 and ::1/128.
+/// The loopback networks 127.0.0.0/8 and `::1/128`.
 #[expect(
     clippy::expect_used,
     reason = "Both literal loopback CIDRs are audited constants and cannot fail to parse."
@@ -128,6 +129,7 @@ pub struct Server {
     pub file_upload: bool,
 }
 
+#[must_use]
 pub fn system_hostname() -> String {
     match gethostname::gethostname().into_string() {
         Ok(h) if !h.is_empty() => h,
@@ -136,6 +138,7 @@ pub fn system_hostname() -> String {
 }
 
 impl Server {
+    #[must_use]
     pub fn defaults() -> Server {
         let hostname = system_hostname();
         Server {
@@ -175,6 +178,10 @@ impl Server {
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error for invalid configuration values/directives or configuration I/O failures.
 pub fn load(filename: &str) -> Result<Server> {
     let s = std::fs::read_to_string(filename)?;
     parse(&s)
@@ -188,10 +195,16 @@ fn dir_err(d: &Directive, msg: &str) -> anyhow::Error {
 /// rejects non-repeatable directives specified more than once.
 fn single<'a>(dirs: &[&'a Directive]) -> Result<Option<&'a Directive>> {
     if dirs.len() > 1 {
-        return Err(dir_err(
-            dirs[1],
-            "directive must not be specified more than once",
-        ));
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Directive arity is checked before selecting its argument."
+            )]
+            return Err(dir_err(
+                dirs[1],
+                "directive must not be specified more than once",
+            ));
+        }
     }
     let d = dirs.first().copied();
     if let Some(d) = d
@@ -208,7 +221,13 @@ fn single_string(dirs: &[&Directive]) -> Result<Option<String>> {
             if d.params.len() != 1 {
                 return Err(dir_err(d, "directive requires exactly one parameter"));
             }
-            Ok(Some(d.params[0].clone()))
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                Ok(Some(d.params[0].clone()))
+            }
         }
         None => Ok(None),
     }
@@ -224,7 +243,13 @@ fn single_pair(dirs: &[&Directive]) -> Result<Option<(String, String)>> {
             if d.params.len() != 2 {
                 return Err(dir_err(d, "directive requires exactly 2 parameters"));
             }
-            Ok(Some((d.params[0].clone(), d.params[1].clone())))
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                Ok(Some((d.params[0].clone(), d.params[1].clone())))
+            }
         }
         None => Ok(None),
     }
@@ -237,7 +262,15 @@ fn parse_bool(s: &str) -> Result<bool> {
 
 fn parse_driver_source(name: &str, params: &[String]) -> Result<(String, String)> {
     match params.len() {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         1 => Ok((params[0].clone(), String::new())),
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         2 => Ok((params[0].clone(), params[1].clone())),
         _ => bail!("directive {name} requires exactly 1 or 2 parameters"),
     }
@@ -274,6 +307,14 @@ const KNOWN_DIRECTIVES: &[&str] = &[
     "client-cert-auth",
 ];
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Directive dispatch keeps order-dependent settings together and validates each directive before mutation."
+)]
+///
+/// # Errors
+///
+/// Returns an error for invalid configuration values/directives or configuration I/O failures.
 pub fn parse(s: &str) -> Result<Server> {
     let block: Block = scfg::parse(s)?;
 
@@ -293,7 +334,13 @@ pub fn parse(s: &str) -> Result<Server> {
         if d.params.len() != 1 {
             return Err(dir_err(d, "directive requires exactly one parameter"));
         }
-        srv.listen.push(d.params[0].clone());
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            srv.listen.push(d.params[0].clone());
+        }
     }
     if let Some(h) = single_string(&get("hostname"))?
         && !h.is_empty()
@@ -332,10 +379,16 @@ pub fn parse(s: &str) -> Result<Server> {
         };
         match driver {
             _ if !source.is_empty() => {
-                bail!(
-                    "directive message-store: driver {:?} requires zero parameters",
-                    params[0]
-                )
+                {
+                    #![expect(
+                        clippy::indexing_slicing,
+                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                    )]
+                    bail!(
+                        "directive message-store: driver {:?} requires zero parameters",
+                        params[0]
+                    )
+                }
             }
             _ => {}
         }
@@ -409,8 +462,13 @@ pub fn parse(s: &str) -> Result<Server> {
     }
     let d = get("max-user-networks");
     if let Some(s) = single_string(&d)? {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Directive arity is checked before selecting its argument."
+        )]
         let d = d[0];
-        srv.basic.max_user_networks = s.parse().map_err(|_| {
+        srv.basic.max_user_networks = s.parse::<i64>().map_err(|error| {
+            anyhow::anyhow!(error).context({
             anyhow!(
                 "line {}, directive {:?}, parameter 1: invalid int parameter: strconv.ParseInt: \
                     parsing {:?}: invalid syntax",
@@ -418,6 +476,7 @@ pub fn parse(s: &str) -> Result<Server> {
                 d.name,
                 s
             )
+        })
         })?;
     }
     let (mut has_v4, mut has_v6) = (false, false);
@@ -479,10 +538,14 @@ pub fn parse(s: &str) -> Result<Server> {
 
 /// Parses a CIDR, returning the network (host bits cleared), like Go's
 /// net.ParseCIDR.
+///
+/// # Errors
+///
+/// Returns an error for invalid configuration values/directives or configuration I/O failures.
 pub fn parse_cidr(s: &str) -> Result<IpNet> {
     let n: IpNet = s
-        .parse()
-        .map_err(|_| anyhow!("invalid CIDR address: {s}"))?;
+        .parse::<IpNet>()
+        .map_err(|error| anyhow::anyhow!(error).context(anyhow!("invalid CIDR address: {s}")))?;
     Ok(n.trunc())
 }
 
@@ -494,6 +557,10 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn full_config() {
         let cfg = parse(
@@ -548,9 +615,9 @@ client-cert-auth true
         assert_eq!(cfg.basic.upstream_user_ips.len(), 2);
         assert_eq!(
             cfg.basic.disable_inactive_users_delay,
-            Duration::from_secs(30 * 86400)
+            Duration::from_hours(720)
         );
-        assert_eq!(cfg.basic.message_expiry, Duration::from_secs(43200));
+        assert_eq!(cfg.basic.message_expiry, Duration::from_hours(12));
         assert!(cfg.basic.enable_users_on_auth);
         assert!(cfg.basic.client_cert_auth);
     }
@@ -559,6 +626,10 @@ client-cert-auth true
     #[expect(
         clippy::unwrap_used,
         reason = "Fixture setup and assertions fail immediately on invalid test data."
+    )]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
     )]
     fn defaults() {
         let cfg = parse("").unwrap();
@@ -594,7 +665,7 @@ client-cert-auth true
     )]
     fn durations() {
         assert_eq!(parse_duration("0d").unwrap(), Duration::ZERO);
-        assert_eq!(parse_duration("1.5d").unwrap(), Duration::from_secs(129600));
+        assert_eq!(parse_duration("1.5d").unwrap(), Duration::from_hours(36));
         assert!(parse_duration("5").is_err());
         for s in ["-1d", "infd", "nand", "1e20d", "1e9d"] {
             let err = parse_duration(s).unwrap_err().to_string();

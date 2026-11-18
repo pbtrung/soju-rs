@@ -1,4 +1,4 @@
-//! BouncerServ user commands.
+//! `BouncerServ` user commands.
 
 use anyhow::{Result, anyhow, bail};
 use sha1::Sha1;
@@ -32,6 +32,10 @@ pub(super) fn handle_user_status(
         n = all.len();
         users.extend(all.into_iter().take(50));
     } else {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
         let username = &params[0];
         let record = match &own {
             Some(r) if r.username == *username => Some(r.clone()),
@@ -126,6 +130,10 @@ pub(super) fn handle_user_create(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
+)]
 pub(super) fn handle_user_update(
     u: Option<&mut User>,
     ctx: &mut ServiceContext,
@@ -191,7 +199,9 @@ pub(super) fn handle_user_update(
             wait(deadline, rx)
                 .await
                 .ok_or_else(|| anyhow!("context deadline exceeded"))?
-                .map_err(|_| anyhow!("timeout executing command"))?
+                .map_err(|error| {
+                    anyhow::anyhow!(error).context(anyhow!("timeout executing command"))
+                })?
                 .map_err(|e| anyhow!(e))?;
             print(format!("updated user {username:?}"));
             Ok(())
@@ -249,6 +259,10 @@ pub(super) fn handle_user_update(
     Ok(())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Service dispatch uses a uniform Option<&mut User> callback signature, including read-only commands."
+)]
 pub(super) fn handle_user_delete(
     u: Option<&mut User>,
     ctx: &mut ServiceContext,
@@ -257,7 +271,15 @@ pub(super) fn handle_user_delete(
     if params.len() != 1 && params.len() != 2 {
         bail!("expected one or two arguments");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let username = params[0].clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The surrounding length check or bounded iteration establishes this local collection index."
+    )]
     let hash = hex::encode(&Sha1::digest(username.as_bytes())[..3]);
     let is_self = u.as_ref().is_some_and(|u| u.record.username == username);
     if !ctx.admin && !is_self {
@@ -272,8 +294,14 @@ pub(super) fn handle_user_delete(
         ));
         return Ok(());
     }
-    if params[1] != hash {
-        bail!("provided confirmation token doesn't match user");
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        if params[1] != hash {
+            bail!("provided confirmation token doesn't match user");
+        }
     }
 
     let user_id = handle.record().id;
@@ -316,7 +344,15 @@ pub(super) fn handle_user_run(
     if params.len() < 2 {
         bail!("expected at least two arguments");
     }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let username = params[0].clone();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
     let params = &params[1..];
     if let Some(u) = u
         && u.record.username == username

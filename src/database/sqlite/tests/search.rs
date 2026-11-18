@@ -1,6 +1,7 @@
 //! Search regression scenarios.
 
 use super::*;
+use crate::database::{MessageOptions, Network, User};
 
 #[test]
 fn fts_quote() {
@@ -111,6 +112,10 @@ fn message_text_index_query_plans() {
 #[expect(
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
 )]
 fn sparse_fts_preserves_updates_and_event_history_ordering() {
     let db = db();

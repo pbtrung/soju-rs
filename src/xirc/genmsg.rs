@@ -5,12 +5,18 @@ use super::{
     ChannelStatus, Isupport, MAX_MESSAGE_LENGTH, MAX_MESSAGE_PARAMS, MAX_SASL_LENGTH,
     encode_isupport_value,
 };
-use crate::irc::{Message, numerics::*};
+use crate::irc::{
+    Message,
+    numerics::{
+        RPL_ENDOFMOTD, RPL_ENDOFNAMES, RPL_ISUPPORT, RPL_MOTD, RPL_MOTDSTART, RPL_NAMREPLY,
+    },
+};
 use crate::msg;
 
 /// Generates JOIN messages for a list of channels, splitting them so that
 /// each message fits in the maximum message length. Channels with a key
 /// are put first.
+#[must_use]
 pub fn generate_join(channels: &[String], keys: &[String]) -> Vec<Message> {
     let mut pairs: Vec<(&str, &str)> = channels
         .iter()
@@ -67,7 +73,8 @@ pub fn generate_join(channels: &[String], keys: &[String]) -> Vec<Message> {
     msgs
 }
 
-/// Generates RPL_ISUPPORT messages. Tokens are sorted.
+/// Generates `RPL_ISUPPORT` messages. Tokens are sorted.
+#[must_use]
 pub fn generate_isupport(isupport: &Isupport) -> Vec<Message> {
     let mut tokens: Vec<String> = isupport
         .iter()
@@ -92,6 +99,7 @@ pub fn generate_isupport(isupport: &Isupport) -> Vec<Message> {
         .collect()
 }
 
+#[must_use]
 pub fn generate_motd(motd: &str) -> Vec<Message> {
     let mut msgs = vec![msg!(RPL_MOTDSTART, "*", "- Message of the Day -")];
     for l in motd.split('\n') {
@@ -101,6 +109,7 @@ pub fn generate_motd(motd: &str) -> Vec<Message> {
     msgs
 }
 
+#[must_use]
 pub fn generate_monitor(subcmd: &str, targets: &[String]) -> Vec<Message> {
     let max_length = MAX_MESSAGE_LENGTH - format!("MONITOR {subcmd} ").len();
 
@@ -122,6 +131,7 @@ pub fn generate_monitor(subcmd: &str, targets: &[String]) -> Vec<Message> {
     msgs
 }
 
+#[must_use]
 pub fn generate_names_reply(
     channel: &str,
     status: ChannelStatus,
@@ -157,6 +167,7 @@ pub fn generate_names_reply(
 }
 
 /// Generates AUTHENTICATE messages for a SASL response, split in chunks.
+#[must_use]
 pub fn generate_sasl(resp: &[u8]) -> Vec<Message> {
     let encoded = BASE64.encode(resp);
 
@@ -166,6 +177,10 @@ pub fn generate_sasl(resp: &[u8]) -> Vec<Message> {
     let mut i = 0;
     while i <= encoded.len() {
         let j = (i + MAX_SASL_LENGTH).min(encoded.len());
+        #[expect(
+            clippy::string_slice,
+            reason = "The surrounding length check or bounded iteration establishes this local collection index."
+        )]
         let chunk = &encoded[i..j];
         let chunk = if chunk.is_empty() { "+" } else { chunk };
         msgs.push(msg!("AUTHENTICATE", chunk));
@@ -179,9 +194,13 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn join_sorting_and_split() {
         let channels = vec!["#b".to_owned(), "#a".to_owned(), "#c".to_owned()];
-        let keys = vec!["".to_owned(), "".to_owned(), "key".to_owned()];
+        let keys = vec![String::new(), String::new(), "key".to_owned()];
         let msgs = generate_join(&channels, &keys);
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].to_string(), "JOIN #c,#a,#b key");
@@ -198,6 +217,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn joins_without_a_key_for_every_channel() {
         let channels = vec!["#b".to_owned(), "#a".to_owned(), "#c".to_owned()];
         for keys in [vec![], vec!["secret".to_owned()]] {
@@ -217,6 +240,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn sasl_chunks() {
         assert_eq!(generate_sasl(b"").len(), 1);
         assert_eq!(generate_sasl(b"")[0].params[0], "+");
@@ -230,6 +257,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Fixture setup and assertions use checked test data; any failure must fail this scenario."
+    )]
     fn isupport() {
         let mut is = Isupport::new();
         for i in 0..20 {
