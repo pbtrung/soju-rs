@@ -354,8 +354,13 @@ fn handle_pong(u: &mut User, i: usize, token: &str) {
         reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
     )]
     let delivered = &mut u.networks[ni].delivered;
-    if !delivered.has_target(&entity) && delivered.len() >= MAX_DELIVERY_TARGETS {
-        return;
+    match delivered.can_track_target(&entity, MAX_DELIVERY_TARGETS) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            logf!(u.logger, "failed to check delivery receipt target: {error}");
+            return;
+        }
     }
     let client = dc!(u, i).client_name.clone();
     {
@@ -363,7 +368,9 @@ fn handle_pong(u: &mut User, i: usize, token: &str) {
             clippy::indexing_slicing,
             reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
         )]
-        u.networks[ni].delivered.store_id(&entity, &client, msg_id);
+        if let Err(error) = u.networks[ni].delivered.store_id(&entity, &client, msg_id) {
+            logf!(u.logger, "failed to cache delivery receipt: {error}");
+        }
     }
 }
 

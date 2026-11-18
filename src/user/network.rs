@@ -249,8 +249,20 @@ impl User {
         }
     }
 
+    /// Attaches the per-user durable receipt budget before the first delivery.
+    pub(super) fn prepare_receipts(&self, network: &mut Network) {
+        if self.has_persistent_msg_store() {
+            network.delivered.attach(
+                self.srv.db.clone(),
+                network.id(),
+                self.receipt_budget.clone(),
+            );
+        }
+    }
+
     /// Adds a network, keeping networks sorted by ID, and starts it.
-    fn add_network(&mut self, network: Network) -> usize {
+    fn add_network(&mut self, mut network: Network) -> usize {
+        self.prepare_receipts(&mut network);
         let id = network.id();
         self.networks.push(network);
         self.networks.sort_by_key(Network::id);
@@ -467,7 +479,6 @@ impl User {
         }
         updated.casemap = cm;
         updated.channels.set_casemapping(cm);
-        updated.delivered.m.set_casemapping(cm);
 
         let id = updated.id();
         // This will re-connect to the upstream server

@@ -32,7 +32,10 @@ signals, synchronization and timers. Unused process/stdio support is removed.
 The existing parking_lot locking backend is retained; the dev dependency adds
 only test-util to the production feature set.
 
-rusqlite explicitly enables bundled native SQLite and statement caching.
+rusqlite explicitly enables bundled native SQLite, statement caching and scalar
+functions. STEP-014 uses connection-local scalar functions for bounded receipt
+queries with the same IRC case mapping and legacy lossy UTF-8 behavior as Rust.
+No function-dependent index or schema migration is installed.
 Disabling its default WASM backend removes sqlite-wasm-rs and rsqlite-vfs
 from the lockfile. Required GNU and musl targets retain their native backend;
 this selection does not promise WASM support. Existing reqwest and rcgen

@@ -63,6 +63,7 @@ test_on_both_runtimes!(
     user_network_channel_isolation,
     disconnected_client_history,
     sqlite_history_survives_restart,
+    receipt_playback_survives_disconnect_and_restart,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -501,7 +502,10 @@ use cases_read_markers::{read_marker, unread_targets};
 
 #[path = "server/persistence.rs"]
 mod cases_persistence;
-use cases_persistence::{disconnected_client_history, sqlite_history_survives_restart};
+use cases_persistence::{
+    disconnected_client_history, receipt_playback_survives_disconnect_and_restart,
+    sqlite_history_survives_restart,
+};
 
 #[path = "server/messages.rs"]
 mod cases_messages;

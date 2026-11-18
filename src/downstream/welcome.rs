@@ -274,18 +274,16 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
         });
         if first_client {
             let client = dc.client_name.clone();
-            for target in u
+            let receipts = u
                 .networks
-                .get(ni)
+                .get_mut(ni)
                 .ok_or_else(|| anyhow::anyhow!("missing network"))?
                 .delivered
-                .targets()
-            {
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                let last_delivered = u.networks[ni].delivered.load_id(&target, &client);
+                .receipts(&client)?;
+            for receipt in receipts {
+                let receipt = receipt?;
+                let target = receipt.target;
+                let last_delivered = receipt.internal_msg_id;
                 if last_delivered.is_empty() {
                     continue;
                 }
@@ -303,7 +301,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 let target_cm = net.casemap(&target);
                 let store = &mut u.msg_store;
                 match store.last_msg_id(&net.record, &target_cm) {
-                    Ok(last_id) => net.delivered.store_id(&target, &client, &last_id),
+                    Ok(last_id) => net.delivered.store_id(&target, &client, &last_id)?,
                     Err(e) => {
                         let i = u.dc_index(dc_id).ok_or_else(|| {
                             anyhow::anyhow!("required user or connection state is unavailable")

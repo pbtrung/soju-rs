@@ -165,3 +165,81 @@ impl Drop for TestDatabaseDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// A named client receives only unacknowledged backlog after a file-backed
+/// restart, including a conversation created while the client was offline.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions must fail immediately on invalid data."
+)]
+pub(super) async fn receipt_playback_survives_disconnect_and_restart() {
+    let dir = TestDatabaseDir::new();
+    let path = dir.0.join("receipts.db");
+    let source = path.to_str().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db = Database::open(source).unwrap();
+    let mut user = database::User::new(TEST_USERNAME);
+    user.set_password(TEST_PASSWORD).unwrap();
+    db.store_user(&mut user).unwrap();
+    let mut network = database::Network::new(&format!(
+        "irc+insecure://{}",
+        listener.local_addr().unwrap()
+    ));
+    network.name = "receipt-test".into();
+    db.store_network(user.id, &mut network).unwrap();
+    drop(db);
+    for generation in 0..2 {
+        let srv = Server::new(Database::open(source).unwrap(), Logger::new(false));
+        srv.start().unwrap();
+        let (stream, _) = tokio::time::timeout(TIMEOUT, listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut upstream = TestConn::new(Box::new(stream));
+        register_upstream(&mut upstream).await;
+        upstream.roundtrip().await;
+        let mut phone = connect_downstream(&srv);
+        register_downstream_as(&mut phone, &format!("{TEST_USERNAME}@phone"), &network).await;
+        let welcome = phone.roundtrip().await;
+        if generation == 0 {
+            assert!(!welcome.iter().any(|m| m.command == "PRIVMSG"));
+            upstream.send(
+                msg!("PRIVMSG", TEST_USERNAME, "already acknowledged")
+                    .with_prefix(Prefix::new("peer")),
+            );
+            upstream.roundtrip().await;
+            let messages = phone.roundtrip().await;
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.command == "PRIVMSG" && m.param(1) == "already acknowledged")
+            );
+            // Process the receipt PONG before QUIT and wait for physical close.
+            assert_eq!(phone.roundtrip().await, [] as [Message; 0]);
+            phone.send(msg!("QUIT", "offline"));
+            tokio::time::timeout(TIMEOUT, async {
+                while phone.reader.read_message().await.unwrap().is_some() {}
+                while srv.stats().downstreams != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            for (sender, text) in [("peer", "while away"), ("newpeer", "new conversation")] {
+                upstream
+                    .send(msg!("PRIVMSG", TEST_USERNAME, text).with_prefix(Prefix::new(sender)));
+            }
+            upstream.roundtrip().await;
+        } else {
+            let mut replay: Vec<_> = welcome
+                .iter()
+                .filter(|m| m.command == "PRIVMSG")
+                .map(|m| m.param(1))
+                .collect();
+            replay.sort_unstable();
+            assert_eq!(replay, ["new conversation", "while away"]);
+            assert_eq!(phone.roundtrip().await, [] as [Message; 0]);
+        }
+        srv.shutdown().await;
+    }
+}

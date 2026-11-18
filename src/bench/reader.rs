@@ -97,7 +97,57 @@ fn memory_churn() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn receipt_clients() -> anyhow::Result<()> {
+    use soju::{user::DeliveredStore, xirc::CASEMAPPING_ASCII};
+    use std::collections::HashMap;
+    for clients in [1, 8, 64, 512, 4096] {
+        let mut store = DeliveredStore::new(CASEMAPPING_ASCII);
+        let mut maps = Vec::new();
+        for target in 0..16 {
+            let mut names = HashMap::new();
+            for client in 0..clients {
+                let name = format!("client-{client:05}");
+                store.store_id(&format!("#target{target}"), &name, "cursor")?;
+                names.insert(name, "cursor");
+            }
+            maps.push(names);
+        }
+        let mut baseline = Vec::new();
+        let mut current = Vec::new();
+        for _ in 0..7 {
+            let start = Instant::now();
+            let mut names: Vec<String> = Vec::new();
+            for map in &maps {
+                for name in map.keys() {
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
+                }
+            }
+            baseline.push(start.elapsed());
+            assert_eq!(black_box(names).len(), clients);
+            let start = Instant::now();
+            let names = store.clients();
+            current.push(start.elapsed());
+            assert_eq!(black_box(names).len(), clients);
+        }
+        baseline.sort_unstable();
+        current.sort_unstable();
+        println!(
+            "receipt clients={clients} rows={} cache_accounting={:?} old_median={:?} set_median={:?}",
+            clients * 16,
+            store.usage(),
+            baseline.get(3),
+            current.get(3)
+        );
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|arg| arg == "--receipt-clients") {
+        return receipt_clients();
+    }
     if std::env::args().any(|arg| arg == "--memory-churn") {
         return memory_churn();
     }

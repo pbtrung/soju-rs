@@ -24,12 +24,7 @@ impl User {
         let mut early = std::collections::VecDeque::new();
         let stopped = self.srv.stopped();
         let networks = loop {
-            let load = Self::load_networks(
-                self.srv.clone(),
-                self.logger.clone(),
-                self.record.id,
-                self.has_persistent_msg_store(),
-            );
+            let load = Self::load_networks(self.srv.clone(), self.logger.clone(), self.record.id);
             let loaded = load.await;
             match loaded {
                 Ok(networks) => break networks,
@@ -55,7 +50,8 @@ impl User {
             }
             delay = (delay * 2).min(STARTUP_RETRY_MAX);
         };
-        for network in networks {
+        for mut network in networks {
+            self.prepare_receipts(&mut network);
             self.networks.push(network);
             let i = self.networks.len() - 1;
             self.start_network(i);
@@ -77,14 +73,13 @@ impl User {
         self.close_msg_store();
     }
 
-    /// Loads the user's networks with their channels, flagged targets and
-    /// delivery receipts.
+    /// Loads the user's networks with their channels and flagged targets.
+    /// Delivery receipts are read lazily during playback.
     /// Takes the user's fields: the user can't be borrowed across awaits.
     async fn load_networks(
         srv: std::sync::Arc<crate::server::Server>,
         logger: crate::logger::Logger,
         user_id: i64,
-        persistent: bool,
     ) -> anyhow::Result<Vec<Network>> {
         let mut records = db::run(&srv.db, move |db| db.list_networks(user_id))
             .await
@@ -103,18 +98,6 @@ impl User {
             let mut network = Network::new(&logger, record, channels);
             for mt in targets {
                 network.set_message_target(mt);
-            }
-            if persistent {
-                let receipts = db::run(&srv.db, move |db| db.list_delivery_receipts(net_id))
-                    .await
-                    .map_err(|e| {
-                        e.context(format!("{context}: failed to load delivery receipts"))
-                    })?;
-                for rcpt in receipts {
-                    network
-                        .delivered
-                        .store_id(&rcpt.target, &rcpt.client, &rcpt.internal_msg_id);
-                }
             }
             networks.push(network);
         }

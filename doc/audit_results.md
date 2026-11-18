@@ -93,7 +93,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Heap growth despite per-connection bounds. In a temporary public-API probe, the first target remained after appending messages to 10,000 different targets.
 - **Recommended fix:** Define a per-user/network byte and target budget with explicit eviction/history-expiry semantics. Account retained messages and target keys, release empty entries, and preserve monotonically meaningful delivery cursors when a target is evicted/recreated. Also evaluate receipt/client-name retention before claiming a whole-user bound.
 - **Verification:** Regression with many unique targets, large/multiline messages and repeated eviction; assert byte/entry ceilings, defined replay behavior and network cleanup. Measure memory under sustained sender churn.
-- **Status:** Not Started.
+- **Status:** Completed. Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved.
 
 #### ASYNC-001 — Ordinary Web Push work bypasses admission limits
 
@@ -278,7 +278,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Growing disconnect/shutdown cost for unusually large histories of client names, plus retained receipt memory.
 - **Recommended fix:** Measure representative receipt cardinalities; if warranted use a set for deduplication while preserving any externally relevant ordering, and design receipt-cache bounds without deleting durable cursors unexpectedly.
 - **Verification:** Many-target/client benchmark; receipt replay and restart tests; demonstrate unchanged persistence semantics.
-- **Status:** Not Started.
+- **Status:** Completed. Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved.
 
 #### ASYNC-005 — Metric accounting is not cancellation-safe
 
@@ -634,13 +634,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: incomplete-handshake/upgrade/error/close bursts; task/FD caps and release on all paths.
   - Acceptance/status: no permit leak or upgrade bypass; **Completed**.
 
-- [ ] **STEP-014 (P2): Assess receipt-cache growth and enumeration cost.**
+- [x] **STEP-014 (P2): Assess receipt-cache growth and enumeration cost.**
   - Findings: PERF-001, MEM-001. Objective: avoid claiming a whole-user budget while cursors grow unchecked.
   - Files: `src/user/delivered.rs`, `src/user/events.rs`, receipt persistence tests/benchmark.
   - Instructions: benchmark cardinality; replace quadratic dedup if beneficial; specify bounded/lazy receipt cache without losing durable cursors or changing playback on reconnect. Keep disk cleanup as a separate documented retention decision.
   - Dependencies: STEP-012. Risks: replay loss/duplicates; ordering.
   - Verification: many-client benchmark, disconnect/restart receipt tests and bounded-cache reload tests.
-  - Acceptance/status: measured behavior and explicit retention policy; no unverified eviction; **Not Started**.
+  - Acceptance/status: measured behavior and explicit retention policy; no unverified eviction; **Completed**.
 
 ### Phase 6 — Async and Concurrency
 
@@ -879,6 +879,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-011 | Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 extraction remains a separate Phase-7 task and is not claimed resolved. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-012 | Bound per-user memory history to 1,024 targets, 16,384 messages and 16 MiB accounted storage with coherent eviction and incarnation-scoped cursors. Churn/cursor/accounting tests and full GNU/musl checks (235 tests each), strict Clippy/rustdoc pass. Finite 800k-target/40k-large-record experiment plateaus at 1,024 targets / 1,010 large records; RSS measurements and accounting limits documented in resource-limits.md. Receipt-cache portion of MEM-001 remains for STEP-014. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-013 | Global accepted-session admission defaults to 256, is reloadable, rejects before spawning, and follows physical streams through TLS/PROXY/HTTP/WebSocket upgrades. Cancellation closes session writers. Concurrent admission, 300 overload attempts, close/error/upgrade/reload/admin/shutdown/abort regressions pass; full GNU/musl checks (240 tests each), strict Clippy/rustdoc and documentation links pass. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-014 | Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

@@ -534,7 +534,14 @@ pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> Strin
         return String::new();
     }
 
-    if !net.delivered.is_empty() && !net.delivered.has_target(entity) {
+    let tracked = match net.delivered.has_target(entity) {
+        Ok(tracked) => tracked,
+        Err(error) => {
+            logf!(net.logger, "failed to look up receipt target: {error}");
+            true
+        }
+    };
+    if !tracked {
         // This is the first message we receive from this target. Save the
         // last message ID in delivery receipts, so that we can send the new
         // message in the backlog if an offline client reconnects.
@@ -548,8 +555,11 @@ pub fn append_log(u: &mut User, ni: usize, entity: &str, msg: &Message) -> Strin
                 return String::new();
             }
         };
-        for client in net.delivered.clients() {
-            net.delivered.store_id(entity, &client, &last_id);
+        if let Err(error) = net.delivered.initialize_target(entity, &last_id) {
+            logf!(
+                net.logger,
+                "failed to initialize delivery receipts: {error}"
+            );
         }
     }
 

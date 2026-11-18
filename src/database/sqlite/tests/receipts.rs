@@ -243,3 +243,145 @@ fn unchanged_records_and_receipts_do_not_write() {
         .unwrap();
     assert_eq!(db.list_delivery_receipts(network.id).unwrap().len(), 1);
 }
+
+#[test]
+fn bounded_cache_failure_retains_dirty_and_uncached_receipts() -> anyhow::Result<()> {
+    use crate::user::DeliveredStore;
+    use crate::xirc::CASEMAPPING_RFC1459;
+    use std::sync::Arc;
+
+    let db = Arc::new(db());
+    let mut user = User::new("receipt-errors");
+    db.store_user(&mut user)?;
+    let mut net = Network::new("irc.example");
+    db.store_network(user.id, &mut net)?;
+    let mut store = DeliveredStore::new(CASEMAPPING_RFC1459);
+    store.attach(db.clone(), net.id, Arc::default());
+    store.store_id("#a", "phone", "old")?;
+    store.store_id("#uncached", "phone", "preserved")?;
+    store.flush_all()?;
+    db.conn().execute_batch("CREATE TEMP TRIGGER fail_receipt BEFORE UPDATE ON DeliveryReceipt BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END;")?;
+    store.store_id("#a", "phone", "advanced")?;
+    let usage = store.usage();
+    assert!(store.flush_client("phone").is_err());
+    assert_eq!(store.usage(), usage);
+    assert_eq!(store.load_id("#a", "phone")?, "advanced");
+    assert_eq!(
+        db.load_delivery_id(net.id, "#a", "phone", CASEMAPPING_RFC1459)?,
+        "old"
+    );
+    db.conn().execute_batch("DROP TRIGGER fail_receipt;")?;
+    store.flush_client("phone")?;
+    assert_eq!(store.usage().entries, 0);
+    assert_eq!(
+        db.load_delivery_id(net.id, "#a", "phone", CASEMAPPING_RFC1459)?,
+        "advanced"
+    );
+    assert_eq!(
+        db.load_delivery_id(net.id, "#uncached", "phone", CASEMAPPING_RFC1459)?,
+        "preserved"
+    );
+    Ok(())
+}
+
+#[test]
+fn lazy_receipts_merge_case_aliases_and_initialize_every_client_atomically() -> anyhow::Result<()> {
+    use crate::xirc::{CASEMAPPING_ASCII, CASEMAPPING_RFC1459, CASEMAPPING_RFC1459_STRICT};
+    let db = db();
+    let mut user = User::new("receipt-aliases");
+    db.store_user(&mut user)?;
+    let mut net = Network::new("irc.example");
+    db.store_network(user.id, &mut net)?;
+    for (target, client, id) in [
+        ("#A{", None, "first"),
+        ("#a[", None, "last"),
+        ("#Case", Some("phone"), "named"),
+    ] {
+        db.conn().execute(
+            "INSERT INTO DeliveryReceipt(network,target,client,internal_msgid) VALUES(?,?,?,?)",
+            rusqlite::params![net.id, target, client, id],
+        )?;
+    }
+    assert_eq!(
+        db.load_delivery_id(net.id, "#A{", "", CASEMAPPING_RFC1459)?,
+        "last"
+    );
+    assert_eq!(
+        db.load_delivery_id(net.id, "#A{", "", CASEMAPPING_ASCII)?,
+        "first"
+    );
+    for cm in [
+        CASEMAPPING_ASCII,
+        CASEMAPPING_RFC1459,
+        CASEMAPPING_RFC1459_STRICT,
+    ] {
+        let page = db.delivery_receipt_page(net.id, "", cm, None)?;
+        assert_eq!(
+            page.len(),
+            if std::ptr::fn_addr_eq(cm, CASEMAPPING_ASCII) {
+                2
+            } else {
+                1
+            }
+        );
+    }
+    db.initialize_delivery_target(net.id, "#NEW", "initial", CASEMAPPING_RFC1459)?;
+    for client in ["", "phone"] {
+        assert_eq!(
+            db.load_delivery_id(net.id, "#new", client, CASEMAPPING_RFC1459)?,
+            "initial"
+        );
+    }
+    db.initialize_delivery_target(net.id, "#new", "must-not-overwrite", CASEMAPPING_RFC1459)?;
+    assert_eq!(
+        db.load_delivery_id(net.id, "#new", "phone", CASEMAPPING_RFC1459)?,
+        "initial"
+    );
+    db.upsert_delivery_receipts(
+        net.id,
+        "",
+        &[DeliveryReceipt {
+            target: "#A{".into(),
+            internal_msg_id: "updated".into(),
+            ..Default::default()
+        }],
+        CASEMAPPING_RFC1459,
+    )?;
+    assert_eq!(
+        db.load_delivery_id(net.id, "#A{", "", CASEMAPPING_ASCII)?,
+        "updated"
+    );
+    assert_eq!(
+        db.load_delivery_id(net.id, "#a[", "", CASEMAPPING_ASCII)?,
+        "updated"
+    );
+    // Legacy Go databases may contain non-UTF8 target/client text. Lazy
+    // queries must use exactly the eager loader's replacement policy.
+    db.conn().execute("INSERT INTO DeliveryReceipt(network,target,client,internal_msgid) VALUES(?,CAST(x'2362ff' AS TEXT),CAST(x'7068ff' AS TEXT),'legacy-bytes')", [net.id])?;
+    assert_eq!(
+        db.load_delivery_id(net.id, "#b\u{fffd}", "ph\u{fffd}", CASEMAPPING_RFC1459)?,
+        "legacy-bytes"
+    );
+    db.upsert_delivery_receipts(
+        net.id,
+        "ph\u{fffd}",
+        &[DeliveryReceipt {
+            target: "#B\u{fffd}".into(),
+            internal_msg_id: "normalized".into(),
+            ..Default::default()
+        }],
+        CASEMAPPING_RFC1459,
+    )?;
+    assert_eq!(
+        db.delivery_receipt_page(net.id, "ph\u{fffd}", CASEMAPPING_RFC1459, None)?
+            .len(),
+        1
+    );
+    db.conn().execute_batch("CREATE TEMP TRIGGER fail_init BEFORE INSERT ON DeliveryReceipt WHEN NEW.target='#atomic' AND NEW.client='phone' BEGIN SELECT RAISE(ABORT,'injected initialization failure'); END;")?;
+    assert!(
+        db.initialize_delivery_target(net.id, "#atomic", "initial", CASEMAPPING_RFC1459)
+            .is_err()
+    );
+    assert!(!db.has_delivery_target(net.id, "#atomic", CASEMAPPING_RFC1459)?);
+    Ok(())
+}

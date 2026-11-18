@@ -97,6 +97,7 @@ impl Database {
     }
 
     fn setup(conn: Connection) -> Result<Database> {
+        receipts::register_case_functions(&conn)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
         // journal_mode returns a row

@@ -174,9 +174,15 @@ impl User {
             reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
         )]
         let net = &mut self.networks[ni];
+        if let Err(error) = net.delivered.set_casemapping(cm) {
+            logf!(
+                net.logger,
+                "failed to persist receipts before case-mapping change: {error}"
+            );
+            return;
+        }
         net.casemap = cm;
         net.channels.set_casemapping(cm);
-        net.delivered.m.set_casemapping(cm);
         crate::state_lock::lock(&net.push_targets).set_casemapping(cm);
         if let Some(uc) = &mut net.conn {
             uc.channels.set_casemapping(cm);

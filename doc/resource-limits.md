@@ -83,3 +83,67 @@ and shutdown of an unregistered upgraded session. These are finite regressions,
 not a whole-server soak. In the isolated GNU/Linux run on 2026-11-17,
 each 100-attempt burst kept two admitted sessions, five live Tokio tasks and
 17 process file descriptors before and after the burst.
+
+## Delivery receipts
+
+For SQLite message storage, each user's networks share a dirty-receipt cache
+limited to 4,096 target/client entries and 4 MiB of accounted bytes. Accounting
+charges each entry for client/ID bytes, two target spellings and a conservative
+256 bytes of map/string metadata; it is not a process-RSS ceiling. Temporary
+flush copies and SQLite's own page/sort storage are outside that retained-cache
+counter. The existing 10,000-target cap on client-supplied acknowledgments still
+includes durable targets.
+
+Pressure flushes a network's cached rows before releasing them. If other
+networks occupy the budget, or an entry alone exceeds the byte limit, that
+entry writes through to SQLite. Disconnect flushes and releases only the
+client's cached rows. A database failure retains the failed dirty rows for
+retry and is logged; it never silently evicts their cursors. Shutdown retries
+remaining cached clients through the normal persistence path. As before,
+unrecoverable database errors or abrupt process termination can cause repeated
+playback; this cache does not promise a durable write for every acknowledgment.
+
+Cache flushes update/insert individual conversations and preserve every
+uncached durable row. The old full-replacement database API retains its existing
+semantics for callers explicitly requesting replacement. Durable receipt rows
+have no new expiry/deletion policy: disk cleanup is a separate retention decision.
+Database schema 35 and existing row IDs are unchanged.
+
+Startup does not load delivery receipts. Reconnect flushes that client's dirty
+rows and reads at most 128 canonical conversations per page, without retaining
+a growing target list or a database lock during playback. Legacy case aliases
+use the newest row, matching the old startup loader, and updates cover aliases
+together. Registered SQLite scalar functions apply the same IRC mapping and
+lossy UTF-8 policy as the eager Rust loader, including legacy Go databases.
+Paging can scan/sort a client's durable rows repeatedly; it bounds Rust reload
+storage but does not claim constant-cost queries. No new persistent SQL function
+index is installed, so upstream Go can still open/write the database.
+
+Memory-only message stores keep their previous receipt lifetime: target/client
+cursors remain until network/user teardown, including historical client names.
+They have no durable backing to reload after eviction. They are explicitly
+outside both the memory-history budget and the durable receipt-cache bound;
+no whole-user or whole-process memory bound is claimed. Capping or expiring
+these cursors would require a separate replay-retention policy.
+
+Client enumeration now uses set membership while preserving first-encounter
+order. Run `cargo bench --bench reader -- --receipt-clients` to compare it with
+the former vector membership scan on 16 targets. This synthetic comparison uses
+memory-only receipts so both algorithms see identical cardinalities beyond the
+durable cache limit. Seven-sample medians measured with optimized GNU/Linux on
+2026-11-17:
+
+| Clients | Receipt entries | Old vector scan | Set membership |
+| ---: | ---: | ---: | ---: |
+| 1 | 16 | 120 ns | 435 ns |
+| 8 | 128 | 2.859 µs | 3.123 µs |
+| 64 | 1,024 | 109.663 µs | 26.081 µs |
+| 512 | 8,192 | 6.266 ms | 0.230 ms |
+| 4,096 | 65,536 | 393.526 ms | 3.052 ms |
+
+The set has a small absolute cost for very few clients and removes the
+quadratic growth at high cardinality. These timings do not measure end-to-end
+notification or reconnect throughput. Regressions separately cover shared
+cache pressure, large entries, 10,000-receipt lazy file reopen, partial flushes,
+case/invalid-UTF8 aliases, atomic new-target initialization, injected failure
+and named-client playback after disconnect/restart on both Tokio runtimes.

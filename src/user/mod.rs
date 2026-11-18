@@ -33,7 +33,7 @@ mod network;
 mod upstream_conn;
 mod webpush;
 
-pub use delivered::DeliveredStore;
+pub use delivered::{DeliveredStore, ReceiptUsage};
 pub use network::{Network, reattaches_detached_channel, relays_detached_message};
 pub use webpush::{send_web_push, send_web_push_to, web_push_subscriptions};
 
@@ -248,6 +248,7 @@ pub struct User {
     pub networks: Vec<Network>,
     pub downstreams: Vec<DownstreamConn>,
     pub msg_store: Store,
+    receipt_budget: Arc<delivered::ReceiptBudget>,
     /// Held while a certificate is being generated for this user: key
     /// generation is expensive, only one runs at a time
     pub certfp_generating: Arc<tokio::sync::Semaphore>,
@@ -292,6 +293,7 @@ impl User {
             networks: Vec::new(),
             downstreams: Vec::new(),
             msg_store,
+            receipt_budget: Arc::default(),
             certfp_generating: Arc::new(tokio::sync::Semaphore::new(1)),
             web_push_checks: HashMap::new(),
             web_push_check_slots: Arc::new(tokio::sync::Semaphore::new(
