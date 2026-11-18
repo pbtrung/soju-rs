@@ -496,3 +496,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "notifications_soak.rs"]
+mod soak;
