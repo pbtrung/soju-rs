@@ -157,10 +157,6 @@ impl DownstreamConn {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-    )]
     ///
     /// # Errors
     ///
@@ -225,57 +221,7 @@ impl DownstreamConn {
                 let caps: Vec<String> = self.caps.enabled.iter().cloned().collect();
                 self.send_cap_list("LIST", &caps, &p);
             }
-            "REQ" => {
-                let Some(arg) = args.first() else {
-                    return Err(irc_error(msg!(
-                        ERR_INVALIDCAPCMD,
-                        self.nick.clone(),
-                        cmd,
-                        "Missing argument in CAP REQ command"
-                    )));
-                };
-                let mut ack = true;
-                let mut changes = Vec::new();
-                for name in arg.split_whitespace() {
-                    let name = name.to_lowercase();
-                    let (name, enable) = match name.strip_prefix('-') {
-                        Some(n) => (n.to_owned(), false),
-                        None => (name, true),
-                    };
-                    if enable == self.caps.is_enabled(&name) {
-                        continue;
-                    }
-                    if !self.caps.is_available(&name) {
-                        ack = false;
-                        break;
-                    }
-                    if name == "cap-notify" && self.cap_version >= 302 && !enable {
-                        // cap-notify cannot be disabled with CAP version 302
-                        ack = false;
-                        break;
-                    }
-                    if name == "soju.im/account-required" {
-                        // account-required is an informational cap
-                        ack = false;
-                        break;
-                    }
-                    changes.push((name, enable));
-                }
-                // Atomically ack the whole capability set
-                if ack {
-                    for (name, enable) in changes {
-                        self.caps.set_enabled(&name, enable);
-                    }
-                }
-                let reply = if ack { "ACK" } else { "NAK" };
-                let nick = self.nick.clone();
-                self.send_message(msg!("CAP", nick, reply, arg.clone()).with_prefix(p));
-                if let Some(r) = &mut self.registration
-                    && !self.registered
-                {
-                    r.negotiating_caps = true;
-                }
-            }
+            "REQ" => self.handle_cap_request(args, &p)?,
             "END" => {
                 if let Some(r) = &mut self.registration
                     && !self.registered
@@ -291,6 +237,59 @@ impl DownstreamConn {
                     "Unknown CAP command"
                 )));
             }
+        }
+        Ok(())
+    }
+    fn handle_cap_request(&mut self, args: &[String], prefix: &crate::irc::Prefix) -> Result<()> {
+        let p = prefix.clone();
+        let Some(arg) = args.first() else {
+            return Err(irc_error(msg!(
+                ERR_INVALIDCAPCMD,
+                self.nick.clone(),
+                "REQ",
+                "Missing argument in CAP REQ command"
+            )));
+        };
+        let mut ack = true;
+        let mut changes = Vec::new();
+        for name in arg.split_whitespace() {
+            let name = name.to_lowercase();
+            let (name, enable) = match name.strip_prefix('-') {
+                Some(n) => (n.to_owned(), false),
+                None => (name, true),
+            };
+            if enable == self.caps.is_enabled(&name) {
+                continue;
+            }
+            if !self.caps.is_available(&name) {
+                ack = false;
+                break;
+            }
+            if name == "cap-notify" && self.cap_version >= 302 && !enable {
+                // cap-notify cannot be disabled with CAP version 302
+                ack = false;
+                break;
+            }
+            if name == "soju.im/account-required" {
+                // account-required is an informational cap
+                ack = false;
+                break;
+            }
+            changes.push((name, enable));
+        }
+        // Atomically ack the whole capability set
+        if ack {
+            for (name, enable) in changes {
+                self.caps.set_enabled(&name, enable);
+            }
+        }
+        let reply = if ack { "ACK" } else { "NAK" };
+        let nick = self.nick.clone();
+        self.send_message(msg!("CAP", nick, reply, arg.clone()).with_prefix(p));
+        if let Some(r) = &mut self.registration
+            && !self.registered
+        {
+            r.negotiating_caps = true;
         }
         Ok(())
     }

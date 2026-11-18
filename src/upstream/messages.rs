@@ -12,10 +12,6 @@ use super::{
     logf, msg, need_params, parse_label, update_channel_auto_detach, xirc,
 };
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-)]
 /// Handles messages, batches and errors. Returns false if the message isn't one
 /// of them.
 pub(super) fn handle_message(
@@ -26,265 +22,22 @@ pub(super) fn handle_message(
     downstream_label: &str,
     label: &str,
 ) -> Result<bool> {
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let net_id = u.networks[ni].id();
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let cm = u.networks[ni].casemap;
-    let prefix_name = msg.prefix_name().to_owned();
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
 
     match msg.command.as_str() {
         "PING" => {
-            uc!(u, ni).send_message(Message::new("PONG", msg.params.clone()));
+            super::connection(u, ni)?.send_message(Message::new("PONG", msg.params.clone()));
         }
         "NOTICE" | "PRIVMSG" | "TAGMSG" | "REDACT" => {
-            let is_text = msg.command == "NOTICE" || msg.command == "PRIVMSG";
-            need_params(msg, if is_text { 2 } else { 1 })?;
-            let uc = uc!(u, ni);
-            // remove STATUSMSG sigils from target
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let target = msg.params[0]
-                .trim_start_matches(|c| uc.available_status_msg.contains(c))
-                .to_owned();
-
-            if cm(&prefix_name) == cm(downstream::SERVICE_NICK) {
-                logf!(
-                    uc.logger,
-                    "skipping {} from soju's service: {msg}",
-                    msg.command
-                );
-                return Ok(true);
-            }
-            if cm(&target) == cm(downstream::SERVICE_NICK) {
-                logf!(
-                    uc.logger,
-                    "skipping {} to soju's service: {msg}",
-                    msg.command
-                );
-                return Ok(true);
-            }
-
-            if !uc.registered
-                || cm(&prefix_name) == cm(&uc.server_prefix.name)
-                || target == "*"
-                || target.starts_with('$')
-            {
-                // This is a server message
-                produce(u, ni, "", msg, 0, false);
-                return Ok(true);
-            }
-
-            let mut direct_message = is_our_nick(cm, uc, &target);
-            let mut buffer_name = if direct_message {
-                prefix_name.clone()
-            } else {
-                target.clone()
-            };
-            if let Some(t) = msg.tags.get("+draft/channel-context")
-                && let Some(ch) = uc.channels.get(t)
-                && ch.members.has(&prefix_name)
-            {
-                buffer_name = ch.name.clone();
-                direct_message = false;
-            }
-
-            let self_msg = is_our_nick(cm, uc, &prefix_name);
-            let mut highlight = false;
-            let mut detached = false;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-            )]
-            let ch = (u.networks[ni].channels.get(&buffer_name))
-                .map(|c| (c.detached, c.detach_on, c.relay_detached));
-            if let Some((was_detached, detach_on, relay_detached)) = ch
-                && is_text
-                && !self_msg
-            {
-                {
-                    #![expect(
-                        clippy::indexing_slicing,
-                        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                    )]
-                    highlight = u.networks[ni].is_highlight(&u.record, msg);
-                }
-                if was_detached {
-                    handle_detached_message(u, ni, &buffer_name, msg, highlight);
-                }
-                if detach_on == db::MessageFilter::Message
-                    || detach_on == db::MessageFilter::Default
-                    || (detach_on == db::MessageFilter::Highlight && highlight)
-                {
-                    update_channel_auto_detach(u, ni, &buffer_name);
-                }
-                // The message may have reattached the channel
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                let (is_detached, relay_detached) = (u.networks[ni].channels.get(&buffer_name))
-                    .map_or((was_detached, relay_detached), |c| {
-                        (c.detached, c.relay_detached)
-                    });
-                if is_detached && relay_detached == db::MessageFilter::None {
-                    detached = true;
-                }
-            }
-
-            let mut send_web_push = !self_msg
-                && !detached
-                && is_text
-                && (highlight || direct_message)
-                && u.has_web_push_subscriptions(net_id);
-
-            let source_cm = cm(&prefix_name);
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-            )]
-            let mt = u.networks[ni].message_target(&source_cm);
-            if mt.muted || mt.blocked {
-                send_web_push = false;
-            }
-            let blocked = mt.blocked;
-
-            let timestamp = msg
-                .tags
-                .get("time")
-                .and_then(xirc::parse_server_time)
-                .unwrap_or_else(Timestamp::now);
-            // highlight is only computed for saved channels
-            // A private PRIVMSG, which clients show in its own conversation,
-            // unlike NOTICEs (e.g. from services) and CTCP requests or replies
-            let private_mention = direct_message
-                && msg.command == "PRIVMSG"
-                && (!msg.param(1).starts_with('\u{1}') || msg.param(1).starts_with("\u{1}ACTION"));
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-            )]
-            let mention = is_text
-                && !self_msg
-                && !blocked
-                && (private_mention
-                    || highlight
-                    || (ch.is_none()
-                        && !direct_message
-                        && u.networks[ni].is_highlight(&u.record, msg)));
-            if mention && u.has_chathistory_store() {
-                // Clients learn which conversations mention them from
-                // CHATHISTORY TARGETS, without loading their history
-                u.record_mention(ni, cm(&buffer_name), timestamp);
-            }
-
-            if send_web_push {
-                u.queue_web_push(ni, cm(&buffer_name), msg.clone(), Some(timestamp));
-            }
-
-            produce(u, ni, &buffer_name, msg, downstream_id, blocked);
+            return handle_chat_message(u, ni, msg, downstream_id);
         }
-        "BATCH" => {
-            need_params(msg, 1)?;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let tag = msg.params[0].clone();
-            if let Some(tag) = tag.strip_prefix('+') {
-                let uc = uc!(u, ni);
-                if uc.batches.contains_key(tag) {
-                    bail!("unexpected BATCH reference tag: batch was already defined: {tag:?}");
-                }
-                need_params(msg, 2)?;
-                // label is the batch's own, or else the one of its parent
-                uc.batches.insert(
-                    tag.to_owned(),
-                    UpstreamBatch {
-                        label: label.to_owned(),
-                        multiline: None,
-                    },
-                );
-                if downstream_id != 0 && !downstream_label.is_empty() {
-                    let prefix = u.srv.prefix();
-                    for dc in dcs_for(&mut u.downstreams, net_id) {
-                        if dc.id != downstream_id {
-                            continue;
-                        }
-                        let batch =
-                            Message::new("BATCH", msg.params.clone()).with_prefix(prefix.clone());
-                        match &mut dc.label {
-                            // A batch nested in the labeled response: it
-                            // goes in the outer batch, which has the label
-                            Some(l) if !l.batch.is_empty() => dc.send_message(batch),
-                            l => {
-                                if let Some(l) = l {
-                                    l.label.clear();
-                                }
-                                dc.send_message(batch.with_tag("label", downstream_label));
-                            }
-                        }
-                    }
-                }
-            } else if let Some(tag) = tag.strip_prefix('-') {
-                let uc = uc!(u, ni);
-                let Some(b) = uc.batches.remove(tag) else {
-                    bail!("unknown BATCH reference tag: {tag:?}");
-                };
-                // BATCH - does not have @label/@batch attached to it, so
-                // the downstream ID is empty. Extract it back from the batch.
-                if let Ok((id, lbl)) = parse_label(&b.label)
-                    && id != 0
-                    && !lbl.is_empty()
-                {
-                    let prefix = u.srv.prefix();
-                    for dc in dcs_for(&mut u.downstreams, net_id) {
-                        if dc.id == id {
-                            dc.send_message(
-                                Message::new("BATCH", msg.params.clone())
-                                    .with_prefix(prefix.clone()),
-                            );
-                        }
-                    }
-                }
-            } else {
-                bail!("unexpected BATCH reference tag: missing +/- prefix: {tag:?}");
-            }
-        }
+        "BATCH" => return handle_batch(u, ni, msg, downstream_id, downstream_label, label),
         ERR_NOSUCHNICK | ERR_NOSUCHSERVER => {
-            // one argument WHOIS variant errors with NOSUCHNICK
-            // two argument WHOIS variant errors with NOSUCHSERVER
-            need_params(msg, 3)?;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let nick = &msg.params[1];
-            let is_whois_target = current_pending_command(u, ni, "WHOIS")
-                .and_then(|cmd| cmd.msg.params.last())
-                .is_some_and(|p| cm(p) == cm(nick));
-            if is_whois_target {
-                if let Some((dc_id, _)) = end_command_early(u, ni, "WHOIS")
-                    && let Some(i) = u.dc_index(dc_id)
-                {
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                        )]
-                        u.downstreams[i].send_message(msg.clone());
-                    }
-                }
-            } else {
-                forward_msg_by_id(u, net_id, downstream_id, msg);
-            }
+            return handle_err_nosuchnick(u, ni, msg, downstream_id);
         }
         ERR_UNKNOWNERROR | ERR_UNKNOWNCOMMAND | ERR_NEEDMOREPARAMS | RPL_TRYAGAIN => {
             need_params(msg, 3)?;
@@ -300,7 +53,7 @@ pub(super) fn handle_message(
                 downstream_id = dc_id;
             }
             if command == "AUTHENTICATE" {
-                let uc = uc!(u, ni);
+                let uc = super::connection(u, ni)?;
                 uc.sasl_client = None;
                 uc.sasl_started = false;
             }
@@ -318,7 +71,8 @@ pub(super) fn handle_message(
                 reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
             )]
             let code = msg.params[1].clone();
-            if !uc!(u, ni).registered && command == "*" && code == "ACCOUNT_REQUIRED" {
+            if !super::connection(u, ni)?.registered && command == "*" && code == "ACCOUNT_REQUIRED"
+            {
                 return Err(RegistrationError(msg.clone()).into());
             }
             if let Some((dc_id, _)) = dequeue_command(u, ni, &command)
@@ -337,7 +91,7 @@ pub(super) fn handle_message(
             // Ignore these messages if they're part of the initial
             // registration message burst. Forward them if the user
             // explicitly asked for them.
-            if !uc!(u, ni).got_motd {
+            if !super::connection(u, ni)?.got_motd {
                 return Ok(true);
             }
             forward_msg_by_id(u, net_id, downstream_id, msg);
@@ -354,56 +108,382 @@ pub(super) fn handle_message(
         }
         ERR_NICKNAMEINUSE | ERR_PASSWDMISMATCH | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION
         | ERR_UNAVAILRESOURCE | ERR_NOPERMFORHOST | ERR_YOUREBANNEDCREEP => {
-            if msg.command == ERR_NICKNAMEINUSE {
-                let uc = uc!(u, ni);
-                // At this point, we haven't received ISUPPORT so we don't
-                // know the maximum nickname length or whether the server
-                // supports MONITOR. Many servers have NICKLEN=30 so let's
-                // just use that.
-                if !uc.registered && uc.nick.len() + 1 < 30 {
-                    uc.nick.push('_');
-                    uc.has_desired_nick = false;
-                    logf!(
-                        uc.logger,
-                        "desired nick is not available, falling back to {:?}",
-                        uc.nick
-                    );
-                    let nick = uc.nick.clone();
-                    uc.send_message(msg!("NICK", nick));
-                    return Ok(true);
-                }
-            }
-            // Servers refuse a nick with any of these, e.g. 437 for a nick
-            // held by services
-            let nick_error = matches!(
-                msg.command.as_str(),
-                ERR_NICKNAMEINUSE | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION | ERR_UNAVAILRESOURCE
-            );
-            let uc = uc!(u, ni);
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                )]
-                if nick_error
-                    && uc.registered
-                    && msg.params.len() >= 2
-                    && !uc.pending_regain_nick.is_empty()
-                    && cm(&uc.pending_regain_nick) == cm(&msg.params[1])
-                {
-                    // This message comes from our own logic to try to regain our
-                    // desired nick, don't relay to downstream connections
-                    uc.pending_regain_nick.clear();
-                    return Ok(true);
-                }
-            }
-            if !uc!(u, ni).registered {
-                return Err(RegistrationError(msg.clone()).into());
-            }
-            forward_msg_by_id(u, net_id, downstream_id, msg);
+            return handle_err_nicknameinuse(u, ni, msg, downstream_id);
         }
         _ => return Ok(false),
     }
+    Ok(true)
+}
+
+fn handle_chat_message(
+    u: &mut User,
+    ni: usize,
+    msg: &mut Message,
+    downstream_id: u64,
+) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    let cm = network.casemap;
+    let prefix_name = msg.prefix_name().to_owned();
+    let is_text = msg.command == "NOTICE" || msg.command == "PRIVMSG";
+    let Some(ChatRoute {
+        buffer_name,
+        direct_message,
+        self_msg,
+    }) = route_chat_message(u, ni, msg)?
+    else {
+        return Ok(true);
+    };
+    let mut highlight = false;
+    let mut detached = false;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
+    let ch = (u.networks[ni].channels.get(&buffer_name))
+        .map(|c| (c.detached, c.detach_on, c.relay_detached));
+    if let Some((was_detached, detach_on, relay_detached)) = ch
+        && is_text
+        && !self_msg
+    {
+        {
+            #![expect(
+                clippy::indexing_slicing,
+                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+            )]
+            highlight = u.networks[ni].is_highlight(&u.record, msg);
+        }
+        if was_detached {
+            handle_detached_message(u, ni, &buffer_name, msg, highlight);
+        }
+        if detach_on == db::MessageFilter::Message
+            || detach_on == db::MessageFilter::Default
+            || (detach_on == db::MessageFilter::Highlight && highlight)
+        {
+            update_channel_auto_detach(u, ni, &buffer_name);
+        }
+        // The message may have reattached the channel
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        let (is_detached, relay_detached) = (u.networks[ni].channels.get(&buffer_name))
+            .map_or((was_detached, relay_detached), |c| {
+                (c.detached, c.relay_detached)
+            });
+        if is_detached && relay_detached == db::MessageFilter::None {
+            detached = true;
+        }
+    }
+
+    let mut send_web_push = !self_msg
+        && !detached
+        && is_text
+        && (highlight || direct_message)
+        && u.has_web_push_subscriptions(net_id);
+
+    let source_cm = cm(&prefix_name);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
+    let mt = u.networks[ni].message_target(&source_cm);
+    if mt.muted || mt.blocked {
+        send_web_push = false;
+    }
+    let blocked = mt.blocked;
+
+    let timestamp = msg
+        .tags
+        .get("time")
+        .and_then(xirc::parse_server_time)
+        .unwrap_or_else(Timestamp::now);
+    // highlight is only computed for saved channels
+    // A private PRIVMSG, which clients show in its own conversation,
+    // unlike NOTICEs (e.g. from services) and CTCP requests or replies
+    let private_mention = direct_message
+        && msg.command == "PRIVMSG"
+        && (!msg.param(1).starts_with('\u{1}') || msg.param(1).starts_with("\u{1}ACTION"));
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+    )]
+    let mention = is_text
+        && !self_msg
+        && !blocked
+        && (private_mention
+            || highlight
+            || (ch.is_none() && !direct_message && u.networks[ni].is_highlight(&u.record, msg)));
+    if mention && u.has_chathistory_store() {
+        // Clients learn which conversations mention them from
+        // CHATHISTORY TARGETS, without loading their history
+        u.record_mention(ni, cm(&buffer_name), timestamp);
+    }
+
+    if send_web_push {
+        u.queue_web_push(ni, cm(&buffer_name), msg.clone(), Some(timestamp));
+    }
+
+    produce(u, ni, &buffer_name, msg, downstream_id, blocked);
+    Ok(true)
+}
+
+struct ChatRoute {
+    buffer_name: String,
+    direct_message: bool,
+    self_msg: bool,
+}
+
+fn route_chat_message(u: &mut User, ni: usize, msg: &Message) -> Result<Option<ChatRoute>> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let cm = network.casemap;
+    let prefix_name = msg.prefix_name().to_owned();
+    let is_text = msg.command == "NOTICE" || msg.command == "PRIVMSG";
+    need_params(msg, if is_text { 2 } else { 1 })?;
+    let uc = super::connection(u, ni)?;
+    // remove STATUSMSG sigils from target
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let target = msg.params[0]
+        .trim_start_matches(|c| uc.available_status_msg.contains(c))
+        .to_owned();
+
+    if cm(&prefix_name) == cm(downstream::SERVICE_NICK) {
+        logf!(
+            uc.logger,
+            "skipping {} from soju's service: {msg}",
+            msg.command
+        );
+        return Ok(None);
+    }
+    if cm(&target) == cm(downstream::SERVICE_NICK) {
+        logf!(
+            uc.logger,
+            "skipping {} to soju's service: {msg}",
+            msg.command
+        );
+        return Ok(None);
+    }
+
+    if !uc.registered
+        || cm(&prefix_name) == cm(&uc.server_prefix.name)
+        || target == "*"
+        || target.starts_with('$')
+    {
+        // This is a server message
+        produce(u, ni, "", msg, 0, false);
+        return Ok(None);
+    }
+
+    let mut direct_message = is_our_nick(cm, uc, &target);
+    let mut buffer_name = if direct_message {
+        prefix_name.clone()
+    } else {
+        target.clone()
+    };
+    if let Some(t) = msg.tags.get("+draft/channel-context")
+        && let Some(ch) = uc.channels.get(t)
+        && ch.members.has(&prefix_name)
+    {
+        buffer_name.clone_from(&ch.name);
+        direct_message = false;
+    }
+
+    let self_msg = is_our_nick(cm, uc, &prefix_name);
+    Ok(Some(ChatRoute {
+        buffer_name,
+        direct_message,
+        self_msg,
+    }))
+}
+
+fn handle_batch(
+    u: &mut User,
+    ni: usize,
+    msg: &mut Message,
+    downstream_id: u64,
+    downstream_label: &str,
+    label: &str,
+) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let tag = msg.params[0].clone();
+    if let Some(tag) = tag.strip_prefix('+') {
+        let uc = super::connection(u, ni)?;
+        if uc.batches.contains_key(tag) {
+            bail!("unexpected BATCH reference tag: batch was already defined: {tag:?}");
+        }
+        need_params(msg, 2)?;
+        // label is the batch's own, or else the one of its parent
+        uc.batches.insert(
+            tag.to_owned(),
+            UpstreamBatch {
+                label: label.to_owned(),
+                multiline: None,
+            },
+        );
+        if downstream_id != 0 && !downstream_label.is_empty() {
+            let prefix = u.srv.prefix();
+            for dc in dcs_for(&mut u.downstreams, net_id) {
+                if dc.id != downstream_id {
+                    continue;
+                }
+                let batch = Message::new("BATCH", msg.params.clone()).with_prefix(prefix.clone());
+                match &mut dc.label {
+                    // A batch nested in the labeled response: it
+                    // goes in the outer batch, which has the label
+                    Some(l) if !l.batch.is_empty() => dc.send_message(batch),
+                    l => {
+                        if let Some(l) = l {
+                            l.label.clear();
+                        }
+                        dc.send_message(batch.with_tag("label", downstream_label));
+                    }
+                }
+            }
+        }
+    } else if let Some(tag) = tag.strip_prefix('-') {
+        let uc = super::connection(u, ni)?;
+        let Some(b) = uc.batches.remove(tag) else {
+            bail!("unknown BATCH reference tag: {tag:?}");
+        };
+        // BATCH - does not have @label/@batch attached to it, so
+        // the downstream ID is empty. Extract it back from the batch.
+        if let Ok((id, lbl)) = parse_label(&b.label)
+            && id != 0
+            && !lbl.is_empty()
+        {
+            let prefix = u.srv.prefix();
+            for dc in dcs_for(&mut u.downstreams, net_id) {
+                if dc.id == id {
+                    dc.send_message(
+                        Message::new("BATCH", msg.params.clone()).with_prefix(prefix.clone()),
+                    );
+                }
+            }
+        }
+    } else {
+        bail!("unexpected BATCH reference tag: missing +/- prefix: {tag:?}");
+    }
+    Ok(true)
+}
+
+fn handle_err_nosuchnick(
+    u: &mut User,
+    ni: usize,
+    msg: &mut Message,
+    downstream_id: u64,
+) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    let cm = network.casemap;
+    // one argument WHOIS variant errors with NOSUCHNICK
+    // two argument WHOIS variant errors with NOSUCHSERVER
+    need_params(msg, 3)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let nick = &msg.params[1];
+    let is_whois_target = current_pending_command(u, ni, "WHOIS")
+        .and_then(|cmd| cmd.msg.params.last())
+        .is_some_and(|p| cm(p) == cm(nick));
+    if is_whois_target {
+        if let Some((dc_id, _)) = end_command_early(u, ni, "WHOIS")
+            && let Some(i) = u.dc_index(dc_id)
+        {
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].send_message(msg.clone());
+            }
+        }
+    } else {
+        forward_msg_by_id(u, net_id, downstream_id, msg);
+    }
+    Ok(true)
+}
+
+fn handle_err_nicknameinuse(
+    u: &mut User,
+    ni: usize,
+    msg: &mut Message,
+    downstream_id: u64,
+) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    let cm = network.casemap;
+    if msg.command == ERR_NICKNAMEINUSE {
+        let uc = super::connection(u, ni)?;
+        // At this point, we haven't received ISUPPORT so we don't
+        // know the maximum nickname length or whether the server
+        // supports MONITOR. Many servers have NICKLEN=30 so let's
+        // just use that.
+        if !uc.registered && uc.nick.len() + 1 < 30 {
+            uc.nick.push('_');
+            uc.has_desired_nick = false;
+            logf!(
+                uc.logger,
+                "desired nick is not available, falling back to {:?}",
+                uc.nick
+            );
+            let nick = uc.nick.clone();
+            uc.send_message(msg!("NICK", nick));
+            return Ok(true);
+        }
+    }
+    // Servers refuse a nick with any of these, e.g. 437 for a nick
+    // held by services
+    let nick_error = matches!(
+        msg.command.as_str(),
+        ERR_NICKNAMEINUSE | ERR_ERRONEUSNICKNAME | ERR_NICKCOLLISION | ERR_UNAVAILRESOURCE
+    );
+    let uc = super::connection(u, ni)?;
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        if nick_error
+            && uc.registered
+            && msg.params.len() >= 2
+            && !uc.pending_regain_nick.is_empty()
+            && cm(&uc.pending_regain_nick) == cm(&msg.params[1])
+        {
+            // This message comes from our own logic to try to regain our
+            // desired nick, don't relay to downstream connections
+            uc.pending_regain_nick.clear();
+            return Ok(true);
+        }
+    }
+    if !super::connection(u, ni)?.registered {
+        return Err(RegistrationError(msg.clone()).into());
+    }
+    forward_msg_by_id(u, net_id, downstream_id, msg);
     Ok(true)
 }
 

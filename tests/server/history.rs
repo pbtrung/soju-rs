@@ -371,3 +371,85 @@ async fn chat_history(msg_store: MsgStore) {
     }
     env.srv.shutdown().await;
 }
+
+/// Timestamp ties, empty histories and service shortcuts must keep their wire
+/// behavior when request parsing and store execution are separated.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture timestamps must fail this scenario if invalid."
+)]
+pub(super) async fn history_ties_and_shortcuts() {
+    let env = setup(db_store()).await;
+    let mut upstream = accept_upstream(&env).await;
+    let nick = register_upstream_with(&mut upstream, &[]).await;
+    let base = "2023-05-23T06:00:00Z".parse::<Timestamp>().unwrap();
+    for (offset, text) in [(0, "old"), (1, "tie-a"), (1, "tie-b"), (2, "new")] {
+        upstream.send(
+            msg!("PRIVMSG", nick.clone(), text)
+                .with_prefix(Prefix::new("Foo"))
+                .with_tag(
+                    "time",
+                    xirc::format_server_time(base + jiff::SignedDuration::from_secs(offset)),
+                ),
+        );
+    }
+    upstream.roundtrip().await;
+    let mut downstream = connect_downstream(&env.srv);
+    register_downstream_caps(
+        &mut downstream,
+        Some(&env.network),
+        "batch server-time draft/chathistory",
+    )
+    .await;
+    let bound = |offset| {
+        format!(
+            "timestamp={}",
+            xirc::format_server_time(base + jiff::SignedDuration::from_secs(offset))
+        )
+    };
+    let (old, tied, new) = (bound(0), bound(1), bound(2));
+    let cases: &[(&[&str], &[&str])] = &[
+        (&["BEFORE", "FOO", &new, "2"], &["tie-a", "tie-b"]),
+        (&["AFTER", "foo", &old, "2"], &["tie-a", "tie-b"]),
+        (&["AROUND", "foo", &tied, "3"], &["old", "tie-a"]),
+        (&["BETWEEN", "foo", &tied, &tied, "10"], &[]),
+        (&["LATEST", "#empty", "*", "10"], &[]),
+        (&["LATEST", "BouncerServ", "invalid", "invalid"], &[]),
+    ];
+    for (params, expected) in cases {
+        downstream.send(Message::new(
+            "CHATHISTORY",
+            params.iter().map(|param| (*param).to_owned()).collect(),
+        ));
+        let texts = read_history_batch(&mut downstream).await;
+        assert_eq!(texts, *expected, "{params:?}");
+    }
+    let mut bouncer = connect_downstream(&env.srv);
+    register_downstream_caps(&mut bouncer, None, "batch draft/chathistory").await;
+    bouncer.send(msg!("CHATHISTORY", "TARGETS"));
+    let begin = bouncer.expect("BATCH").await;
+    assert_eq!(begin.param(1), "draft/chathistory-targets");
+    let end = bouncer.expect("BATCH").await;
+    assert_eq!(
+        end.param(0),
+        format!("-{}", begin.param(0).trim_start_matches('+'))
+    );
+    env.srv.shutdown().await;
+}
+
+async fn read_history_batch(downstream: &mut TestConn) -> Vec<String> {
+    let begin = downstream.expect("BATCH").await;
+    assert_eq!(begin.param(1), "chathistory");
+    let batch = begin.param(0).trim_start_matches('+').to_owned();
+    let mut texts = Vec::new();
+    loop {
+        let reply = downstream.read().await;
+        if reply.command == "BATCH" {
+            assert_eq!(reply.param(0), format!("-{batch}"));
+            return texts;
+        }
+        assert_eq!(reply.command, "PRIVMSG");
+        assert_eq!(reply.tags.get("batch"), Some(batch.as_str()));
+        texts.push(reply.param(1).to_owned());
+    }
+}

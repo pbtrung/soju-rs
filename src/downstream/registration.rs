@@ -107,10 +107,6 @@ async fn handle_message_unregistered(dc: &mut DownstreamConn, msg: Message) -> R
     finish_message(dc, res)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-)]
 async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> Result<()> {
     match msg.command.as_str() {
         "NICK" => {
@@ -146,83 +142,8 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
             }
         }
         "CAP" => return dc.handle_cap(msg),
-        "AUTHENTICATE" => {
-            let Some(credentials) = dc.handle_authenticate(msg)? else {
-                return Ok(());
-            };
-            match authenticate(dc, &credentials).await {
-                Err(e) => {
-                    dc.registration_state_mut()?.auth_failures += 1;
-                    logf!(
-                        dc.logger,
-                        "SASL {} authentication error for nick {:?}: {e}",
-                        credentials.mechanism,
-                        dc.registration
-                            .as_ref()
-                            .ok_or_else(|| anyhow::anyhow!(
-                                "required user or connection state is unavailable"
-                            ))?
-                            .nick
-                    );
-                    let nick = dc.nick.clone();
-                    dc.end_sasl(Some(msg!(
-                        ERR_SASLFAIL,
-                        nick,
-                        crate::auth::auth_error_reason(&e)
-                    )));
-                }
-                Ok((username, client, network, impersonating)) => {
-                    assert!(
-                        !username.is_empty(),
-                        "username unset after SASL authentication"
-                    );
-                    dc.set_auth_username(&username, &client, &network);
-                    dc.impersonating = impersonating;
-                    // Technically we should send RPL_LOGGEDIN here. However
-                    // we use RPL_LOGGEDIN to mirror the upstream connection
-                    // status. See:
-                    // https://github.com/ircv3/ircv3-specifications/pull/476
-                    dc.end_sasl(None);
-                }
-            }
-        }
-        "BOUNCER" => {
-            need_params(msg, 1)?;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let subcommand = msg.params[0].clone();
-            match subcommand.to_uppercase().as_str() {
-                "BIND" => {
-                    need_params(msg, 2)?;
-                    if dc.registration_state()?.auth_username.is_empty() {
-                        return Err(irc_error(msg!(
-                            "FAIL",
-                            "BOUNCER",
-                            "ACCOUNT_REQUIRED",
-                            "BIND",
-                            "Authentication needed to bind to bouncer network"
-                        )));
-                    }
-                    #[expect(
-                        clippy::indexing_slicing,
-                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                    )]
-                    let id = parse_bouncer_net_id(&subcommand, &msg.params[1])?;
-                    dc.registration_state_mut()?.network_id = id;
-                }
-                _ => {
-                    return Err(irc_error(msg!(
-                        "FAIL",
-                        "BOUNCER",
-                        "UNKNOWN_COMMAND",
-                        subcommand,
-                        "Unknown subcommand"
-                    )));
-                }
-            }
-        }
+        "AUTHENTICATE" => handle_registration_authenticate(dc, msg).await?,
+        "BOUNCER" => handle_registration_bouncer(dc, msg)?,
         "AWAY" => {
             dc.away = msg.params.first().cloned();
             let reply = ircutil::generate_away_reply(dc.away.is_some());
@@ -249,6 +170,87 @@ async fn handle_unregistered_command(dc: &mut DownstreamConn, msg: &Message) -> 
         _ => {
             debugf!(dc.logger, "unhandled message: {msg}");
             return Err(unknown_command(&msg.command));
+        }
+    }
+    Ok(())
+}
+
+fn handle_registration_bouncer(dc: &mut DownstreamConn, msg: &Message) -> Result<()> {
+    need_params(msg, 1)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let subcommand = msg.params[0].clone();
+    match subcommand.to_uppercase().as_str() {
+        "BIND" => {
+            need_params(msg, 2)?;
+            if dc.registration_state()?.auth_username.is_empty() {
+                return Err(irc_error(msg!(
+                    "FAIL",
+                    "BOUNCER",
+                    "ACCOUNT_REQUIRED",
+                    "BIND",
+                    "Authentication needed to bind to bouncer network"
+                )));
+            }
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            let id = parse_bouncer_net_id(&subcommand, &msg.params[1])?;
+            dc.registration_state_mut()?.network_id = id;
+        }
+        _ => {
+            return Err(irc_error(msg!(
+                "FAIL",
+                "BOUNCER",
+                "UNKNOWN_COMMAND",
+                subcommand,
+                "Unknown subcommand"
+            )));
+        }
+    }
+    Ok(())
+}
+
+async fn handle_registration_authenticate(dc: &mut DownstreamConn, msg: &Message) -> Result<()> {
+    let Some(credentials) = dc.handle_authenticate(msg)? else {
+        return Ok(());
+    };
+    match authenticate(dc, &credentials).await {
+        Err(e) => {
+            dc.registration_state_mut()?.auth_failures += 1;
+            logf!(
+                dc.logger,
+                "SASL {} authentication error for nick {:?}: {e}",
+                credentials.mechanism,
+                dc.registration
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "required user or connection state is unavailable"
+                    ))?
+                    .nick
+            );
+            let nick = dc.nick.clone();
+            dc.end_sasl(Some(msg!(
+                ERR_SASLFAIL,
+                nick,
+                crate::auth::auth_error_reason(&e)
+            )));
+        }
+        Ok((username, client, network, impersonating)) => {
+            assert!(
+                !username.is_empty(),
+                "username unset after SASL authentication"
+            );
+            dc.set_auth_username(&username, &client, &network);
+            dc.impersonating = impersonating;
+            // Technically we should send RPL_LOGGEDIN here. However
+            // we use RPL_LOGGEDIN to mirror the upstream connection
+            // status. See:
+            // https://github.com/ircv3/ircv3-specifications/pull/476
+            dc.end_sasl(None);
         }
     }
     Ok(())

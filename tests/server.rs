@@ -47,6 +47,7 @@ test_on_both_runtimes!(
     disabled_admin_impersonation,
     setname_survives_network_update,
     chat_history_params,
+    history_ties_and_shortcuts,
     read_marker,
     upstream_clock_skew,
     multiline,
@@ -497,7 +498,8 @@ use cases_authentication::{disabled_admin_impersonation, sasl_chunk_boundaries, 
 #[path = "server/history.rs"]
 mod cases_history;
 use cases_history::{
-    chat_history_db, chat_history_limit, chat_history_params, upstream_clock_skew,
+    chat_history_db, chat_history_limit, chat_history_params, history_ties_and_shortcuts,
+    upstream_clock_skew,
 };
 
 #[path = "server/read_markers.rs"]

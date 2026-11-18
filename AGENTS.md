@@ -82,8 +82,10 @@ must-use/future and error-mapping checks. Keep exceptions on the specific
 statement, block, parameter or test that needs them, with an explicit reason.
 Current exceptions describe validated actor/IRC indices, bounded parser cursors,
 fixed UTF-8/constants, cancelled deliveries, the final stderr sink, deliberate
-fixture failures and selected ordered dispatchers. They do not close ARCH-001's
-separate handler extraction work. Never add crate/module-wide suppressions.
+fixture failures and selected ordered dispatchers. Phase 7's history, protocol,
+service and configuration boundaries are documented in
+[protocol handler ownership](doc/protocol-handlers.md). Keep those responsibilities
+separate; never add crate/module-wide suppressions.
 
 `src/state_lock.rs` defines fail-closed actor/auth poison policy. SQLite separately
 recovers after transaction rollback, with regression coverage. Operational errors

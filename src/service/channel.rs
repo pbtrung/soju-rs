@@ -11,11 +11,10 @@ use crate::msg;
 use crate::user::User;
 
 pub(super) fn handle_channel_status(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     #[expect(
         clippy::indexing_slicing,
         reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
@@ -144,11 +143,10 @@ fn strip_network_suffix(u: &User, ctx: &ServiceContext, name: &str) -> Result<(S
 }
 
 pub(super) fn handle_channel_create(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.is_empty() {
         bail!("expected at least one argument");
     }
@@ -200,11 +198,10 @@ pub(super) fn handle_channel_create(
 }
 
 pub(super) fn handle_channel_update(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.is_empty() {
         bail!("expected at least one argument");
     }
@@ -260,11 +257,10 @@ pub(super) fn handle_channel_update(
 }
 
 pub(super) fn handle_channel_delete(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }

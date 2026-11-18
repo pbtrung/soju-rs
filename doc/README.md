@@ -27,6 +27,9 @@ For installation, supported builds and differences from upstream, see the
 
 ## Development and audit
 
+- [Protocol handler ownership](protocol-handlers.md): typed history requests,
+  command boundaries, service scope and ordered configuration validation.
+
 - [Dependency maintenance](dependencies.md): completed upgrades, selected
   features, dependency policy and remaining advisories/parent constraints.
 - [Audit results and implementation checklist](audit_results.md): findings,

@@ -128,11 +128,10 @@ fn update_network_from_flags(p: &Parsed, network: &mut db::Network) -> Result<()
 }
 
 pub(super) fn handle_network_create(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let p = parse_flags(&network_flag_set(), params)?;
     no_args(&p)?;
     let Some(addr) = p.get("addr") else {
@@ -158,11 +157,10 @@ pub(super) fn handle_network_create(
 }
 
 pub(super) fn handle_network_status(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if !params.is_empty() {
         bail!("expected no argument");
     }
@@ -206,11 +204,10 @@ pub(super) fn handle_network_status(
 }
 
 pub(super) fn handle_network_info(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let (ni, rest) = get_network_from_arg(u, ctx, params)?;
     if let Some(a) = rest.first() {
         bail!("unexpected argument: {a}");
@@ -268,11 +265,10 @@ pub(super) fn redact_command(raw: &str) -> String {
 }
 
 pub(super) fn handle_network_update(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     let (ni, params) = get_network_from_arg(u, ctx, params)?;
     let p = parse_flags(&network_flag_set(), params)?;
     no_args(&p)?;
@@ -301,11 +297,10 @@ pub(super) fn handle_network_update(
 }
 
 pub(super) fn handle_network_delete(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.len() != 1 {
         bail!("expected exactly one argument");
     }
@@ -326,11 +321,10 @@ pub(super) fn handle_network_delete(
 }
 
 pub(super) fn handle_network_quote(
-    u: Option<&mut User>,
+    u: &mut User,
     ctx: &mut ServiceContext,
     params: &[String],
 ) -> Result<()> {
-    let u = u.ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?;
     if params.len() != 1 && params.len() != 2 {
         bail!("expected one or two arguments");
     }

@@ -31,81 +31,185 @@ fn check_queue(u: &User, i: usize, cmd: &str) -> Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryCommand {
+    Before,
+    After,
+    Around,
+    Latest,
+    Between,
+    Targets,
+}
+
+impl HistoryCommand {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Before => "BEFORE",
+            Self::After => "AFTER",
+            Self::Around => "AROUND",
+            Self::Latest => "LATEST",
+            Self::Between => "BETWEEN",
+            Self::Targets => "TARGETS",
+        }
+    }
+}
+
+/// Wire fields are separated from validation so service/bouncer shortcuts keep
+/// their existing precedence over invalid bounds and limits.
+struct HistoryFields<'a> {
+    command: HistoryCommand,
+    target: &'a str,
+    first: &'a str,
+    second: &'a str,
+    limit: &'a str,
+}
+
+impl<'a> HistoryFields<'a> {
+    fn parse(msg: &'a Message) -> Result<Self> {
+        // The entry point checked the subcommand before queue admission.
+        let name = msg.param(0);
+        let command = match name {
+            "BEFORE" => HistoryCommand::Before,
+            "AFTER" => HistoryCommand::After,
+            "AROUND" => HistoryCommand::Around,
+            "LATEST" => HistoryCommand::Latest,
+            "BETWEEN" => HistoryCommand::Between,
+            "TARGETS" => HistoryCommand::Targets,
+            _ => {
+                return Err(fail(&[
+                    "CHATHISTORY",
+                    "INVALID_PARAMS",
+                    name,
+                    "Unknown command",
+                ]));
+            }
+        };
+        need_params(
+            msg,
+            if command == HistoryCommand::Between {
+                5
+            } else {
+                4
+            },
+        )?;
+        let (target, first, second, limit) = match command {
+            HistoryCommand::Targets => ("", msg.param(1), msg.param(2), msg.param(3)),
+            HistoryCommand::Between => (msg.param(1), msg.param(2), msg.param(3), msg.param(4)),
+            _ => (msg.param(1), msg.param(2), "", msg.param(3)),
+        };
+        Ok(Self {
+            command,
+            target,
+            first,
+            second,
+            limit,
+        })
+    }
+
+    fn validate(&self, configured_limit: usize) -> Result<HistoryRequest> {
+        let name = self.command.name();
+        let first = if self.command == HistoryCommand::Latest && self.first == "*" {
+            None
+        } else {
+            Some(ircutil::parse_chathistory_bound(self.first).ok_or_else(|| {
+                fail(&[
+                    "CHATHISTORY",
+                    "INVALID_PARAMS",
+                    name,
+                    self.first,
+                    "Invalid first bound",
+                ])
+            })?)
+        };
+        let second = if self.second.is_empty() {
+            None
+        } else {
+            Some(
+                ircutil::parse_chathistory_bound(self.second).ok_or_else(|| {
+                    fail(&[
+                        "CHATHISTORY",
+                        "INVALID_PARAMS",
+                        name,
+                        self.second,
+                        "Invalid second bound",
+                    ])
+                })?,
+            )
+        };
+        let limit = match self.limit.parse::<i64>() {
+            Ok(limit) if (0..=i64::try_from(MAX_CHAT_HISTORY_LIMIT)?).contains(&limit) => {
+                usize::try_from(limit)?
+            }
+            _ => {
+                return Err(fail(&[
+                    "CHATHISTORY",
+                    "INVALID_PARAMS",
+                    name,
+                    self.limit,
+                    "Invalid limit",
+                ]));
+            }
+        };
+        let query = match (self.command, first, second) {
+            (HistoryCommand::Before, Some(bound), _) => HistoryQuery::Before(bound),
+            (HistoryCommand::After, Some(bound), _) => HistoryQuery::After(bound),
+            (HistoryCommand::Around, Some(bound), _) => HistoryQuery::Around(bound),
+            (HistoryCommand::Latest, bound, _) => HistoryQuery::Latest(bound),
+            (HistoryCommand::Between, Some(first), second) => HistoryQuery::Between(first, second),
+            (HistoryCommand::Targets, Some(start), Some(end)) => {
+                return Ok(HistoryRequest::Targets { start, end, limit });
+            }
+            _ => {
+                return Err(fail(&[
+                    "CHATHISTORY",
+                    "INVALID_PARAMS",
+                    name,
+                    "Invalid bounds",
+                ]));
+            }
+        };
+        Ok(HistoryRequest::Messages {
+            query,
+            limit: limit.min(configured_limit),
+        })
+    }
+}
+
+#[derive(Debug)]
+enum HistoryQuery {
+    Before(Timestamp),
+    After(Timestamp),
+    Around(Timestamp),
+    Latest(Option<Timestamp>),
+    Between(Timestamp, Option<Timestamp>),
+}
+
+enum HistoryRequest {
+    Messages {
+        query: HistoryQuery,
+        limit: usize,
+    },
+    Targets {
+        start: Timestamp,
+        end: Timestamp,
+        limit: usize,
+    },
+}
+
 pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Result<()> {
     need_params(msg, 1)?;
     check_queue(u, i, "CHATHISTORY")?;
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-    )]
-    let subcommand = msg.params[0].clone();
-    let (target, bounds_str, limit_str): (String, [String; 2], String) = match subcommand.as_str() {
-        "AFTER" | "BEFORE" | "AROUND" | "LATEST" => {
-            need_params(msg, 4)?;
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                )]
-                (
-                    msg.params[1].clone(),
-                    [msg.params[2].clone(), String::new()],
-                    msg.params[3].clone(),
-                )
-            }
-        }
-        "BETWEEN" => {
-            need_params(msg, 5)?;
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                )]
-                (
-                    msg.params[1].clone(),
-                    [msg.params[2].clone(), msg.params[3].clone()],
-                    msg.params[4].clone(),
-                )
-            }
-        }
-        "TARGETS" => {
-            if dc_network(u, i).is_none() {
-                dc!(u, i).send_batch("draft/chathistory-targets", &[], Vec::new());
-                return Ok(());
-            }
-            need_params(msg, 4)?;
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                )]
-                (
-                    String::new(),
-                    [msg.params[1].clone(), msg.params[2].clone()],
-                    msg.params[3].clone(),
-                )
-            }
-        }
-        _ => {
-            return Err(fail(&[
-                "CHATHISTORY",
-                "INVALID_PARAMS",
-                &subcommand,
-                "Unknown command",
-            ]));
-        }
-    };
-
-    // We don't save history for our service
-    if dc!(u, i).casemap(&target) == SERVICE_NICK_CM {
-        dc!(u, i).send_batch("chathistory", &[target], Vec::new());
+    // TARGETS on an unbound bouncer connection has always returned an empty
+    // batch, even when the remaining parameters are missing.
+    if msg.param(0) == "TARGETS" && dc_network(u, i).is_none() {
+        dc!(u, i).send_batch("draft/chathistory-targets", &[], Vec::new());
         return Ok(());
     }
-
+    let fields = HistoryFields::parse(msg)?;
+    if dc!(u, i).casemap(fields.target) == SERVICE_NICK_CM {
+        dc!(u, i).send_batch("chathistory", &[fields.target.to_owned()], Vec::new());
+        return Ok(());
+    }
     if !u.has_chathistory_store() {
         let nick = dc!(u, i).nick.clone();
         return Err(irc_error(msg!(
@@ -115,212 +219,159 @@ pub(super) fn handle_chathistory(u: &mut User, i: usize, msg: &Message) -> Resul
             "Chat history disabled"
         )));
     }
-
     let Some(ni) = dc_network(u, i) else {
         return Err(fail(&[
             "CHATHISTORY",
             "INVALID_TARGET",
-            &subcommand,
-            &target,
+            fields.command.name(),
+            fields.target,
             "Cannot fetch chat history on bouncer connection",
         ]));
     };
-
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let target = u.networks[ni].casemap(&target);
-
-    // TODO: support msgid criteria
-    let mut bounds: [Option<Timestamp>; 2] = [None, None];
-    bounds[0] = ircutil::parse_chathistory_bound(&bounds_str[0]);
-    if subcommand == "LATEST" && bounds_str[0] == "*" {
-        bounds[0] = None;
-    } else if bounds[0].is_none() {
-        return Err(fail(&[
-            "CHATHISTORY",
-            "INVALID_PARAMS",
-            &subcommand,
-            &bounds_str[0],
-            "Invalid first bound",
-        ]));
-    }
-    if !bounds_str[1].is_empty() {
-        bounds[1] = ircutil::parse_chathistory_bound(&bounds_str[1]);
-        if bounds[1].is_none() {
-            return Err(fail(&[
-                "CHATHISTORY",
-                "INVALID_PARAMS",
-                &subcommand,
-                &bounds_str[1],
-                "Invalid second bound",
-            ]));
-        }
-    }
-
-    // Limits above upstream's maximum are invalid. Below it, message
-    // replies are capped to chathistory-limit rather than refused: some
-    // clients use a fixed limit instead of the advertised one (e.g. gamja
-    // always lists TARGETS with 1000), and TARGETS replies list targets,
-    // not messages
-    let limit = match limit_str.parse::<i64>() {
-        Ok(l) if (0..=i64::try_from(MAX_CHAT_HISTORY_LIMIT)?).contains(&l) => {
-            let l = usize::try_from(l)?;
-            if subcommand == "TARGETS" {
-                l
-            } else {
-                l.min(u.srv.config().basic.chat_history_limit)
-            }
-        }
-        _ => {
-            return Err(fail(&[
-                "CHATHISTORY",
-                "INVALID_PARAMS",
-                &subcommand,
-                &limit_str,
-                "Invalid limit",
-            ]));
-        }
-    };
-
-    let event_playback = dc!(u, i).caps.is_enabled("draft/event-playback");
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let net = &u.networks[ni];
-    let options = LoadMessageOptions {
-        network: &net.record,
-        entity: &target,
-        limit,
-        events: event_playback,
-    };
-    let store = &mut u.msg_store;
-
-    // No upper bound rather than now: if the upstream server's clock is
-    // ahead of ours, its latest messages are in our future
-    let history = match subcommand.as_str() {
-        "BEFORE" => store.load_before_time(bounds[0], None, &options),
-        "LATEST" => store.load_before_time(None, bounds[0], &options),
-        "AFTER" => store.load_after_time(bounds[0], None, &options),
-        "AROUND" => (|| {
-            let after_limit = limit / 2;
-            let before_limit = limit - after_limit;
-            let before = store.load_before_time(
-                bounds[0],
-                None,
-                &LoadMessageOptions {
-                    limit: before_limit,
-                    ..options
-                },
-            )?;
-            let after_bound = match before.last() {
-                Some(last) => {
-                    xirc::parse_server_time(last.tags.get_or_empty("time")).ok_or_else(|| {
-                        anyhow!(
-                            "parsing time {:?}: cannot parse",
-                            last.tags.get_or_empty("time")
-                        )
-                    })?
-                }
-                // There are no messages before, subtract an arbitrary amount
-                // of time to make the bound inclusive
-                None => {
-                    bounds[0].ok_or_else(|| {
-                        anyhow::anyhow!("required user or connection state is unavailable")
-                    })? - jiff::SignedDuration::from_secs(1)
-                }
+    let request = fields.validate(u.srv.config().basic.chat_history_limit)?;
+    let net = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow!("history network is unavailable"))?;
+    let target = net.casemap(fields.target);
+    let events = dc!(u, i).caps.is_enabled("draft/event-playback");
+    let net = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow!("history network is unavailable"))?;
+    match request {
+        HistoryRequest::Messages { query, limit } => {
+            let options = LoadMessageOptions {
+                network: &net.record,
+                entity: &target,
+                limit,
+                events,
             };
-            let after = store.load_after_time(
-                Some(after_bound),
-                None,
-                &LoadMessageOptions {
-                    limit: after_limit,
-                    ..options
-                },
-            )?;
-            let mut h = before;
-            h.extend(after);
-            Ok(h)
-        })(),
-        "BETWEEN" => {
-            if bounds[0] < bounds[1] {
-                store.load_after_time(bounds[0], bounds[1], &options)
-            } else {
-                store.load_before_time(bounds[0], bounds[1], &options)
-            }
+            let history = query.execute(&mut u.msg_store, &options).map_err(|error| {
+                logf!(
+                    dc!(u, i).logger,
+                    "failed fetching {target:?} messages for chathistory: {error}"
+                );
+                chathistory_error(fields.command.name(), &target)
+            })?;
+            dc!(u, i).send_batch("chathistory", &[target], history);
         }
-        "TARGETS" => {
-            let [Some(start), Some(end)] = bounds else {
-                return Err(fail(&[
-                    "CHATHISTORY",
-                    "INVALID_PARAMS",
-                    &subcommand,
-                    "Invalid bounds",
-                ]));
-            };
-            let targets = match store.list_targets(&net.record, start, end, limit, event_playback) {
-                Ok(t) => t,
-                Err(e) => {
+        HistoryRequest::Targets { start, end, limit } => {
+            let targets = u
+                .msg_store
+                .list_targets(&net.record, start, end, limit, events)
+                .map_err(|error| {
                     logf!(
                         dc!(u, i).logger,
-                        "failed fetching targets for chathistory: {e}"
+                        "failed fetching targets for chathistory: {error}"
                     );
-                    return Err(fail(&[
+                    fail(&[
                         "CHATHISTORY",
                         "MESSAGE_ERROR",
-                        &subcommand,
+                        fields.command.name(),
                         "Failed to retrieve targets",
-                    ]));
-                }
-            };
-            // soju.im/unread: whether each target has text messages or
-            // mentions after its read marker, so that clients can show it
-            // without loading the history
-            let unread_tags = dc!(u, i).caps.is_enabled("soju.im/unread");
-            let msgs = targets
-                .into_iter()
-                .filter(|t| !net.channels.get(&t.name).is_some_and(|c| c.detached))
-                .map(|t| {
-                    let mut m = msg!(
-                        "CHATHISTORY",
-                        "TARGETS",
-                        t.name,
-                        xirc::format_server_time(t.latest_message)
-                    );
-                    if unread_tags && t.unread {
-                        m.tags.set("soju.im/unread", "");
-                    }
-                    if unread_tags && t.mention {
-                        m.tags.set("soju.im/mention", "");
-                    }
-                    m
-                });
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                u.downstreams[i].send_batch("draft/chathistory-targets", &[], msgs);
-            }
-            return Ok(());
+                    ])
+                })?;
+            send_history_targets(u, i, ni, targets)?;
         }
-        _ => unreachable!(),
-    };
-
-    let history = match history {
-        Ok(h) => h,
-        Err(e) => {
-            logf!(
-                dc!(u, i).logger,
-                "failed fetching {target:?} messages for chathistory: {e}"
-            );
-            return Err(chathistory_error(&subcommand, &target));
-        }
-    };
-    dc!(u, i).send_batch("chathistory", &[target], history);
+    }
     Ok(())
+}
+
+fn send_history_targets(
+    u: &mut User,
+    i: usize,
+    ni: usize,
+    targets: Vec<crate::msgstore::ChatHistoryTarget>,
+) -> Result<()> {
+    let unread_tags = dc!(u, i).caps.is_enabled("soju.im/unread");
+    let net = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow!("history network is unavailable"))?;
+    let messages: Vec<_> = targets
+        .into_iter()
+        .filter(|target| {
+            !net.channels
+                .get(&target.name)
+                .is_some_and(|channel| channel.detached)
+        })
+        .map(|target| {
+            let mut message = msg!(
+                "CHATHISTORY",
+                "TARGETS",
+                target.name,
+                xirc::format_server_time(target.latest_message)
+            );
+            if unread_tags && target.unread {
+                message.tags.set("soju.im/unread", "");
+            }
+            if unread_tags && target.mention {
+                message.tags.set("soju.im/mention", "");
+            }
+            message
+        })
+        .collect();
+    dc!(u, i).send_batch("draft/chathistory-targets", &[], messages);
+    Ok(())
+}
+
+impl HistoryQuery {
+    fn execute(
+        &self,
+        store: &mut crate::msgstore::Store,
+        options: &LoadMessageOptions<'_>,
+    ) -> Result<Vec<Message>> {
+        // No upper bound rather than now: if the upstream server's clock is
+        // ahead of ours, its latest messages are in our future
+        match *self {
+            Self::Before(bound) => store.load_before_time(Some(bound), None, options),
+            Self::Latest(bound) => store.load_before_time(None, bound, options),
+            Self::After(bound) => store.load_after_time(Some(bound), None, options),
+            Self::Around(bound) => (|| {
+                let after_limit = options.limit / 2;
+                let before_limit = options.limit - after_limit;
+                let before = store.load_before_time(
+                    Some(bound),
+                    None,
+                    &LoadMessageOptions {
+                        limit: before_limit,
+                        ..*options
+                    },
+                )?;
+                let after_bound = match before.last() {
+                    Some(last) => xirc::parse_server_time(last.tags.get_or_empty("time"))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "parsing time {:?}: cannot parse",
+                                last.tags.get_or_empty("time")
+                            )
+                        })?,
+                    // There are no messages before, subtract an arbitrary amount
+                    // of time to make the bound inclusive
+                    None => bound - jiff::SignedDuration::from_secs(1),
+                };
+                let after = store.load_after_time(
+                    Some(after_bound),
+                    None,
+                    &LoadMessageOptions {
+                        limit: after_limit,
+                        ..*options
+                    },
+                )?;
+                let mut h = before;
+                h.extend(after);
+                Ok(h)
+            })(),
+            Self::Between(first, second) => {
+                if Some(first) < second {
+                    store.load_after_time(Some(first), second, options)
+                } else {
+                    store.load_before_time(Some(first), second, options)
+                }
+            }
+        }
+    }
 }
 
 /// Rejects a target which can't be a middle parameter of our replies: it

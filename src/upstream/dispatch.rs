@@ -140,7 +140,7 @@ fn assemble_multiline(uc: &mut UpstreamConn, msg: &Message) -> Result<Multiline>
 ///
 /// Returns command validation errors, unavailable connection-state errors, or backend failures encountered while handling the command.
 pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> {
-    match assemble_multiline(uc!(u, ni), msg)? {
+    match assemble_multiline(super::connection(u, ni)?, msg)? {
         Multiline::Passthrough => {}
         Multiline::Consumed => return Ok(()),
         Multiline::Complete(mut m) => return handle_message(u, ni, &mut m),
@@ -156,7 +156,7 @@ pub fn handle_message(u: &mut User, ni: usize, msg: &mut Message) -> Result<()> 
     let mut batch_name = String::new();
     let mut batch_label = false;
     if let Some(bn) = msg.tags.remove("batch") {
-        let uc = uc!(u, ni);
+        let uc = super::connection(u, ni)?;
         let Some(b) = uc.batches.get(&bn) else {
             bail!("unexpected batch reference: batch was not defined: {bn:?}");
         };
@@ -228,7 +228,7 @@ fn handle_message_inner(
     let net_id = u.networks[ni].id();
 
     if msg.prefix.is_none() {
-        msg.prefix = Some(uc!(u, ni).server_prefix.clone());
+        msg.prefix = Some(super::connection(u, ni)?.server_prefix.clone());
     }
 
     if !ircutil::is_numeric(&msg.command) {
@@ -245,7 +245,7 @@ fn handle_message_inner(
         || users::handle_message(u, ni, msg, downstream_id)?
         || channels::handle_message(u, ni, msg, downstream_id)?;
     if !handled {
-        debugf!(uc!(u, ni).logger, "unhandled message: {msg}");
+        debugf!(super::connection(u, ni)?.logger, "unhandled message: {msg}");
         forward_msg_by_id(u, net_id, downstream_id, msg);
     }
     Ok(())

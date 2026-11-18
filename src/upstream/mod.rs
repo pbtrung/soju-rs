@@ -65,6 +65,15 @@ macro_rules! uc {
     }};
 }
 
+/// Borrows the current actor-owned transport state without assuming it exists.
+/// Command handlers keep the borrow scoped around their connection mutations.
+fn connection(u: &mut User, ni: usize) -> Result<&mut UpstreamConn> {
+    u.networks
+        .get_mut(ni)
+        .and_then(|network| network.conn.as_mut())
+        .ok_or_else(|| anyhow!("upstream connection is unavailable"))
+}
+
 mod channels;
 mod commands;
 mod connect;

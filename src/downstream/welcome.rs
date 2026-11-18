@@ -8,10 +8,6 @@ use super::{
     update_realname, update_supported_caps, xirc,
 };
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-)]
 /// Sends the welcome burst to a newly registered connection.
 ///
 /// # Errors
@@ -61,27 +57,42 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
     let net_idx = u.downstreams[i].network_id.and_then(|id| u.net_index(id));
     let nick = current_nick(u, net_idx);
     let cfg = u.srv.config();
+    send_welcome_identity(u, dc_id, net_idx, &nick, &cfg)?;
+    send_welcome_state(u, dc_id, net_idx, &nick, &cfg)?;
+    replay_welcome_backlog(u, dc_id, net_idx)
+}
+
+fn send_welcome_identity(
+    u: &mut User,
+    dc_id: u64,
+    net_idx: Option<usize>,
+    nick: &str,
+    cfg: &crate::server::ServerConfig,
+) -> Result<()> {
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("missing downstream"))?;
     {
         #[expect(
             clippy::indexing_slicing,
             reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
         )]
         let dc = &mut u.downstreams[i];
-        dc.nick.clone_from(&nick);
-        dc.nick_cm = dc.casemap(&nick);
+        nick.clone_into(&mut dc.nick);
+        dc.nick_cm = dc.casemap(nick);
         dc.send_message(msg!(
             RPL_WELCOME,
-            nick.clone(),
+            nick.to_owned(),
             format!("Welcome to soju, {nick}")
         ));
         dc.send_message(msg!(
             RPL_YOURHOST,
-            nick.clone(),
+            nick.to_owned(),
             format!("Your host is {}", cfg.basic.hostname)
         ));
         dc.send_message(msg!(
             RPL_MYINFO,
-            nick.clone(),
+            nick.to_owned(),
             cfg.basic.hostname.clone(),
             "soju",
             "aiwroO",
@@ -106,7 +117,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                     clippy::indexing_slicing,
                     reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
                 )]
-                u.downstreams[i].send_message(msg!(RPL_UMODEIS, nick.clone(), modes));
+                u.downstreams[i].send_message(msg!(RPL_UMODEIS, nick.to_owned(), modes));
             }
         }
     }
@@ -116,7 +127,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
                 clippy::indexing_slicing,
                 reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
             )]
-            u.downstreams[i].send_message(msg!(RPL_UMODEIS, nick.clone(), "+o"));
+            u.downstreams[i].send_message(msg!(RPL_UMODEIS, nick.to_owned(), "+o"));
         }
     }
 
@@ -139,6 +150,19 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
         u.downstreams[i].update_casemapping(cm);
     }
 
+    Ok(())
+}
+
+fn send_welcome_state(
+    u: &mut User,
+    dc_id: u64,
+    net_idx: Option<usize>,
+    nick: &str,
+    cfg: &crate::server::ServerConfig,
+) -> Result<()> {
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("missing downstream"))?;
     {
         #[expect(
             clippy::indexing_slicing,
@@ -155,7 +179,7 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
             } else {
                 "No MOTD"
             };
-            dc.send_message(msg!(ERR_NOMOTD, nick.clone(), hint));
+            dc.send_message(msg!(ERR_NOMOTD, nick.to_owned(), hint));
         }
     }
 
@@ -213,42 +237,54 @@ pub fn welcome(u: &mut User, dc_id: u64) -> Result<()> {
         }
     }
 
-    if let Some(ni) = net_idx {
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-        )]
-        let net = &u.networks[ni];
-        if let Some(uc) = net.upstream() {
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-            )]
-            let dc = &mut u.downstreams[i];
-            for ch in uc.channels.values() {
-                if !ch.complete {
-                    continue;
-                }
-                if net.channels.get(&ch.name).is_some_and(|r| r.detached) {
-                    continue;
-                }
-                let mut params = vec![ch.name.clone()];
-                if dc.caps.is_enabled("extended-join") {
-                    let account = if uc.account.is_empty() {
-                        "*".to_owned()
-                    } else {
-                        uc.account.clone()
-                    };
-                    params.push(account);
-                    params.push(uc.realname.clone());
-                }
-                let prefix = dc.prefix();
-                dc.send_message(Message::new("JOIN", params).with_prefix(prefix));
-                forward_channel(&u.srv.db, dc, ch, net.id(), net.casemap);
-            }
-        }
-    }
+    send_welcome_channels(u, i, net_idx)?;
+    Ok(())
+}
 
+fn send_welcome_channels(u: &mut User, i: usize, net_idx: Option<usize>) -> Result<()> {
+    let Some(ni) = net_idx else {
+        return Ok(());
+    };
+    let net = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("missing network"))?;
+    let Some(uc) = net.upstream() else {
+        return Ok(());
+    };
+    let dc = u
+        .downstreams
+        .get_mut(i)
+        .ok_or_else(|| anyhow::anyhow!("missing downstream"))?;
+    for channel in uc.channels.values() {
+        if !channel.complete
+            || net
+                .channels
+                .get(&channel.name)
+                .is_some_and(|record| record.detached)
+        {
+            continue;
+        }
+        let mut params = vec![channel.name.clone()];
+        if dc.caps.is_enabled("extended-join") {
+            params.push(if uc.account.is_empty() {
+                "*".to_owned()
+            } else {
+                uc.account.clone()
+            });
+            params.push(uc.realname.clone());
+        }
+        let prefix = dc.prefix();
+        dc.send_message(Message::new("JOIN", params).with_prefix(prefix));
+        forward_channel(&u.srv.db, dc, channel, net.id(), net.casemap);
+    }
+    Ok(())
+}
+
+fn replay_welcome_backlog(u: &mut User, dc_id: u64, net_idx: Option<usize>) -> Result<()> {
+    let i = u
+        .dc_index(dc_id)
+        .ok_or_else(|| anyhow::anyhow!("missing downstream"))?;
     if let Some(ni) = net_idx
         && !u
             .downstreams

@@ -122,10 +122,6 @@ pub fn finish_registration(u: &mut User, ni: usize) {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Ordered protocol/state dispatch remains together with local validation contracts; further cohesive extraction is tracked by ARCH-001."
-)]
 /// Handles registration messages: capabilities, SASL, welcome and ISUPPORT.
 /// Returns false if the message isn't one of them.
 pub(super) fn handle_message(
@@ -134,141 +130,18 @@ pub(super) fn handle_message(
     msg: &mut Message,
     downstream_id: u64,
 ) -> Result<bool> {
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let net_id = u.networks[ni].id();
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
 
     match msg.command.as_str() {
-        "CAP" => {
-            need_params(msg, 2)?;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let sub_cmd = msg.params[1].to_uppercase();
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let sub_params = msg.params[2..].to_vec();
-            match sub_cmd.as_str() {
-                "LS" => {
-                    if sub_params.is_empty() {
-                        return Err(downstream::need_more_params(&msg.command).into());
-                    }
-                    let caps = sub_params
-                        .last()
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("required user or connection state is unavailable")
-                        })?
-                        .clone();
-                    let uc = uc!(u, ni);
-                    uc.handle_supported_caps(&caps);
-                    if cap_ls_continued(&sub_params) {
-                        return Ok(true); // wait to receive all capabilities
-                    }
-                    uc.update_caps();
-                    if request_sasl(u, ni) {
-                        return Ok(true); // we'll send CAP END after authentication is completed
-                    }
-                    uc!(u, ni).send_message(msg!("CAP", "END"));
-                }
-                "ACK" | "NAK" => {
-                    if sub_params.is_empty() {
-                        return Err(downstream::need_more_params(&msg.command).into());
-                    }
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                        )]
-                        for name in sub_params[0].split_whitespace() {
-                            let mut enable = sub_cmd == "ACK";
-                            let mut name = name;
-                            if let Some(n) = name.strip_prefix('-') {
-                                name = n;
-                                enable = false;
-                            }
-                            handle_cap_ack(u, ni, &name.to_lowercase(), enable)?;
-                        }
-                    }
-                    if uc!(u, ni).registered {
-                        for id in dc_ids_for(&u.downstreams, net_id) {
-                            downstream::update_supported_caps(u, id);
-                        }
-                    }
-                }
-                "NEW" => {
-                    if sub_params.is_empty() {
-                        return Err(downstream::need_more_params(&msg.command).into());
-                    }
-                    let uc = uc!(u, ni);
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                        )]
-                        uc.handle_supported_caps(&sub_params[0]);
-                    }
-                    uc.update_caps();
-                }
-                "DEL" => {
-                    if sub_params.is_empty() {
-                        return Err(downstream::need_more_params(&msg.command).into());
-                    }
-                    let uc = uc!(u, ni);
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                        )]
-                        for c in sub_params[0].split_whitespace() {
-                            uc.caps.del(&c.to_lowercase());
-                        }
-                    }
-                    if uc.registered {
-                        for id in dc_ids_for(&u.downstreams, net_id) {
-                            downstream::update_supported_caps(u, id);
-                        }
-                    }
-                }
-                _ => debugf!(uc!(u, ni).logger, "unhandled message: {msg}"),
-            }
-        }
-        "AUTHENTICATE" => {
-            let uc = uc!(u, ni);
-            let Some(client) = &uc.sasl_client else {
-                bail!("received unexpected AUTHENTICATE message");
-            };
-            // TODO: if a challenge is 400 bytes long, buffer it
-            if msg.params.is_empty() {
-                uc.send_message(msg!("AUTHENTICATE", "*"));
-                return Err(downstream::need_more_params(&msg.command).into());
-            }
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let challenge_str = &msg.params[0];
-            if challenge_str != "+" && BASE64.decode(challenge_str).is_err() {
-                uc.send_message(msg!("AUTHENTICATE", "*"));
-                bail!("illegal base64 data");
-            }
-            if uc.sasl_started {
-                uc.send_message(msg!("AUTHENTICATE", "*"));
-                bail!("sasl: unexpected server challenge");
-            }
-            let resp = client.start();
-            uc.sasl_started = true;
-            for m in xirc::generate_sasl(&resp) {
-                uc.send_message(m);
-            }
-        }
+        "CAP" => return handle_cap(u, ni, msg),
+        "AUTHENTICATE" => return handle_authenticate(u, ni, msg),
         RPL_LOGGEDIN => {
             need_params(msg, 3)?;
-            let uc = uc!(u, ni);
+            let uc = super::connection(u, ni)?;
             {
                 #![expect(
                     clippy::indexing_slicing,
@@ -291,7 +164,7 @@ pub(super) fn handle_message(
         }
         RPL_LOGGEDOUT => {
             need_params(msg, 2)?;
-            let uc = uc!(u, ni);
+            let uc = super::connection(u, ni)?;
             uc.account.clear();
             #[expect(
                 clippy::indexing_slicing,
@@ -306,118 +179,13 @@ pub(super) fn handle_message(
                 downstream::update_host(u, id);
             }
         }
-        RPL_VISIBLEHOST => {
-            need_params(msg, 2)?;
-            let uc = uc!(u, ni);
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                )]
-                match msg.params[1].split_once('@') {
-                    Some((user, host)) => {
-                        user.clone_into(&mut uc.username);
-                        host.clone_into(&mut uc.hostname);
-                    }
-                    #[expect(
-                        clippy::indexing_slicing,
-                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                    )]
-                    None => uc.hostname.clone_from(&msg.params[1]),
-                }
-            }
-            for id in dc_ids_for(&u.downstreams, net_id) {
-                downstream::update_host(u, id);
-            }
-        }
+        RPL_VISIBLEHOST => return handle_rpl_visiblehost(u, ni, msg),
         ERR_NICKLOCKED | RPL_SASLSUCCESS | ERR_SASLFAIL | ERR_SASLTOOLONG | ERR_SASLABORTED
-        | ERR_SASLALREADY => {
-            need_params(msg, 2)?;
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-            )]
-            let info = &msg.params[1];
-            let uc = uc!(u, ni);
-            match msg.command.as_str() {
-                ERR_NICKLOCKED => logf!(
-                    uc.logger,
-                    "invalid nick used with SASL authentication: {info}"
-                ),
-                ERR_SASLFAIL => logf!(uc.logger, "SASL authentication failed: {info}"),
-                ERR_SASLTOOLONG => logf!(uc.logger, "SASL message too long: {info}"),
-                _ => {}
-            }
-            uc.sasl_client = None;
-            uc.sasl_started = false;
-
-            {
-                #![expect(
-                    clippy::indexing_slicing,
-                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                )]
-                if let Some((dc_id, _)) = dequeue_command(u, ni, "AUTHENTICATE")
-                    && let Some(i) = u.dc_index(dc_id)
-                    && u.downstreams[i].sasl.is_some()
-                {
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                        )]
-                        if msg.command == RPL_SASLSUCCESS
-                            && let Some(plain) =
-                                u.downstreams[i].sasl.as_ref().and_then(|s| s.plain.clone())
-                        {
-                            u.auto_save_sasl_plain(ni, &plain.username, &plain.password);
-                        }
-                    }
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                        )]
-                        u.downstreams[i].end_sasl(Some(msg.clone()));
-                    }
-                }
-            }
-
-            let uc = uc!(u, ni);
-            if !uc.registered {
-                uc.send_message(msg!("CAP", "END"));
-            }
-        }
-        "REGISTER" | "VERIFY" => {
-            if let Some((dc_id, cmd)) = dequeue_command(u, ni, &msg.command) {
-                if msg.command == "REGISTER" {
-                    need_params(msg, 2)?;
-                    need_params(&cmd, 3)?;
-                    #[expect(
-                        clippy::indexing_slicing,
-                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                    )]
-                    let account = msg.params[1].clone();
-                    #[expect(
-                        clippy::indexing_slicing,
-                        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
-                    )]
-                    let password = cmd.params[2].clone();
-                    u.auto_save_sasl_plain(ni, &account, &password);
-                }
-                if let Some(i) = u.dc_index(dc_id) {
-                    {
-                        #![expect(
-                            clippy::indexing_slicing,
-                            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-                        )]
-                        u.downstreams[i].send_message(msg.clone());
-                    }
-                }
-            }
-        }
+        | ERR_SASLALREADY => return handle_err_nicklocked(u, ni, msg),
+        "REGISTER" | "VERIFY" => return handle_register(u, ni, msg),
         RPL_WELCOME => {
             need_params(msg, 1)?;
-            let uc = uc!(u, ni);
+            let uc = super::connection(u, ni)?;
             {
                 #![expect(
                     clippy::indexing_slicing,
@@ -434,115 +202,385 @@ pub(super) fn handle_message(
             // Registration info, not forwarded: downstreams get our own
             need_params(msg, 5)?;
         }
-        RPL_ISUPPORT => {
-            need_params(msg, 2)?;
+        RPL_ISUPPORT => return handle_rpl_isupport(u, ni, msg),
+        ERR_NOMOTD | RPL_ENDOFMOTD => return handle_err_nomotd(u, ni, msg, downstream_id),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn handle_cap(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    need_params(msg, 2)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let sub_cmd = msg.params[1].to_uppercase();
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let sub_params = msg.params[2..].to_vec();
+    match sub_cmd.as_str() {
+        "LS" => {
+            if sub_params.is_empty() {
+                return Err(downstream::need_more_params(&msg.command).into());
+            }
+            let caps = sub_params
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("required user or connection state is unavailable"))?
+                .clone();
+            let uc = super::connection(u, ni)?;
+            uc.handle_supported_caps(&caps);
+            if cap_ls_continued(&sub_params) {
+                return Ok(true); // wait to receive all capabilities
+            }
+            uc.update_caps();
+            if request_sasl(u, ni) {
+                return Ok(true); // we'll send CAP END after authentication is completed
+            }
+            super::connection(u, ni)?.send_message(msg!("CAP", "END"));
+        }
+        "ACK" | "NAK" => {
+            if sub_params.is_empty() {
+                return Err(downstream::need_more_params(&msg.command).into());
+            }
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                for name in sub_params[0].split_whitespace() {
+                    let mut enable = sub_cmd == "ACK";
+                    let mut name = name;
+                    if let Some(n) = name.strip_prefix('-') {
+                        name = n;
+                        enable = false;
+                    }
+                    handle_cap_ack(u, ni, &name.to_lowercase(), enable)?;
+                }
+            }
+            if super::connection(u, ni)?.registered {
+                for id in dc_ids_for(&u.downstreams, net_id) {
+                    downstream::update_supported_caps(u, id);
+                }
+            }
+        }
+        "NEW" => {
+            if sub_params.is_empty() {
+                return Err(downstream::need_more_params(&msg.command).into());
+            }
+            let uc = super::connection(u, ni)?;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                uc.handle_supported_caps(&sub_params[0]);
+            }
+            uc.update_caps();
+        }
+        "DEL" => {
+            if sub_params.is_empty() {
+                return Err(downstream::need_more_params(&msg.command).into());
+            }
+            let uc = super::connection(u, ni)?;
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+                )]
+                for c in sub_params[0].split_whitespace() {
+                    uc.caps.del(&c.to_lowercase());
+                }
+            }
+            if uc.registered {
+                for id in dc_ids_for(&u.downstreams, net_id) {
+                    downstream::update_supported_caps(u, id);
+                }
+            }
+        }
+        _ => debugf!(super::connection(u, ni)?.logger, "unhandled message: {msg}"),
+    }
+    Ok(true)
+}
+
+fn handle_authenticate(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    let uc = super::connection(u, ni)?;
+    let Some(client) = &uc.sasl_client else {
+        bail!("received unexpected AUTHENTICATE message");
+    };
+    // TODO: if a challenge is 400 bytes long, buffer it
+    if msg.params.is_empty() {
+        uc.send_message(msg!("AUTHENTICATE", "*"));
+        return Err(downstream::need_more_params(&msg.command).into());
+    }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let challenge_str = &msg.params[0];
+    if challenge_str != "+" && BASE64.decode(challenge_str).is_err() {
+        uc.send_message(msg!("AUTHENTICATE", "*"));
+        bail!("illegal base64 data");
+    }
+    if uc.sasl_started {
+        uc.send_message(msg!("AUTHENTICATE", "*"));
+        bail!("sasl: unexpected server challenge");
+    }
+    let resp = client.start();
+    uc.sasl_started = true;
+    for m in xirc::generate_sasl(&resp) {
+        uc.send_message(m);
+    }
+    Ok(true)
+}
+
+fn handle_rpl_visiblehost(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    need_params(msg, 2)?;
+    let uc = super::connection(u, ni)?;
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+        )]
+        match msg.params[1].split_once('@') {
+            Some((user, host)) => {
+                user.clone_into(&mut uc.username);
+                host.clone_into(&mut uc.hostname);
+            }
             #[expect(
                 clippy::indexing_slicing,
                 reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
             )]
-            let tokens = msg.params[1..msg.params.len() - 1].to_vec();
-            for token in tokens {
-                let (mut parameter, negate) = match token.strip_prefix('-') {
-                    Some(p) => (p.to_owned(), true),
-                    None => (token.clone(), false),
-                };
-                let mut value = String::new();
-                let mut has_value = false;
-                if !negate {
-                    if let Some((p, v)) = token.split_once('=') {
-                        p.clone_into(&mut parameter);
-                        v.clone_into(&mut value);
-                        has_value = true;
-                    } else {
-                        parameter.clone_from(&token);
-                    }
-                }
-                parameter = match parameter.split_once('/') {
-                    Some((prefix, key)) => {
-                        format!("{}/{}", prefix.to_lowercase(), key.to_uppercase())
-                    }
-                    None => parameter.to_uppercase(),
-                };
-                let value = xirc::decode_isupport_value(&value);
-
-                let uc = uc!(u, ni);
-                if has_value {
-                    uc.isupport.insert(parameter.clone(), Some(value.clone()));
-                } else if !negate {
-                    uc.isupport.insert(parameter.clone(), None);
-                } else {
-                    uc.isupport.remove(&parameter);
-                }
-
-                match parameter.as_str() {
-                    "CASEMAPPING" => {
-                        let casemap =
-                            xirc::parse_casemapping(&value).unwrap_or(xirc::CASEMAPPING_RFC1459);
-                        u.update_casemapping(ni, casemap);
-                    }
-                    "CHANMODES" => {
-                        if negate {
-                            uc.available_channel_modes = ircutil::std_channel_modes();
-                        } else {
-                            handle_chan_modes(uc, &value)?;
-                        }
-                    }
-                    "CHANTYPES" => {
-                        uc.available_channel_types = if negate {
-                            ircutil::STD_CHANNEL_TYPES.to_owned()
-                        } else {
-                            value.clone()
-                        };
-                    }
-                    "STATUSMSG" => {
-                        uc.available_status_msg =
-                            if negate { String::new() } else { value.clone() };
-                    }
-                    "PREFIX" => {
-                        if negate {
-                            uc.available_memberships = ircutil::std_memberships();
-                        } else {
-                            handle_memberships(uc, &value)?;
-                        }
-                    }
-                    "soju.im/SAFERATE" => uc.rate_flag.store(negate, Ordering::Relaxed),
-                    _ => {}
-                }
-            }
-
-            update_monitor(u, ni);
-            for id in dc_ids_for(&u.downstreams, net_id) {
-                downstream::update_isupport(u, id);
-            }
+            None => uc.hostname.clone_from(&msg.params[1]),
         }
-        ERR_NOMOTD | RPL_ENDOFMOTD => {
-            let uc = uc!(u, ni);
-            if !uc.got_motd {
-                // Ignore the initial MOTD upon connection, but forward
-                // subsequent MOTD messages downstream
-                uc.got_motd = true;
-
-                // If upstream did not send any CASEMAPPING token, assume it
-                // implements the old RFCs with rfc1459.
-                if uc
-                    .isupport
-                    .get("CASEMAPPING")
-                    .is_none_or(std::option::Option::is_none)
-                {
-                    u.update_casemapping(ni, xirc::CASEMAPPING_RFC1459);
-                }
-
-                // If the server doesn't support MONITOR, periodically try to
-                // regain our desired nick
-                if !uc!(u, ni).isupport.contains_key("MONITOR") {
-                    start_regain_nick_timer(u, ni);
-                }
-                return Ok(true);
-            }
-            forward_msg_by_id(u, net_id, downstream_id, msg);
-        }
-        _ => return Ok(false),
     }
+    for id in dc_ids_for(&u.downstreams, net_id) {
+        downstream::update_host(u, id);
+    }
+    Ok(true)
+}
+
+fn handle_err_nicklocked(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    need_params(msg, 2)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let info = &msg.params[1];
+    let uc = super::connection(u, ni)?;
+    match msg.command.as_str() {
+        ERR_NICKLOCKED => logf!(
+            uc.logger,
+            "invalid nick used with SASL authentication: {info}"
+        ),
+        ERR_SASLFAIL => logf!(uc.logger, "SASL authentication failed: {info}"),
+        ERR_SASLTOOLONG => logf!(uc.logger, "SASL message too long: {info}"),
+        _ => {}
+    }
+    uc.sasl_client = None;
+    uc.sasl_started = false;
+
+    {
+        #![expect(
+            clippy::indexing_slicing,
+            reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+        )]
+        if let Some((dc_id, _)) = dequeue_command(u, ni, "AUTHENTICATE")
+            && let Some(i) = u.dc_index(dc_id)
+            && u.downstreams[i].sasl.is_some()
+        {
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                if msg.command == RPL_SASLSUCCESS
+                    && let Some(plain) =
+                        u.downstreams[i].sasl.as_ref().and_then(|s| s.plain.clone())
+                {
+                    u.auto_save_sasl_plain(ni, &plain.username, &plain.password);
+                }
+            }
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].end_sasl(Some(msg.clone()));
+            }
+        }
+    }
+
+    let uc = super::connection(u, ni)?;
+    if !uc.registered {
+        uc.send_message(msg!("CAP", "END"));
+    }
+    Ok(true)
+}
+
+fn handle_register(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    if let Some((dc_id, cmd)) = dequeue_command(u, ni, &msg.command) {
+        if msg.command == "REGISTER" {
+            need_params(msg, 2)?;
+            need_params(&cmd, 3)?;
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            let account = msg.params[1].clone();
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+            )]
+            let password = cmd.params[2].clone();
+            u.auto_save_sasl_plain(ni, &account, &password);
+        }
+        if let Some(i) = u.dc_index(dc_id) {
+            {
+                #![expect(
+                    clippy::indexing_slicing,
+                    reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
+                )]
+                u.downstreams[i].send_message(msg.clone());
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn handle_rpl_isupport(u: &mut User, ni: usize, msg: &mut Message) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    need_params(msg, 2)?;
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The handler validates IRC parameter counts before accessing these fixed command fields."
+    )]
+    let tokens = msg.params[1..msg.params.len() - 1].to_vec();
+    for token in tokens {
+        let (mut parameter, negate) = match token.strip_prefix('-') {
+            Some(p) => (p.to_owned(), true),
+            None => (token.clone(), false),
+        };
+        let mut value = String::new();
+        let mut has_value = false;
+        if !negate {
+            if let Some((p, v)) = token.split_once('=') {
+                p.clone_into(&mut parameter);
+                v.clone_into(&mut value);
+                has_value = true;
+            } else {
+                parameter.clone_from(&token);
+            }
+        }
+        parameter = match parameter.split_once('/') {
+            Some((prefix, key)) => {
+                format!("{}/{}", prefix.to_lowercase(), key.to_uppercase())
+            }
+            None => parameter.to_uppercase(),
+        };
+        let value = xirc::decode_isupport_value(&value);
+
+        let uc = super::connection(u, ni)?;
+        if has_value {
+            uc.isupport.insert(parameter.clone(), Some(value.clone()));
+        } else if !negate {
+            uc.isupport.insert(parameter.clone(), None);
+        } else {
+            uc.isupport.remove(&parameter);
+        }
+
+        match parameter.as_str() {
+            "CASEMAPPING" => {
+                let casemap = xirc::parse_casemapping(&value).unwrap_or(xirc::CASEMAPPING_RFC1459);
+                u.update_casemapping(ni, casemap);
+            }
+            "CHANMODES" => {
+                if negate {
+                    uc.available_channel_modes = ircutil::std_channel_modes();
+                } else {
+                    handle_chan_modes(uc, &value)?;
+                }
+            }
+            "CHANTYPES" => {
+                uc.available_channel_types = if negate {
+                    ircutil::STD_CHANNEL_TYPES.to_owned()
+                } else {
+                    value.clone()
+                };
+            }
+            "STATUSMSG" => {
+                uc.available_status_msg = if negate { String::new() } else { value.clone() };
+            }
+            "PREFIX" => {
+                if negate {
+                    uc.available_memberships = ircutil::std_memberships();
+                } else {
+                    handle_memberships(uc, &value)?;
+                }
+            }
+            "soju.im/SAFERATE" => uc.rate_flag.store(negate, Ordering::Relaxed),
+            _ => {}
+        }
+    }
+
+    update_monitor(u, ni);
+    for id in dc_ids_for(&u.downstreams, net_id) {
+        downstream::update_isupport(u, id);
+    }
+    Ok(true)
+}
+
+fn handle_err_nomotd(
+    u: &mut User,
+    ni: usize,
+    msg: &mut Message,
+    downstream_id: u64,
+) -> Result<bool> {
+    let network = u
+        .networks
+        .get(ni)
+        .ok_or_else(|| anyhow::anyhow!("upstream network is unavailable"))?;
+    let net_id = network.id();
+    let uc = super::connection(u, ni)?;
+    if !uc.got_motd {
+        // Ignore the initial MOTD upon connection, but forward
+        // subsequent MOTD messages downstream
+        uc.got_motd = true;
+
+        // If upstream did not send any CASEMAPPING token, assume it
+        // implements the old RFCs with rfc1459.
+        if uc
+            .isupport
+            .get("CASEMAPPING")
+            .is_none_or(std::option::Option::is_none)
+        {
+            u.update_casemapping(ni, xirc::CASEMAPPING_RFC1459);
+        }
+
+        // If the server doesn't support MONITOR, periodically try to
+        // regain our desired nick
+        if !super::connection(u, ni)?.isupport.contains_key("MONITOR") {
+            start_regain_nick_timer(u, ni);
+        }
+        return Ok(true);
+    }
+    forward_msg_by_id(u, net_id, downstream_id, msg);
     Ok(true)
 }
 
@@ -638,7 +676,7 @@ fn request_sasl(u: &User, ni: usize) -> bool {
 }
 
 fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
-    uc!(u, ni).caps.set_enabled(name, ok);
+    super::connection(u, ni)?.caps.set_enabled(name, ok);
     match name {
         "sasl" => {
             if !request_sasl(u, ni) {
@@ -649,7 +687,7 @@ fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
                 reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
             )]
             let auth = u.networks[ni].record.sasl.clone();
-            let uc = uc!(u, ni);
+            let uc = super::connection(u, ni)?;
             if !ok {
                 logf!(
                     uc.logger,
@@ -685,7 +723,7 @@ fn handle_cap_ack(u: &mut User, ni: usize, name: &str, ok: bool) -> Result<()> {
         _ => {
             if !PERMANENT_UPSTREAM_CAPS.contains(&name) {
                 logf!(
-                    uc!(u, ni).logger,
+                    super::connection(u, ni)?.logger,
                     "received CAP ACK/NAK for a cap we don't support: {name}"
                 );
             }
