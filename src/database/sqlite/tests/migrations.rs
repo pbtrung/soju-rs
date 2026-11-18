@@ -4,7 +4,7 @@ use super::*;
 use crate::database::MessageOptions;
 
 // SQLite version 0 schema, from upstream. DO NOT EDIT.
-const SQLITE_V0_SCHEMA: &str = "
+pub(super) const SQLITE_V0_SCHEMA: &str = "
 CREATE TABLE User (
 	username VARCHAR(255) NOT NULL UNIQUE,
 	password VARCHAR(255)

@@ -325,3 +325,28 @@ mod tests {
         assert_eq!(db::parse_db_msg_id(&maximum).unwrap(), i64::MAX);
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use super::{MSG_ID_DB, format_msg_id, parse_msg_id};
+
+    #[test]
+    fn message_id_headers_retain_network_target_and_reject_truncation() -> anyhow::Result<()> {
+        for network in [i64::MIN, -1, 0, 1, i64::MAX] {
+            for target in ["", "#room", "é中🦀", "#a\0b", "#test;= "] {
+                let id = format_msg_id(network, target, MSG_ID_DB, |writer| writer.uint(u64::MAX));
+                assert_eq!(parse_msg_id(&id)?, (network, target.to_owned()));
+                for length in 0..4.min(id.len()) {
+                    let prefix = id
+                        .get(..length)
+                        .ok_or_else(|| anyhow::anyhow!("invalid ASCII cursor prefix"))?;
+                    assert!(
+                        parse_msg_id(prefix).is_err(),
+                        "network={network} target={target:?}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}

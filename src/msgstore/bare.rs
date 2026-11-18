@@ -110,3 +110,31 @@ mod tests {
         assert!(Reader(&[0x80]).uint().is_err());
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use super::{Reader, Writer};
+
+    #[test]
+    fn generated_integer_encodings_are_lossless_and_self_delimiting() -> anyhow::Result<()> {
+        for seed in [1u64, 0x5eed_2026, u64::MAX] {
+            let mut state = seed;
+            for case in 0..4096 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let signed = i64::from_ne_bytes(state.to_ne_bytes());
+                let mut writer = Writer::default();
+                writer.uint(state);
+                writer.int(signed);
+                writer.string("é中🦀");
+                let mut reader = Reader(&writer.0);
+                assert_eq!(reader.uint()?, state, "seed={seed:x} case={case}");
+                assert_eq!(reader.int()?, signed, "seed={seed:x} case={case}");
+                assert_eq!(reader.string()?, "é中🦀");
+                assert_eq!(reader.0, b"");
+            }
+        }
+        Ok(())
+    }
+}

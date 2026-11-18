@@ -1,0 +1,2 @@
+# Parser seeds are byte-exact wire inputs, including CRLF and invalid UTF-8.
+corpus/** binary

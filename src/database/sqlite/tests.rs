@@ -20,4 +20,5 @@ mod migrations;
 mod receipts;
 mod search;
 mod storage;
+mod stress;
 mod targets;

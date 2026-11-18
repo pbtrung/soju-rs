@@ -64,6 +64,32 @@ fn null_id(id: i64) -> Option<i64> {
     if id == 0 { None } else { Some(id) }
 }
 
+/// Concurrent initializers can get `SQLITE_BUSY` from `journal_mode` without
+/// invoking SQLite's busy handler. Retry that operation within one five-second
+/// budget; migration serialization remains BEGIN IMMEDIATE on each connection.
+fn initialize_journal(connection: &Connection) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        connection.busy_timeout(deadline.saturating_duration_since(std::time::Instant::now()))?;
+        let result = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        });
+        match result {
+            Ok(_) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(
+                    Duration::from_millis(5)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+            Err(error) => return Err(anyhow!(error).context("setting SQLite WAL journal mode")),
+        }
+    }
+}
+
 /// The SQLite database. All operations are serialized on a single
 /// connection.
 pub struct Database {
@@ -100,8 +126,11 @@ impl Database {
         receipts::register_case_functions(&conn)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
-        // journal_mode returns a row
-        let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+        let journal = initialize_journal(&conn);
+        // Initialization uses the remaining retry budget; ordinary operations
+        // retain the existing five-second SQLite busy timeout.
+        conn.busy_timeout(Duration::from_secs(5))?;
+        journal?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "cache_size", -512)?;
         let db = Database {

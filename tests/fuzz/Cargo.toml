@@ -1,0 +1,23 @@
+[package]
+name = "soju-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+
+[dependencies]
+soju = { path = "../.." }
+anyhow = "1.0.104"
+base64 = "0.23.1"
+tokio = { version = "1.54.1", features = ["rt", "io-util", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }

@@ -1,0 +1,2 @@
+hostname "example.org"
+auth oauth2 "https://issuer/path"
