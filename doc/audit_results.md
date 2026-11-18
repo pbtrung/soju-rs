@@ -618,13 +618,13 @@ This is the authoritative checklist for the **next implementation execution**. P
 
 ### Phase 5 — Memory and Resource Safety
 
-- [ ] **STEP-012 (P1): Define and enforce aggregate memory-history budgets.**
+- [x] **STEP-012 (P1): Define and enforce aggregate memory-history budgets.**
   - Findings: MEM-001, NUM-001. Objective: bound retained history under target/message churn.
   - Files: `src/msgstore/memory.rs`, `src/msgstore/mod.rs`, config/docs if limits are configurable, store unit tests.
   - Instructions: specify target/byte accounting and cursor behavior before implementation; evict coherently; handle recreation without falsely treating old cursors as current; preserve network deletion.
   - Dependencies: STEP-009. Risks: intentional history truncation behavior; document it.
   - Verification: high-cardinality/large-message/cursor/eviction tests; byte/entry counters and sustained RSS experiment.
-  - Acceptance/status: bounded counters independent of sender count; retained-history semantics explicitly tested; **Not Started**.
+  - Acceptance/status: bounded counters independent of sender count; retained-history semantics explicitly tested; **Completed**.
 
 - [ ] **STEP-013 (P1): Bound accepted sessions including upgrades.**
   - Findings: MEM-002. Objective: cap sockets/tasks/handshake work globally.
@@ -877,6 +877,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-009 | Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; remaining internal indexing policy is staged for STEP-011. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-010 | Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-011. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-011 | Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 extraction remains a separate Phase-7 task and is not claimed resolved. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-012 | Bound per-user memory history to 1,024 targets, 16,384 messages and 16 MiB accounted storage with coherent eviction and incarnation-scoped cursors. Churn/cursor/accounting tests and full GNU/musl checks (235 tests each), strict Clippy/rustdoc pass. Finite 800k-target/40k-large-record experiment plateaus at 1,024 targets / 1,010 large records; RSS measurements and accounting limits documented in resource-limits.md. Receipt-cache portion of MEM-001 remains for STEP-014. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

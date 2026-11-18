@@ -44,7 +44,63 @@ async fn sample(payload: usize, messages: usize) -> anyhow::Result<Duration> {
     Ok(elapsed)
 }
 
+fn memory_churn() -> anyhow::Result<()> {
+    use soju::{
+        database::Network,
+        msg,
+        msgstore::{MemoryStore, Store},
+    };
+    let mut store = Store::Memory(MemoryStore::new());
+    let network = Network {
+        id: 1,
+        ..Network::new("benchmark")
+    };
+    for batch in 0..8 {
+        for i in 0..100_000 {
+            let target = format!("#{}", batch * 100_000 + i);
+            store.append(
+                &network,
+                &target,
+                &msg!("PRIVMSG", &target, "x".repeat(512)),
+            )?;
+        }
+        if let Store::Memory(memory) = &store {
+            let rss = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|text| {
+                    text.lines()
+                        .find(|line| line.starts_with("VmRSS:"))
+                        .map(str::to_owned)
+                });
+            println!("batch={batch} usage={:?} rss={rss:?}", memory.usage());
+        }
+    }
+    for batch in 0..4 {
+        for _ in 0..10_000 {
+            store.append(
+                &network,
+                "#hot",
+                &msg!("PRIVMSG", "#hot", "x".repeat(16 * 1024)),
+            )?;
+        }
+        if let Store::Memory(memory) = &store {
+            let rss = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|text| {
+                    text.lines()
+                        .find(|line| line.starts_with("VmRSS:"))
+                        .map(str::to_owned)
+                });
+            println!("hot_batch={batch} usage={:?} rss={rss:?}", memory.usage());
+        }
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|arg| arg == "--memory-churn") {
+        return memory_churn();
+    }
     if std::env::args().any(|arg| arg == "--layout") {
         use std::mem::size_of;
         for (name, size) in [

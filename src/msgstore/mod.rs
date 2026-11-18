@@ -5,7 +5,7 @@ mod db;
 mod memory;
 
 pub use db::DbStore;
-pub use memory::MemoryStore;
+pub use memory::{MemoryLimits, MemoryStore, MemoryUsage};
 
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;

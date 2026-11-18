@@ -49,6 +49,19 @@ pub fn parse_tag_value(v: &str) -> String {
 pub struct Tags(Vec<(String, String)>);
 
 impl Tags {
+    fn retained_size(&self) -> usize {
+        self.0.iter().fold(
+            self.0
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(String, String)>()),
+            |bytes, (key, value)| {
+                bytes
+                    .saturating_add(key.capacity())
+                    .saturating_add(value.capacity())
+            },
+        )
+    }
+
     #[must_use]
     pub fn new() -> Tags {
         Tags(Vec::new())
@@ -275,6 +288,27 @@ pub struct Message {
 }
 
 impl Message {
+    pub(crate) fn retained_size(&self) -> usize {
+        let mut bytes = std::mem::size_of::<Self>()
+            .saturating_add(self.tags.retained_size())
+            .saturating_add(self.command.capacity())
+            .saturating_add(
+                self.params
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<String>()),
+            );
+        for parameter in &self.params {
+            bytes = bytes.saturating_add(parameter.capacity());
+        }
+        if let Some(prefix) = &self.prefix {
+            bytes = bytes
+                .saturating_add(prefix.name.capacity())
+                .saturating_add(prefix.user.capacity())
+                .saturating_add(prefix.host.capacity());
+        }
+        bytes
+    }
+
     pub fn new(command: impl Into<String>, params: Vec<String>) -> Message {
         Message {
             command: command.into(),

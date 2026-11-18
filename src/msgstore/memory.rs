@@ -1,6 +1,8 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::mem::size_of;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
+use indexmap::IndexMap;
 
 use super::{LoadMessageOptions, MSG_ID_MEMORY, bare, body_err, format_msg_id, parse_msg_id_with};
 use crate::database::Network;
@@ -8,126 +10,249 @@ use crate::irc::Message;
 
 const MESSAGE_RING_BUFFER_CAP: usize = 4096;
 
+/// Per-user retained-history limits. Allocator/map spare capacity is separately
+/// bounded by the message and target counts; bytes account owned message/key data.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryLimits {
+    pub targets: usize,
+    pub messages: usize,
+    pub bytes: usize,
+}
+impl Default for MemoryLimits {
+    fn default() -> Self {
+        Self {
+            targets: 1024,
+            messages: 16_384,
+            bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+/// Current accounted history usage; this is not total process RSS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryUsage {
+    pub targets: usize,
+    pub messages: usize,
+    pub bytes: usize,
+}
+
+#[cfg(test)]
 pub(super) fn format_memory_msg_id(net_id: i64, entity: &str, seq: u64) -> String {
     format_msg_id(net_id, entity, MSG_ID_MEMORY, |w| w.uint(seq))
 }
-
+#[cfg(test)]
 pub(super) fn parse_memory_msg_id(s: &str) -> Result<u64> {
     let (_, _, body) = parse_msg_id_with(s, MSG_ID_MEMORY)?;
     bare::Reader(&body).uint().map_err(body_err)
 }
 
-/// The latest messages of a target, up to a capacity. Messages are numbered
-/// with increasing sequence numbers, starting at 1. Storage grows with the
-/// number of messages, rather than being allocated upfront.
-struct RingBuffer {
-    buf: VecDeque<Message>,
-    cap: usize,
-    /// The sequence number of the next message
-    cur: u64,
+struct StoredMessage {
+    seq: u64,
+    message: Message,
+    bytes: usize,
 }
-
+struct RingBuffer {
+    buf: VecDeque<StoredMessage>,
+    cap: usize,
+    cur: u64,
+    bytes: usize,
+}
 impl RingBuffer {
-    fn new(capacity: usize) -> RingBuffer {
-        RingBuffer {
+    fn new(capacity: usize) -> Self {
+        Self {
             buf: VecDeque::new(),
             cap: capacity,
             cur: 1,
+            bytes: 0,
         }
     }
-
-    fn append(&mut self, msg: Message) -> Result<u64> {
+    #[cfg(test)]
+    fn append(&mut self, message: Message) -> Result<u64> {
+        self.append_at(message, self.cur)
+    }
+    fn append_at(&mut self, message: Message, seq: u64) -> Result<u64> {
         if self.cap == 0 {
             bail!("message buffer capacity must be positive");
         }
-        let next = self
-            .cur
+        let next = seq
             .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("memory message sequence exhausted"))?;
-        if self.buf.len() == self.cap {
-            self.buf.pop_front();
+            .ok_or_else(|| anyhow!("memory message sequence exhausted"))?;
+        if self.buf.len() == self.cap
+            && let Some(old) = self.buf.pop_front()
+        {
+            self.bytes -= old.bytes;
         }
-        self.buf.push_back(msg);
-        let seq = self.cur;
+        let bytes = message
+            .retained_size()
+            .saturating_add(size_of::<u64>() + size_of::<usize>());
+        self.bytes += bytes;
+        self.buf.push_back(StoredMessage {
+            seq,
+            message,
+            bytes,
+        });
         self.cur = next;
         Ok(seq)
     }
-
-    /// The sequence number of the last message, 0 if there is none.
     fn last_seq(&self) -> u64 {
         self.cur - 1
     }
-
-    /// Loads up to limit of the latest messages after the message with the
-    /// sequence number seq (excluded).
     fn load_latest_seq(&self, seq: u64, limit: usize) -> Result<Vec<Message>> {
-        // Like upstream, the next sequence number is accepted: IDs remain
-        // from before a restart, which resets the sequence
         if seq > self.cur {
-            bail!(
-                "loading messages from sequence number ({seq}) greater than the last ({})",
-                self.last_seq()
-            );
-        } else if seq == self.cur {
-            return Ok(Vec::new());
+            bail!("memory cursor is ahead of retained history");
         }
-        let n = usize::try_from((self.cur - seq - 1).min(self.buf.len() as u64))?.min(limit);
-        Ok(self.buf.range(self.buf.len() - n..).cloned().collect())
+        let mut messages: Vec<_> = self
+            .buf
+            .iter()
+            .rev()
+            .filter(|entry| entry.seq > seq)
+            .take(limit)
+            .map(|entry| entry.message.clone())
+            .collect();
+        messages.reverse();
+        Ok(messages)
     }
 }
 
-/// An in-memory store, keeping the latest 4K messages per target. Only
-/// PRIVMSG and NOTICE messages are stored.
-#[derive(Default)]
+/// A bounded per-user memory history. Target eviction follows append recency.
+/// Cursors carry an incarnation token and are scoped to network and target.
 pub struct MemoryStore {
-    buffers: HashMap<(i64, String), RingBuffer>,
+    buffers: IndexMap<(i64, String), RingBuffer>,
+    limits: MemoryLimits,
+    usage: MemoryUsage,
+    next_seq: u64,
+    incarnation: [u64; 2],
 }
-
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self {
+            buffers: IndexMap::new(),
+            limits: MemoryLimits::default(),
+            usage: MemoryUsage::default(),
+            next_seq: 1,
+            incarnation: rand::random(),
+        }
+    }
+}
 impl MemoryStore {
-    /// Drops the messages of a deleted network.
+    /// Uses explicit positive limits.
+    ///
+    /// # Errors
+    /// Returns an error if any limit is zero.
+    pub fn with_limits(limits: MemoryLimits) -> Result<Self> {
+        if limits.targets == 0 || limits.messages == 0 || limits.bytes == 0 {
+            bail!("memory limits must be positive");
+        }
+        Ok(Self {
+            limits,
+            ..Self::default()
+        })
+    }
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    #[must_use]
+    pub fn usage(&self) -> MemoryUsage {
+        self.usage
+    }
     pub fn delete_network(&mut self, net_id: i64) {
         self.buffers.retain(|(id, _), _| *id != net_id);
+        self.recount();
     }
-
-    #[must_use]
-    pub fn new() -> MemoryStore {
-        MemoryStore::default()
-    }
-
     pub(super) fn close(&mut self) {
         self.buffers.clear();
+        self.usage = MemoryUsage::default();
     }
-
+    fn target_bytes(entity: &str) -> usize {
+        size_of::<((i64, String), RingBuffer)>().saturating_add(entity.len())
+    }
+    fn recount(&mut self) {
+        self.usage = MemoryUsage {
+            targets: self.buffers.len(),
+            ..MemoryUsage::default()
+        };
+        for ((_, entity), ring) in &self.buffers {
+            self.usage.messages += ring.buf.len();
+            self.usage.bytes += Self::target_bytes(entity).saturating_add(ring.bytes);
+        }
+    }
+    fn cursor(&self, network: i64, entity: &str, seq: u64) -> String {
+        format_msg_id(network, entity, MSG_ID_MEMORY, |w| {
+            w.uint(seq);
+            for word in self.incarnation {
+                w.uint(word);
+            }
+        })
+    }
     pub(super) fn last_msg_id(&self, network: &Network, entity: &str) -> String {
-        // The ID of the last message: messages loaded after it are the ones
-        // appended since
         let seq = self
             .buffers
             .get(&(network.id, entity.to_owned()))
-            .map_or(0, RingBuffer::last_seq);
-        format_memory_msg_id(network.id, entity, seq)
+            .map_or(self.next_seq - 1, RingBuffer::last_seq);
+        self.cursor(network.id, entity, seq)
     }
-
     pub(super) fn append(
         &mut self,
         network: &Network,
         entity: &str,
         msg: &Message,
     ) -> Result<String> {
-        match msg.command.as_str() {
-            // Only append these messages, because load_latest_id shouldn't
-            // return other kinds of message.
-            "PRIVMSG" | "NOTICE" => {}
-            _ => return Ok(String::new()),
+        if !matches!(msg.command.as_str(), "PRIVMSG" | "NOTICE") {
+            return Ok(String::new());
         }
-        let rb = self
+        let next = self
+            .next_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("memory message sequence exhausted"))?;
+        let record_bytes = msg
+            .retained_size()
+            .saturating_add(size_of::<u64>() + size_of::<usize>());
+        if Self::target_bytes(entity).saturating_add(record_bytes) > self.limits.bytes {
+            bail!("message exceeds memory history byte budget");
+        }
+        let key = (network.id, entity.to_owned());
+        let mut ring = self
             .buffers
-            .entry((network.id, entity.to_owned()))
-            .or_insert_with(|| RingBuffer::new(MESSAGE_RING_BUFFER_CAP));
-        let seq = rb.append(msg.clone())?;
-        Ok(format_memory_msg_id(network.id, entity, seq))
+            .shift_remove(&key)
+            .unwrap_or_else(|| RingBuffer::new(MESSAGE_RING_BUFFER_CAP));
+        // Count the active target independently, then evict older whole targets.
+        let old_messages = ring.buf.len();
+        let old_bytes = ring.bytes;
+        ring.append_at(msg.clone(), self.next_seq)?;
+        self.usage.messages = self.usage.messages - old_messages + ring.buf.len();
+        self.usage.bytes = self
+            .usage
+            .bytes
+            .saturating_sub(old_bytes)
+            .saturating_add(ring.bytes);
+        if old_messages == 0 {
+            self.usage.bytes = self.usage.bytes.saturating_add(Self::target_bytes(entity));
+            self.usage.targets += 1;
+        }
+        while self.usage.targets > self.limits.targets
+            || self.usage.messages > self.limits.messages
+            || self.usage.bytes > self.limits.bytes
+        {
+            if let Some(((_, old_entity), old)) = self.buffers.shift_remove_index(0) {
+                self.usage.targets -= 1;
+                self.usage.messages -= old.buf.len();
+                self.usage.bytes -= Self::target_bytes(&old_entity).saturating_add(old.bytes);
+            } else {
+                // Only the active target remains: trim its oldest records.
+                let Some(old) = ring.buf.pop_front() else {
+                    break;
+                };
+                ring.bytes -= old.bytes;
+                self.usage.messages -= 1;
+                self.usage.bytes -= old.bytes;
+            }
+        }
+        let seq = self.next_seq;
+        self.next_seq = next;
+        self.buffers.insert(key, ring);
+        Ok(self.cursor(network.id, entity, seq))
     }
-
     pub(super) fn load_latest_id(
         &self,
         id: &str,
@@ -136,12 +261,27 @@ impl MemoryStore {
         if options.events {
             bail!("events are unsupported for memory message store");
         }
-        let seq = parse_memory_msg_id(id)?;
-        match self
-            .buffers
-            .get(&(options.network.id, options.entity.to_owned()))
-        {
-            Some(rb) => rb.load_latest_seq(seq, options.limit),
+        let (network, entity, body) = parse_msg_id_with(id, MSG_ID_MEMORY)?;
+        if network != options.network.id || entity != options.entity {
+            bail!("memory cursor belongs to another conversation");
+        }
+        let mut reader = bare::Reader(&body);
+        let seq = reader.uint().map_err(body_err)?;
+        if reader.0.is_empty() {
+            bail!("legacy memory cursor has no store incarnation");
+        }
+        let generation = [
+            reader.uint().map_err(body_err)?,
+            reader.uint().map_err(body_err)?,
+        ];
+        if generation != self.incarnation || !reader.0.is_empty() {
+            bail!("memory cursor belongs to another store incarnation");
+        }
+        if seq >= self.next_seq {
+            bail!("memory cursor is ahead of this store");
+        }
+        match self.buffers.get(&(network, entity)) {
+            Some(ring) => ring.load_latest_seq(seq, options.limit),
             None => Ok(Vec::new()),
         }
     }
@@ -239,7 +379,10 @@ mod tests {
         ring.append(msg!("PRIVMSG", "#a", "retained")).unwrap();
         ring.cur = u64::MAX;
         assert!(ring.append(msg!("PRIVMSG", "#a", "rejected")).is_err());
-        assert_eq!(ring.buf.front().unwrap().params.last().unwrap(), "retained");
+        assert_eq!(
+            ring.buf.front().unwrap().message.params.last().unwrap(),
+            "retained"
+        );
         assert_eq!(ring.cur, u64::MAX);
         assert_eq!(ring.load_latest_seq(0, usize::MAX).unwrap().len(), 1);
         assert!(
@@ -247,5 +390,114 @@ mod tests {
                 .append(msg!("PRIVMSG", "#a", "rejected"))
                 .is_err()
         );
+    }
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "History-budget fixture operations must succeed unless rejection is asserted."
+    )]
+    fn aggregate_budgets_and_cursor_recreation() {
+        let net = Network {
+            id: 1,
+            ..Network::new("x")
+        };
+        let mut store = MemoryStore::with_limits(MemoryLimits {
+            targets: 2,
+            messages: 3,
+            bytes: 4096,
+        })
+        .unwrap();
+        let old = store.last_msg_id(&net, "#a");
+        store
+            .append(&net, "#a", &msg!("PRIVMSG", "#a", "old"))
+            .unwrap();
+        for target in ["#b", "#c"] {
+            store
+                .append(&net, target, &msg!("PRIVMSG", target, "other"))
+                .unwrap();
+        }
+        assert_eq!(store.usage.targets, 2);
+        store
+            .append(&net, "#a", &msg!("PRIVMSG", "#a", "new"))
+            .unwrap();
+        let opts = LoadMessageOptions {
+            network: &net,
+            entity: "#a",
+            limit: usize::MAX,
+            events: false,
+        };
+        let messages = store.load_latest_id(&old, &opts).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.first().unwrap().param(1), "new");
+        let before = store.usage();
+        assert!(
+            store
+                .append(&net, "#a", &msg!("PRIVMSG", "#a", "x".repeat(4096)))
+                .is_err()
+        );
+        assert_eq!(store.usage(), before);
+        let mut restarted = MemoryStore::new();
+        restarted.incarnation = [store.incarnation[0].wrapping_add(1), store.incarnation[1]];
+        assert!(restarted.load_latest_id(&old, &opts).is_err());
+        let wrong = LoadMessageOptions {
+            entity: "#b",
+            ..opts
+        };
+        assert!(store.load_latest_id(&old, &wrong).is_err());
+        store.delete_network(net.id);
+        assert_eq!(store.usage(), MemoryUsage::default());
+        store
+            .append(&net, "#a", &msg!("PRIVMSG", "#a", "after deletion"))
+            .unwrap();
+        assert_eq!(
+            store
+                .load_latest_id(&old, &opts)
+                .unwrap()
+                .first()
+                .unwrap()
+                .param(1),
+            "after deletion"
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Churn fixture appends must fit the configured history budget."
+    )]
+    fn byte_and_message_accounting_stays_bounded_under_churn() {
+        let net = Network {
+            id: 1,
+            ..Network::new("x")
+        };
+        let limits = MemoryLimits {
+            targets: 32,
+            messages: 64,
+            bytes: 32 * 1024,
+        };
+        let mut store = MemoryStore::with_limits(limits).unwrap();
+        for i in 0..10_000 {
+            let target = format!("#target{i}");
+            store
+                .append(&net, &target, &msg!("PRIVMSG", &target, "x".repeat(512)))
+                .unwrap();
+            let usage = store.usage();
+            assert!(
+                usage.targets <= limits.targets
+                    && usage.messages <= limits.messages
+                    && usage.bytes <= limits.bytes
+            );
+        }
+        for _ in 0..1000 {
+            store
+                .append(&net, "#hot", &msg!("PRIVMSG", "#hot", "x".repeat(1024)))
+                .unwrap();
+        }
+        assert!(store.usage.bytes <= limits.bytes);
+        let counted = store.usage();
+        store.recount();
+        assert_eq!(store.usage(), counted);
+        store.close();
+        assert_eq!(store.usage(), MemoryUsage::default());
     }
 }

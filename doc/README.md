@@ -16,6 +16,8 @@ For installation, supported builds and differences from upstream, see the
 
 ## Storage and performance
 
+- [Resource limits](resource-limits.md): memory-history budgets, eviction and cursor lifetimes.
+
 - [Message storage and indexes](message-text-index.md): current schema,
   migrations, history queries and maintenance.
 - [Performance measurement](performance-layout.md): reader and storage
