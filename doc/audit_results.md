@@ -11,7 +11,8 @@ making resource limits, lifecycle completion and failure handling explicit.
 
 ## What changed
 
-Phases 1–8 and the Jiff migration (STEP-030) are implemented and verified:
+Phases 1–9, including the Jiff migration (STEP-008), are implemented and verified
+with the limits recorded below:
 
 - Compiler/Clippy policy, dependency maintenance and release preflight were tightened.
 - History/session/notification admission and persistent receipt caches are bounded.
@@ -30,27 +31,33 @@ Detailed changes are in [findings](audit/findings.md), the
 
 ## How it was verified
 
-The final Phase 8 run passes **298 tests per GNU/musl target**, plus reader smoke
+The final Phase 9 run passes **298 tests per GNU/musl target**, plus reader smoke
 and doc tests, strict Clippy on both targets and warning-clean rustdoc. Fixed-seed
-mutation campaigns complete 80,000 mutations. Three-minute CAP/writer/history and
-slow-push workload models show bounded retained counters and cleanup after load.
+mutation campaigns complete 80,000 mutations. Repeated three-minute
+CAP/writer/history and slow-push workload models show bounded retained counters
+and cleanup after load.
 See [verification evidence](audit/verification.md) and
 [stress workloads/results](audit/resource-soaks.md) for commands, measurements,
 resolved failures and the limits of these finite checks.
 
 The Go-soju comparison **did not pass**: twelve scenarios retain capability,
 output and timing differences. Original/final Rust comparisons match the same
-scenarios after correcting two timing-sensitive fixtures. This supports measured
-Rust behavior preservation and does not establish Go equivalence.
+scenarios with explicit deferred-service completion in the fixtures. This supports
+measured Rust behavior preservation and does not establish Go equivalence.
 
-## Remaining scope
+Release archives, restored schema-35 deployment, IRCv3 (32/32), transport checks
+(20/20), local Gamja browser scenarios (4/4 on Rust and Go) and Senpai real-bouncer
+tests pass. Alternating reader measurements and SQL/actor/resource measurements
+are recorded in the [final assessment](audit/final-verification.md); actor
+handoffs retain their documented throughput cost.
 
-- Phase 10, STEP-028–029: final deployment/compatibility checks and performance assessment.
+## Remaining limits
+
 - CI automation findings remain open outside the user's implementation scope.
-  The removed CI phase has no active checklist; STEP-026–027 remain retired.
-- Coverage-guided continuous fuzzing, browser/deployment verification and multi-hour
-  soaks are not established by these checks. Memory-only receipt retention and
-  actor handoff overhead retain their documented limits.
+- Coverage-guided continuous fuzzing, production deployment coverage and multi-hour
+  soaks are not established by these checks. Fresh dependency scanners are
+  unavailable in this session; earlier passing scans remain historical evidence.
+- Memory-only receipt retention and actor handoff overhead retain their documented limits.
 
 Use the [record index](audit/README.md) for the source prompt, original baseline,
 assessments and supporting guides. The [checklist](audit/implementation-plan.md)

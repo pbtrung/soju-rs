@@ -79,7 +79,7 @@ Socket tests need permission to bind local TCP/Unix sockets. Report sandbox
 failures separately and use the available approval mechanism to rerun them.
 
 `Cargo.toml` enforces the complete practical compiler/Clippy baseline after
-STEP-011, including unsafe prohibition, pedantic, numeric/indexing, unwrap/expect,
+STEP-012, including unsafe prohibition, pedantic, numeric/indexing, unwrap/expect,
 must-use/future and error-mapping checks. Keep exceptions on the specific
 statement, block, parameter or test that needs them, with an explicit reason.
 Current exceptions describe validated actor/IRC indices, bounded parser cursors,
@@ -94,7 +94,7 @@ recovers after transaction rollback, with regression coverage. Operational error
 must be handled or propagated.
 
 - Rustdoc changes: run `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`.
-  Strict rustdoc passes after STEP-011; retain a warning-clean documentation build.
+  Strict rustdoc passes after STEP-012; retain a warning-clean documentation build.
 - Markdown-only changes: check relative links/anchors, obsolete references
   and `git diff --check`; a full Rust rebuild is unnecessary.
 - Shell changes: `bash -n` changed shell scripts; use ShellCheck if installed.
@@ -109,7 +109,7 @@ must be handled or propagated.
   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc` as in CI when needed.
 - Dependency review: run cargo audit, `cargo deny --all-features --locked check`
   and `cargo machete --with-metadata` when available. The full deny policy
-  passes after STEP-030 replaced chrono with Jiff. Do not suppress advisories
+  passes after STEP-008 replaced chrono with Jiff. Do not suppress advisories
   to bypass future failures. See
   [dependency maintenance](doc/audit/dependencies.md) for constraints and results.
 

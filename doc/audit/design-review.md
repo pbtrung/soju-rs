@@ -79,7 +79,7 @@ The original baseline contained 152 library tests, two sojuctl tests, two listen
 
 Shell syntax checks and Python AST parsing pass for the release/compatibility/benchmark scripts. These do **not** detect REL-001's missing workflow or prove script operational behavior.
 
-The original audit did not execute external compatibility tooling. Phase 7 executes twelve pinned Go-soju/ergo scenarios and records their raw transcript mismatches; it also compares the original and refactored Rust builds on the same scenarios. Ten Rust comparisons pass directly, and the two fixture-sensitive cases pass after explicit timestamp/completion barriers. This establishes preservation for the measured scenarios, not full Go equivalence. IRCv3/plumbing/gamja remain unrun in Phase 7; results and pinned inputs are in [§12](verification.md#12-verification-matrix).
+The original audit did not execute external compatibility tooling. Phase 7 executes twelve pinned Go-soju/ergo scenarios and records their raw transcript mismatches; it also compares the original and refactored Rust builds on the same scenarios. Ten Rust comparisons pass directly, and the two fixture-sensitive cases pass after explicit timestamp/completion barriers. This establishes preservation for the measured scenarios, not full Go equivalence. IRCv3/plumbing/gamja remained unrun in Phase 7; results and pinned inputs are in [§12](verification.md#12-verification-matrix).
 
 At discovery, automation and coverage gaps included pull-request/push triggers,
 lint/doc gates, tested-commit release dependency, advisory/license checks, parser
@@ -88,6 +88,10 @@ Phase 8 added bounded mutation corpora and timed resource measurements. CI
 automation remains excluded from implementation, while cargo-outdated and
 coverage-guided fuzz tooling were not provisioned. See [verification](verification.md)
 for the actual results and scope limits. Use [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html) and [Tokio task shutdown guidance](https://tokio.rs/tokio/topics/shutdown) as implementation references; platform/native exclusions must be explicit.
+
+Phase 9 adds passing IRCv3, transport, local Gamja browser and Senpai real-bouncer
+checks, archive/restored-database deployment and final performance/resource
+measurements. Raw Go mismatches remain; see [final assessment](final-verification.md).
 
 ## 13. Compatibility and Performance Risks
 

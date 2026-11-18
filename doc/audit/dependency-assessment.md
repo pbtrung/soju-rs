@@ -28,7 +28,7 @@ The first live RustSec scan (cargo-audit 0.23.0, database commit
 known vulnerabilities and the informational unmaintained-chrono advisory
 `RUSTSEC-2026-0543`. No advisory was suppressed. STEP-007 assessed the migration
 needed to replace chrono; a passing audit exit code does not mean no warnings.
-STEP-030 subsequently replaces it with Jiff 1.0.0; the refreshed scan has no
+STEP-008 subsequently replaces it with Jiff 1.0.0; the refreshed scan has no
 vulnerabilities or advisory warnings and the full deny policy passes.
 
 All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied during the original audit; implementation updates are recorded above.

@@ -10,10 +10,9 @@
 
 > Current record layout: [summary](../audit_results.md), [findings](findings.md),
 > [implementation checklist](implementation-plan.md), [verification](verification.md)
-> and [progress](progress.md). The user removed native instrumentation and the
-> CI-hardening implementation phase. CI findings remain assessment-only; local
-> quality gates remain required. Phase/step identifiers are retained: the active
-> plan goes from Phase 8 to Phase 10, and STEP-026–027 are retired.
+> and [progress](progress.md). Native instrumentation is excluded.
+> CI findings remain assessment-only; local quality gates remain required.
+> Final verification is Phase 9; step IDs follow checklist order.
 > Authorized implementation follows the user's current phase and execution scope;
 > this prompt's audit-only restriction applies when invoking that original audit workflow.
 
@@ -634,12 +633,12 @@ Refactor large files, large functions, duplicated logic, and unnecessarily compl
 
 Add regression, property-based, integration, fuzzing and resource-soak coverage.
 
-**Phase 10 — Final verification**
+**Phase 9 — Final verification**
 
 Run the complete test suite and supported release builds.
 
 After significant implementation work, verify that the repository remains functional.
-STEP-018–020 followed STEP-017 before combined final verification. For Phases
+STEP-019–021 followed STEP-018 before combined final verification. For Phases
 7–8, the user requested compilation-only checks between steps and tests/lint/
 gates after all implementations in the phase were written. Subsequent work
 follows the user's selected phase and execution scope.
@@ -818,10 +817,9 @@ Distinguish confirmed defects from potential risks and optional improvements.
 Maintain the detailed, prioritized implementation plan in
 `doc/audit/implementation-plan.md`, linked from the summary.
 
-Organize the plan into sequential phases. Native instrumentation and a dedicated
-CI-hardening phase are excluded by user request. Retain local quality gates and
-record CI findings without adding an implementation phase for them. Preserve
-existing phase/step numbers for stable references:
+Organize the plan into sequential phases. Native instrumentation is excluded.
+Retain local quality gates; CI findings remain assessment-only. Preserve
+sequential phases and steps in checklist order:
 
 - **Phase 1:** Baseline verification and critical bug fixes.
 - **Phase 2:** Rust toolchain and Edition 2024 modernization.
@@ -831,7 +829,7 @@ existing phase/step numbers for stable references:
 - **Phase 6:** Async and concurrency correctness.
 - **Phase 7:** Architectural refactoring of large files and functions.
 - **Phase 8:** Testing, fuzzing, and resource-soak coverage.
-- **Phase 10:** Final regression testing and production readiness review.
+- **Phase 9:** Final regression testing and production readiness review.
 
 For **every implementation step**, specify:
 
@@ -850,8 +848,8 @@ Break large tasks into small, independently verifiable steps. Order tasks by dep
 
 Track actual steps with Markdown checkboxes in the authoritative checklist.
 Check a step only after implementation and required verification complete.
-Keep finding IDs and step IDs stable; the summary and source prompt must not
-maintain competing status lists or example IDs that conflict with that plan.
+Keep finding IDs and step references consistent; the summary and source prompt
+must not maintain competing status lists or example IDs that conflict with that plan.
 
 ### 17.3 Verification and progress tracking
 
@@ -893,9 +891,8 @@ verification, and refresh the summary. Record:
   `remaining-work.md`: detailed assessment, original evidence and current limits.
 - Audit-specific dependency, resource and handler guides stay in this folder.
 
-Preserve phases 1–8 and Phase 10 and stable step IDs. STEP-026–027 are retired;
-the removed CI phase must not reappear as an active checklist. Distinguish
-source-prompt section numbers from implementation phase numbers.
+Keep phases 1–9 and sequential step IDs. Distinguish source-prompt section
+numbers from implementation phase numbers.
 
 ### 17.5 Execution order — mandatory
 

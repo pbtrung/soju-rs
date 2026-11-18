@@ -47,22 +47,22 @@ later hardening verification is recorded separately below.
 | STEP-005 compatible updates | PASS | 213 GNU/musl tests, releases, static linkage and CLI smoke |
 | STEP-006 rusqlite migration | PASS | 214 GNU/musl tests, file-backed schema-30→35 reopen/FTS/FK/cursor/ID regression, native releases and static-link/CLI checks |
 | STEP-007 reduced features | PASS | 214 GNU/musl tests, fmt/check/Clippy, reader smoke/doc tests, both releases and static-link/CLI checks |
-| STEP-008 core lint policy | PASS | fmt/check, strict all-target Clippy on GNU/musl, 223 tests per target, reader smoke/doc tests; four new operational boundary regressions; rustdoc retains 13 existing warnings |
-| STEP-030 Jiff migration | PASS | fmt/check/strict Clippy; 219 tests per GNU/musl target plus reader smoke/doc tests; legacy TEXT/schema/FTS/cursor/ID preservation; timezone/DST and temporal boundary fixtures; both optimized releases/static-link/CLI; rustdoc with 13 existing warnings |
+| STEP-009 core lint policy | PASS | fmt/check, strict all-target Clippy on GNU/musl, 223 tests per target, reader smoke/doc tests; four new operational boundary regressions; rustdoc retains 13 existing warnings |
+| STEP-008 Jiff migration | PASS | fmt/check/strict Clippy; 219 tests per GNU/musl target plus reader smoke/doc tests; legacy TEXT/schema/FTS/cursor/ID preservation; timezone/DST and temporal boundary fixtures; both optimized releases/static-link/CLI; rustdoc with 13 existing warnings |
 | Live registry dry run after upgrades | PASS | `cargo update --dry-run`: zero compatible updates |
-| Current advisory scan | PASS | STEP-030: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
-| Full dependency policy | PASS | STEP-030: cargo-deny 0.21.0 accepts advisories, bans, licenses and sources; existing syn/untrusted duplicate warnings remain; no advisory ignored |
+| Current advisory scan | PASS | STEP-008: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
+| Full dependency policy | PASS | STEP-008: cargo-deny 0.21.0 accepts advisories, bans, licenses and sources; existing syn/untrusted duplicate warnings remain; no advisory ignored |
 | License/source/duplicate policy subset | PASS | `cargo deny --all-features --locked check bans licenses sources`; parent-owned duplicates remain warnings |
 | Unused direct dependency analysis | PASS | cargo-machete 0.10.1 with metadata finds no unused direct requirements |
 
 Tool installation and registry-fetch failures under the restricted sandbox
 were retried with approved access. Tools live under `/tmp/soju-audit-tools`;
 registry/analysis logs use `/tmp/soju-step-<step>-*.log` and advisory JSON files.
-The STEP-030 dependency graph removes chrono; the advisory gate now passes without exceptions.
+The STEP-008 dependency graph removes chrono; the advisory gate now passes without exceptions.
 
 ### Final verification through Phase 6
 
-Per user direction, STEP-018–020 implementations preceded the combined final
+Per user direction, STEP-019–021 implementations preceded the combined final
 checks. The implementation commits kept those steps In Progress until these
 checks and measurements completed. Earlier failed checks are recorded as
 resolved failures rather than counted as passes.
@@ -79,7 +79,7 @@ resolved failures rather than counted as passes.
 | Controlled resource/ownership/persistence/auth regressions | PASS | History/receipt churn, transport admission, writer teardown, notification saturation, mention draining, command deadlines, SQLite contention and OAuth trust/redaction |
 | Actor contention and normal parsed-IRC comparisons | PASS | Recorded in [resource limits](resource-limits.md#actor-boundary-measurements), including measured handoff/throughput overhead |
 | External Go/ergo/IRCv3/plumbing/gamja comparison | NOT RUN | External environment remains unprovisioned; no transcript-equivalence claim |
-| Sustained resource soak and parser fuzz corpus | NOT RUN | Remain future STEP-024–025 work; finite regressions and benchmarks are not a long soak |
+| Sustained resource soak and parser fuzz corpus | NOT RUN | Remain future STEP-025–026 work; finite regressions and benchmarks are not a long soak |
 
 Final check logs use `/tmp/soju-step-phase6-final-check-*.log` and
 `/tmp/soju-phase6-final-*.log`. Benchmarks use fixed finite workload counts;
@@ -156,3 +156,33 @@ permissive-command canonicalization assumption, WAL initializer race, and a
 diagnostic context that initially obscured the existing newer-schema error.
 Historical schema text remains unchanged; new tests and fixture construction
 use the original migrations and FTS upgrade hook.
+
+
+### Final verification through Phase 9
+
+STEP-027–028 are verified with the explicit limitations in the
+[final assessment](final-verification.md), which records pins, settings, sample
+ranges, corrected failures, raw transcript differences and reproduction details.
+
+| Check | Actual result | Evidence / limit |
+| --- | --- | --- |
+| fmt, locked all-target/all-feature check, strict GNU/musl Clippy | PASS | Final production source; no Rust implementation change in this phase |
+| GNU/musl tests, reader smoke and doc tests | PASS | 298 tests per target; both Tokio runtimes; two opt-in soaks run separately |
+| Strict rustdoc and standalone fuzz gates | PASS | Zero rustdoc warnings; fuzz fmt/check/Clippy plus 80,000 mutations |
+| GNU/musl archive builder and checksums/extracted CLI/ELF | PASS | No musl INTERP/NEEDED; version/help exit contracts checked |
+| Restored schema-35 archive deployment | PASS | Both extracted targets, admin query, orderly shutdown, 100k IDs/high-water/FK/FTS integrity |
+| IRCv3 and Rust plumbing | PASS | 32/32 and 20/20 after resolving environment-startup mistakes |
+| Local Gamja browser scenarios | PASS | 4/4 against Rust and 4/4 against pinned Go; tracked source from `../gamja` |
+| Local Senpai suite and real-bouncer integration | PASS | `../senpai`, GNU release supplied explicitly; verbose integration passes in 8.36 seconds |
+| Pinned Go/Rust differential | FAIL, retained | Same twelve scenarios differ in capabilities, CAP splitting, service output and timing; corrected service/broadcast fixtures also retain Go differences |
+| Original/final Rust differential | PASS with fixture correction | Eleven scenarios pass directly; service scenario passes with explicit completion replies; corrected broadcast also passes |
+| Reader, actor, receipt, file-backed SQL and connect-pages measurements | EXECUTED | Five alternating reader pairs; one CPU; ranges and handoff costs in final assessment; SQL timings are not server-latency claims |
+| Final connection/history and slow-push soaks | PASS | Each runs 180 seconds plus five-second drain; retained counters bounded and cleanup verified |
+| Final cargo-audit/deny/machete | NOT RUN | Commands absent in this session; earlier scans remain historical, no fresh advisory claim |
+| Multi-hour/continuous fuzz/complete production deployment coverage | NOT ESTABLISHED | Explicit finite-check limits; CI findings remain unresolved |
+
+The compatibility harness now waits for deferred service completion before
+issuing dependent commands. Both changed scenarios were functionally rerun
+against original/final Rust and Go/Rust. Python syntax passes; Ruff is unavailable.
+Markdown links/anchors and whitespace are checked before commit. Logs and
+measurements use `/tmp/soju-phase9-*`; key results are retained in the final guide.

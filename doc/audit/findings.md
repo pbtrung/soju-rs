@@ -4,7 +4,7 @@
 
 ## 3. Audit Findings
 
-Status denotes **implementation status** through Phase 8. The original audit
+Status denotes **implementation status** through Phase 9. The original audit
 was assessment-only; completion notes record each step's verification at its
 completion date, with the latest combined checks in [verification](verification.md).
 Problem statements and source locations describe the discovery snapshot unless
@@ -13,7 +13,7 @@ does not establish a remotely demonstrated denial of service.
 
 ### 3.1 Critical Issues
 
-None confirmed. Fuzzing and long-running load testing remain outstanding; absence of a critical finding is not a security certification.
+None confirmed. Bounded mutation campaigns and three-minute workload soaks pass; continuous coverage-guided fuzzing and multi-hour production load testing remain unestablished. Absence of a critical finding is not a security certification.
 
 ### 3.2 High-Priority Issues
 
@@ -87,7 +87,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** A recently received message can remain in history without its mention marker after orderly restart, or after transient persistence failure.
 - **Recommended fix:** Make mention flushing user/network-owned, preserve batches until successful persistence, and drain them before signalling user completion. Define retry/backoff and deletion behavior; avoid writing markers for a deleted network.
 - **Verification:** Receive a mention then stop before one second; reopen a file DB and assert marker persisted. Inject write failure then recovery, and delete network/user during a pending flush.
-- **Status:** Completed. Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-019 subsequently addressed handler responsiveness.
+- **Status:** Completed. Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-020 subsequently addressed handler responsiveness.
 
 #### ASYNC-004 — Dropping connection handles does not terminate the writer
 
@@ -117,7 +117,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Desired invariants are not mechanically enforced. Many diagnostics represent checked local invariants/test assertions and need a reasoned disposition, not arbitrary fallback values.
 - **Recommended fix:** Stage explicit Cargo rust/Clippy policies; use checked conversion/borrowed-state APIs and typed variants; document small unavoidable invariant/test exceptions with precise `expect` reasons. Never enable all restriction lints. Include unused-must-use and unsafe prohibition from the prompt.
 - **Verification:** Full all-target Clippy command with the final manifest policy and `-D warnings`; check exception reasons and unfulfilled expectations on Rust 1.100. Re-run behavior tests after each logical group.
-- **Status:** Completed. Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 was deferred at STEP-011 completion and was subsequently addressed by STEP-021–023. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings.
+- **Status:** Completed. Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 was deferred at STEP-012 completion and was subsequently addressed by STEP-022–024. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings.
 
 #### PANIC-001 — Fallible setup and state invariants use panicking APIs
 
@@ -127,7 +127,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Harder operational diagnosis/recovery; invalid internal transitions can terminate a user or process. Guarded fixed-length cryptographic conversions are different and should not be described as reachable parser bugs.
 - **Recommended fix:** Propagate setup errors, encode pending command kinds and registration/upstream phases in types where useful, borrow validated state once, and explicitly choose poison recovery/fail-stop policy per lock. Preserve real errors. Keep constant-size crypto invariant exceptions narrow.
 - **Verification:** Failure-injection setup tests, malformed/state-transition tests, Clippy, and existing certificate/SASL/authorization integration tests. No blanket panic-catching or defaulting credentials.
-- **Status:** Completed. Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-011.
+- **Status:** Completed. Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-012.
 
 #### DEPS-001 — Current patch and semver-breaking dependency updates exist
 
@@ -137,17 +137,17 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Missed maintenance fixes; SQLite wrapper updates carry behavioral/native/FTS compatibility risk and need dedicated verification.
 - **Recommended fix:** Separate rand/compatible lock refresh from rusqlite 0.43 migration. Read release notes, keep bundled SQLite and review native versions/features. Upgrade parent crates for constrained transitives; do not force incompatible transitive versions with patches.
 - **Verification:** Current registry refresh, `cargo tree -e features`, `cargo audit`, `cargo deny`, GNU/musl tests/releases; schema 35 migration/reopen/FTS/ID-exhaustion tests. No schema bump solely for a wrapper upgrade.
-- **Status:** Completed. Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks passed; at STEP-007 completion full deny failed on DEPS-002. The later STEP-030 migration resolves that advisory.
+- **Status:** Completed. Completed version/feature assessment: all 34 retained older versions have documented parent constraints. Removed unused Tokio process/stdio and SQLite WASM features while preserving native cache/locking; removed two lockfile packages. fmt/check/Clippy, 214 GNU/musl tests, reader smoke/doc tests and releases/static-link/CLI pass. Machete and license/source checks passed; at STEP-007 completion full deny failed on DEPS-002. The later STEP-008 migration resolves that advisory.
 
 #### DEPS-002 — Replace unmaintained chrono with jiff
 
 - **Severity / classification:** Medium; confirmed maintenance advisory, not a demonstrated exploitable vulnerability.
 - **Location at discovery:** `Cargo.toml` chrono dependency; timestamp types in `src/database/mod.rs`, `src/msgstore/`, `src/user/`, `src/xirc/mod.rs`; local-time logging in `src/logger.rs` and `src/server/configuration.rs`. Direct chrono/time-type usage spans 31 Rust files including tests at discovery.
 - **Problem at discovery:** RustSec `RUSTSEC-2026-0543` reports all chrono versions unmaintained, with no patched upgrade. cargo-audit emits a warning; cargo-deny fails its advisory gate. Updating chrono to its latest version does not resolve this.
-- **Impact:** Dependency maintenance risk; the original full dependency-policy check failed despite finding zero known vulnerabilities. STEP-030 resolves the maintenance advisory without ignoring it.
+- **Impact:** Dependency maintenance risk; the original full dependency-policy check failed despite finding zero known vulnerabilities. STEP-008 resolves the maintenance advisory without ignoring it.
 - **Recommended fix:** Replace chrono with **jiff**, as requested by the user. Inventory public timestamp types and conversions; preserve IRCv3 parsing of UTC timestamps with zero through nine fractional digits, canonical three-digit output, ordering, future clocks, duration bounds, local-time log output, and existing SQLite TEXT timestamps/cursors. Remove chrono only after GNU/musl and storage/protocol regression checks pass. Do not suppress the advisory to make the gate pass.
-- **Verification:** STEP-030; server-time boundary/roundtrip tests, timestamp ordering and expiry tests, local-time logging fixtures, file-backed migration/reopen/FTS/cursor tests, full dual-runtime GNU/musl tests, release/static-link checks, and fresh cargo audit/deny/machete runs.
-- **Status:** Completed in STEP-030. Migrated to Jiff 1.0.0 while preserving schema 35, canonical millisecond TEXT, nanosecond input and pre-epoch Unix topic rounding. Intentional leap-second and date-range differences are documented in [timestamp compatibility](dependencies.md#timestamp-compatibility). Required GNU/musl verification passes; audit has no vulnerabilities or advisory warnings, and full deny/machete pass. See [§15](progress.md#15-implementation-progress-log) for the complete verification record.
+- **Verification:** STEP-008; server-time boundary/roundtrip tests, timestamp ordering and expiry tests, local-time logging fixtures, file-backed migration/reopen/FTS/cursor tests, full dual-runtime GNU/musl tests, release/static-link checks, and fresh cargo audit/deny/machete runs.
+- **Status:** Completed in STEP-008. Migrated to Jiff 1.0.0 while preserving schema 35, canonical millisecond TEXT, nanosecond input and pre-epoch Unix topic rounding. Intentional leap-second and date-range differences are documented in [timestamp compatibility](dependencies.md#timestamp-compatibility). Required GNU/musl verification passes; audit has no vulnerabilities or advisory warnings, and full deny/machete pass. See [§15](progress.md#15-implementation-progress-log) for the complete verification record.
 - **Evidence:** [Upstream maintenance announcement](https://github.com/chronotope/chrono/issues/1768); live cargo-audit 0.23.0 and cargo-deny 0.21.0 output against RustSec database commit `233155b4025b854c68a4b199c0e32d7fd53291a2`.
 
 #### ARCH-001 — Cohesive files still contain oversized multi-responsibility handlers
@@ -158,7 +158,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Harder to reason about validated state, cancellation, error contracts and protocol changes; duplicated state lookup drives unwrap/index diagnostics.
 - **Recommended fix:** Extract typed history request parsing/query execution/reply formatting, service command registration, and cohesive per-command upstream handlers. Reduce user event dispatch to delegation. Use functions/modules around responsibilities, not arbitrary file-size limits.
 - **Verification:** Existing transcript/dual-runtime/migration tests; add focused parsing/response tests before extraction; full Clippy with justified exceptions for declarative tables only where appropriate.
-- **Status:** Completed for STEP-021–023. Implemented typed history request/query/reply boundaries, cohesive upstream/downstream command handlers, the typed service registry and ordered directive parser groups. Existing actor and READ dispatch remain cohesive ownership boundaries with local lint contracts; completion does not mean every function/file has a fixed size. Final 287-test GNU/musl suites, strict Clippy on both targets and strict rustdoc pass. Original/final Rust assertions and twelve pinned-ergo scenario comparisons preserve measured wire behavior; raw Go differences and fixture timing corrections are recorded in [§12](verification.md#12-verification-matrix).
+- **Status:** Completed for STEP-022–024. Implemented typed history request/query/reply boundaries, cohesive upstream/downstream command handlers, the typed service registry and ordered directive parser groups. Existing actor and READ dispatch remain cohesive ownership boundaries with local lint contracts; completion does not mean every function/file has a fixed size. Final 287-test GNU/musl suites, strict Clippy on both targets and strict rustdoc pass. Original/final Rust assertions and twelve pinned-ergo scenario comparisons preserve measured wire behavior; raw Go differences and fixture timing corrections are recorded in [§12](verification.md#12-verification-matrix).
 
 #### TEST-001 — Adversarial lifecycle and native-code coverage is incomplete
 
@@ -167,8 +167,8 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Problem:** Existing tests cover many regressions but not aggregate history budgets, abandoned connection ownership, final mention flush, push saturation, DB contention on one CPU, or autonomous command timeout. No continuous parser fuzzing run. Migrations have fixtures for old/current schemas but not exhaustive every-version/concurrent-process/crash coverage.
 - **Impact:** Resource and cancellation regressions can pass the current suite; compiler/Clippy success does not validate native allocator/SQLite/AWS-LC behavior.
 - **Recommended fix:** Add finding-specific regressions, property tests for parsers/IDs, separate fuzz targets/corpus, file-backed integrity/rollback/concurrent-initializer cases.
-- **Verification:** Commands/coverage targets in phases 8 and 10. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
-- **Status:** Completed for STEP-024–025. Deterministic parser properties, bounded mutation corpora, transactional/migration/concurrent-initializer regressions and actual three-minute resource soaks pass. A WAL startup race found by the new tests is fixed with bounded retry. Final GNU/musl suites pass 298 tests each. Coverage-guided continuous fuzzing, browser/deployment comparison and multi-hour workload coverage remain explicit verification limits rather than inferred successes.
+- **Verification:** Commands/coverage targets in phases 8 and 9. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
+- **Status:** Completed for STEP-025–026. Deterministic parser properties, bounded mutation corpora, transactional/migration/concurrent-initializer regressions and actual three-minute resource soaks pass. A WAL startup race found by the new tests is fixed with bounded retry. Final GNU/musl suites pass 298 tests each. Coverage-guided continuous fuzzing, browser/deployment comparison and multi-hour workload coverage remain explicit verification limits rather than inferred successes.
 
 #### AUTH-001 — OAuth discovery requires issuer presence, not equality
 
@@ -200,7 +200,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Broken rendered API docs and future CI failure.
 - **Recommended fix:** Use inline code for grammar examples, proper Markdown/autolinks for URLs, and document public error/state contracts as lint remediation proceeds.
 - **Verification:** `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`.
-- **Status:** Completed. Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 was deferred at STEP-011 completion and was subsequently addressed by STEP-021–023. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings.
+- **Status:** Completed. Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 was deferred at STEP-012 completion and was subsequently addressed by STEP-022–024. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings.
 
 #### CI-002 — Test inputs and toolchains float
 
@@ -220,7 +220,7 @@ None confirmed. Fuzzing and long-running load testing remain outstanding; absenc
 - **Impact:** Surprising public API behavior and portability/invariant hazards, especially for hypothetical 32-bit targets.
 - **Recommended fix:** Use checked conversions or explicitly documented saturation where the API means unlimited; preserve intentional ZigZag bit encodings. Handle sequence exhaustion and validate nonzero/representable rate parameters. Do not claim 32-bit support without a build.
 - **Verification:** Boundary tests for zero, maximum representable values, malformed overlong BARE integers, `usize::MAX`, and explicit sequence rollover handling; GNU/musl regression tests.
-- **Status:** Completed. Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; the internal indexing policy was completed in STEP-011.
+- **Status:** Completed. Enabled checked numeric-cast policy; replaced lossy BARE/SQLite/message-ID/source-address conversions, guarded memory sequence exhaustion, and validated rate configuration. Preserved Go ID vectors and documented explicit unlimited SQLite limits. PROXY input uses checked slices and patterns with focused indexing enforcement. fmt/check/strict Clippy and 227 GNU/musl tests plus reader smoke/doc tests pass. 32-bit support is not claimed; the internal indexing policy was completed in STEP-012.
 
 #### PERF-001 — Receipt client enumeration is quadratic in distinct clients
 

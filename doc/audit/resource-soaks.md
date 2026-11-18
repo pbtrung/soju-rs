@@ -40,7 +40,8 @@ RSS is sampled independently from accounted history/queue bytes. A fixed
 counter plateau and successful cleanup do not imply that an allocator returns
 all pages to the OS or that every unmeasured subsystem has a memory bound.
 These finite-duration workloads also do not replace a multi-hour deployment
-soak or the final Phase 10 compatibility/performance assessment.
+soak or establish compatibility for every deployment. The final Phase 9 rerun
+and performance assessment are recorded in [final verification](final-verification.md).
 
 ## Recorded Phase 8 results
 

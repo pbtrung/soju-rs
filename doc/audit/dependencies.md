@@ -31,10 +31,10 @@ Tokio explicitly enables filesystem, buffered I/O, macros, networking, runtime,
 signals, synchronization and timers. Unused process/stdio support is removed.
 The existing parking_lot locking backend is retained; the dev dependency adds
 only test-util to the production feature set. Tokio-util explicitly enables `rt`
-for owned maintenance task tracking in STEP-019.
+for owned maintenance task tracking in STEP-020.
 
 rusqlite explicitly enables bundled native SQLite, statement caching and scalar
-functions. STEP-014 uses connection-local scalar functions for bounded receipt
+functions. STEP-015 uses connection-local scalar functions for bounded receipt
 queries with the same IRC case mapping and legacy lossy UTF-8 behavior as Rust.
 No function-dependent index or schema migration is installed.
 Disabling its default WASM backend removes sqlite-wasm-rs and rsqlite-vfs
@@ -54,7 +54,7 @@ present in the inspected dependency graph, including build/dev dependencies.
 Duplicate major versions remain visible warnings; they are not suppressed.
 No advisory IDs are ignored.
 
-**Resolved:** [DEPS-002 / STEP-030](findings.md#deps-002--replace-unmaintained-chrono-with-jiff)
+**Resolved:** [DEPS-002 / STEP-008](findings.md#deps-002--replace-unmaintained-chrono-with-jiff)
 replaces chrono with [Jiff 1.0.0](https://docs.rs/jiff/1.0.0/jiff/), the current
 stable release reviewed on 2026-11-17. chrono and its timezone backend are absent
 from the lockfile. A fresh RustSec scan reports zero known vulnerabilities and

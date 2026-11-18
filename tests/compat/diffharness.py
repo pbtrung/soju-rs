@@ -586,6 +586,11 @@ def bouncerserv(env):
     ]
     for cmd in cmds:
         c.send(f"PRIVMSG BouncerServ :{cmd}")
+        if cmd.startswith(("user create ", "user update ", "user run ", "certfp generate ")):
+            # These operations may finish after a PONG. Their service reply
+            # confirms completion before a dependent command uses the result.
+            c.wait(lambda m, l: m["command"] == "PRIVMSG"
+                   and m["prefix"].startswith("BouncerServ!"))
         c.roundtrip()
     tok = None
     for l in c.lines:
@@ -594,6 +599,8 @@ def bouncerserv(env):
             tok = m["params"][-1].split('"')[1].split()[-1]
     if tok:
         c.send(f"PRIVMSG BouncerServ :user delete carl {tok}")
+        c.wait(lambda m, l: m["command"] == "PRIVMSG"
+               and m["prefix"].startswith("BouncerServ!"))
         c.roundtrip()
     c.send("PRIVMSG BouncerServ :user status")
     c.roundtrip()
@@ -798,6 +805,9 @@ def broadcast_and_user_run(env):
     c.send("PRIVMSG $* :hello star")
     c.send("PRIVMSG BouncerServ :server notice 'maintenance soon'")
     c.send("PRIVMSG BouncerServ :user run bob network create -addr 127.0.0.1:1 -name viarun -enabled false")
+    c.wait(lambda m, l: m["command"] == "PRIVMSG"
+           and m["prefix"].startswith("BouncerServ!")
+           and m["params"][-1] == 'created network "viarun"')
     c.roundtrip()
     bob.send("PRIVMSG $soju.test :not allowed")
     env.settle(1)
