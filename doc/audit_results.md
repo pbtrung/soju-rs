@@ -61,7 +61,7 @@ Status denotes **implementation status**, not whether investigation is complete.
 
 ### 3.1 Critical Issues
 
-None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load testing remain outstanding; absence of a critical finding is not a security certification.
+None confirmed. Fuzzing and long-running load testing remain outstanding; absence of a critical finding is not a security certification.
 
 ### 3.2 High-Priority Issues
 
@@ -73,7 +73,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** New release automation fails; replacement can remove the current release without starting its replacement. No remote mutation was performed in this audit.
 - **Recommended fix:** Establish the final tested release workflow, update both dispatches and documentation, and preflight workflow availability before any destructive operation. Add local stub-based script tests that record command ordering and simulate missing workflows/API failures. Preserve leases and clean-checkout guards.
 - **Verification:** `bash -n scripts/release-*.sh`; hermetic shell test with stub `git`/`gh`; ensure failed preflight performs no push, tag move or delete; verify dispatched filename exists and accepts `publish`.
-- **Status:** Completed. Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9.
+- **Status:** Completed. Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open and outside the requested implementation scope.
 
 #### CI-001 — Tests are manual and publishing does not require them
 
@@ -211,11 +211,11 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 #### TEST-001 — Adversarial lifecycle and native-code coverage is incomplete
 
 - **Severity / classification:** Medium; confirmed missing coverage/tooling, not proof of unsafe behavior.
-- **Location:** `tests/`, `src/conn/tests.rs`, `src/database/sqlite/tests/`, `.github/workflows/`; no fuzz workspace/property-test/sanitizer/Miri configuration found.
-- **Problem:** Existing tests cover many regressions but not aggregate history budgets, abandoned connection ownership, final mention flush, push saturation, DB contention on one CPU, or autonomous command timeout. No continuous parser fuzzing or native sanitizer run. Migrations have fixtures for old/current schemas but not exhaustive every-version/concurrent-process/crash coverage.
+- **Location:** `tests/`, `src/conn/tests.rs`, `src/database/sqlite/tests/`, `.github/workflows/`; no fuzz workspace/property-test configuration found.
+- **Problem:** Existing tests cover many regressions but not aggregate history budgets, abandoned connection ownership, final mention flush, push saturation, DB contention on one CPU, or autonomous command timeout. No continuous parser fuzzing run. Migrations have fixtures for old/current schemas but not exhaustive every-version/concurrent-process/crash coverage.
 - **Impact:** Resource and cancellation regressions can pass the current suite; compiler/Clippy success does not validate native allocator/SQLite/AWS-LC behavior.
-- **Recommended fix:** Add finding-specific regressions, property tests for parsers/IDs, separate fuzz targets/corpus, file-backed integrity/rollback/concurrent-initializer cases, and supported scheduled native sanitizer jobs. Restrict Miri to suitable pure Rust tests if dependencies cannot run in its interpreter.
-- **Verification:** Commands/coverage targets in phases 8–10. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
+- **Recommended fix:** Add finding-specific regressions, property tests for parsers/IDs, separate fuzz targets/corpus, file-backed integrity/rollback/concurrent-initializer cases.
+- **Verification:** Commands/coverage targets in phases 8 and 10. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
 - **Status:** Not Started.
 
 #### AUTH-001 — OAuth discovery requires issuer presence, not equality
@@ -454,7 +454,7 @@ Existing protections worth preserving: 32 KiB input framing cap; 16 MiB accounte
 
 Remaining gaps: aggregate memory history/receipt cardinality, push tasks, accepted sessions, and writer teardown (MEM-001/MEM-002/ASYNC-001/ASYNC-004). Connection byte accounting uses atomics but does not prove a process-wide bound; message formatting allocates before admission and concurrent sends can transiently allocate above the queued budget. Stress/race tests should measure the practical envelope rather than claim exact RSS from an atomic counter.
 
-No application unsafe code, manual pointer arithmetic or FFI boundary was found. Safe Rust does not prevent the resource exhaustion paths above. Native memory-safety coverage requires supported sanitizers; Miri cannot certify arbitrary native SQLite/AWS-LC/mimalloc calls.
+No application unsafe code, manual pointer arithmetic or FFI boundary was found. Safe Rust does not prevent the resource exhaustion paths above.
 
 Temporary public-API probes compiled with the current library produced:
 
@@ -505,11 +505,17 @@ Shell syntax checks and Python AST parsing pass for the release/compatibility/be
 
 Compatibility tooling is present for Go soju, ergo, IRCv3, plumbing and Chromium/gamja. It was reviewed but **not executed** in this run: it needs external checkouts/builds, Node/browser setup and multiple local services. No claim of transcript equivalence is made. Pin baseline revisions, retain a scheduled latest-upstream lane, and run those tools before completing protocol-affecting implementation steps.
 
-Missing automation: pull-request/push triggers, lint/doc gates, tested-commit release dependency, advisory/license/banned-crate checks, parser fuzz corpus, appropriate native sanitizer jobs, controlled load/resource benchmarks. At audit time cargo audit/deny/machete/outdated/fuzz/Miri were absent. Audit/deny/machete have since run with actual results in §12; the other tools remain unavailable, not silently treated as passing. Use [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html), [Miri](https://github.com/rust-lang/miri) and [Tokio task shutdown guidance](https://tokio.rs/tokio/topics/shutdown) as implementation references; platform/native exclusions must be explicit.
+Missing automation: pull-request/push triggers, lint/doc gates, tested-commit release dependency, advisory/license/banned-crate checks, parser fuzz corpus, controlled load/resource benchmarks. At audit time cargo audit/deny/machete/outdated/fuzz were absent. Audit/deny/machete have since run with actual results in §12; the other tools remain unavailable, not silently treated as passing. Use [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html) and [Tokio task shutdown guidance](https://tokio.rs/tokio/topics/shutdown) as implementation references; platform/native exclusions must be explicit.
 
 ## 11. Step-by-Step Implementation Plan
 
-This is the authoritative checklist for the **next implementation execution**. P0 means immediate operational protection; P1 means correctness/resource/required gates; P2 means maintainability/extended verification. Completed checkboxes record verified audit or implementation work. Each step must update its related findings, record executed checks, and keep the checkout functional before proceeding. The user authorized implementation of phases 1–3 and a commit/push after each step; release publication and other remote mutations remain outside authorization.
+The user removed native instrumentation requirements and the CI-hardening phase
+from the implementation plan. STEP-025 retains resource-soak measurements.
+Existing CI findings remain recorded as open; this scope change is not a fix.
+Phase and step numbers are preserved rather than reused. After STEP-017, the
+remaining Phase 6 implementations precede one final test/gate run.
+
+This is the authoritative checklist for the **next implementation execution**. P0 means immediate operational protection; P1 means correctness/resource/required gates; P2 means maintainability/extended verification. Completed checkboxes record verified audit or implementation work. Each step must update its related findings, record executed checks, and keep the checkout functional before proceeding. The user authorized implementation through phase 6 and a commit/push after each step; after STEP-017, tests and gates are deferred until the remaining phase-6 implementation is complete; release publication and other remote mutations remain outside authorization.
 
 ### Phase 1 — Baseline and Critical Fixes
 
@@ -524,7 +530,7 @@ This is the authoritative checklist for the **next implementation execution**. P
 - [x] **STEP-002 (P0): Repair release dispatch and destructive-action preflight.**
   - Findings: REL-001, CI-001. Objective: make release helper behavior match actual workflow files before allowing replacement actions.
   - Files: `scripts/release-new.sh`, `scripts/release-replace.sh`, README; new hermetic release-script tests under `tests/` or `scripts/tests/`.
-  - Instructions: dispatch the final existing release workflow; validate it/its inputs before mutation; keep lease/ref/version checks; stub git/gh and assert exact ordering. Initially use `release.yml`, then adapt to the tested reusable graph in STEP-026.
+  - Instructions: dispatch the final existing release workflow; validate it/its inputs before mutation; keep lease/ref/version checks; stub git/gh and assert exact ordering. Use the existing `release.yml` workflow.
   - Dependencies: STEP-001. Risks: script automation compatibility; remote actions must not be used as tests.
   - Verification: `bash -n`; hermetic script test command documented in README; missing-workflow/API/dirty-checkout cases.
   - Acceptance/status: no mutation on failed preflight; valid path dispatches a real workflow; **Completed**.
@@ -728,31 +734,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: deterministic property seeds, finite fuzz smoke runs, minimized crashing corpus, `PRAGMA integrity_check`, `foreign_key_check`, FTS integrity checks.
   - Acceptance/status: realistic adversarial coverage, no removed tests, documented corpus/seed reproduction; **Not Started**.
 
-- [ ] **STEP-025 (P2): Establish supported native/safety analysis and soak coverage.**
-  - Findings: TEST-001, MEM-001/002, ASYNC-001/004. Objective: examine native memory use and long-lived resources with appropriate tools.
-  - Files: dedicated analysis script/workflow, pure parser test target if needed, resource benchmark harness.
-  - Instructions: install pinned tooling in an appropriate environment; isolate pure Rust Miri targets when native FFI is unsupported; instrument SQLite/AWS-LC as well as Rust for meaningful sanitizers; use compatible allocator settings for sanitizer runs. Add repeated connect/disconnect, many-sender and slow-push soak measurements; avoid silently disabling tests.
-  - Dependencies: STEP-012–020, STEP-024. Risks: nightly tooling differs from stable production, mimalloc/sanitizer interactions.
-  - Verification: record Miri/ASan/LSan command, version, excluded paths and actual outcomes; monitor task/FD/byte counters and RSS over defined workload duration.
-  - Acceptance/status: supported paths pass; unsupported paths have explicit blockers; resource plateau measured rather than inferred; **Not Started**.
-
-### Phase 9 — CI Hardening
-
-- [ ] **STEP-026 (P1): Require quality gates and tests before release.**
-  - Findings: CI-001, REL-001, LINT-001, DOC-001. Objective: enforce tested-commit delivery.
-  - Files: `.github/workflows/tests.yml`, `release.yml`, reusable workflow if needed, release helpers and README.
-  - Instructions: add push/PR checks, workflow_call as appropriate; fmt/check/strict Clippy/test/strict doc; GNU/musl tests, locked release builds and static-link checks. Make archive build/publish depend on successful checks of the same SHA. Keep publishing manual and contents-write confined to publish job.
-  - Dependencies: STEP-002, STEP-011 (including its architecture closure), STEP-024. Risks: workflow expression/permissions/target differences and increased runtime.
-  - Verification: local YAML/workflow validation, dependency graph inspection, hermetic dispatch tests; later authorized CI runs must show test failure blocks release.
-  - Acceptance/status: automatic quality gates exist; neither helper references an absent workflow; publish cannot bypass required tests; **Not Started**.
-
-- [ ] **STEP-027 (P2): Add reproducible compatibility and scheduled maintenance lanes.**
-  - Findings: CI-002, DEPS-001, TEST-001. Objective: detect upstream/security drift without destabilizing reproducible gates.
-  - Files: workflows, `tests/compat/setup.sh`, compat README, dependency policy/configuration.
-  - Instructions: pin source/action/tool revisions for required lane; log resolved commits/native/browser versions; schedule latest-upstream, cargo audit/deny/machete/freshness, bounded fuzz and supported sanitizer runs. Use documented license exceptions only after reviewing real results.
-  - Dependencies: STEP-007, STEP-025, STEP-026. Risks: external-service availability; maintenance of pins/licenses.
-  - Verification: pinned compatibility run on GNU; scheduled lane fails visibly on genuine issues; no continue-on-error masking required checks.
-  - Acceptance/status: same commit/input pins reproducible, security tooling has recorded current results, scheduled failures observable; **Not Started**.
+- [ ] **STEP-025 (P2): Measure sustained resource stability.**
+  - Findings: TEST-001, MEM-001/002, ASYNC-001/004. Objective: measure long-lived resource retention under controlled workloads.
+  - Files: resource benchmark harness, local soak scripts and performance documentation.
+  - Instructions: run repeated connect/disconnect, many-sender and slow-push soaks with defined workload duration and limits; retain all regression tests and distinguish finite probes from sustained measurements.
+  - Dependencies: STEP-012–020, STEP-024. Risks: host load, allocator behavior and workload selection affect measurements.
+  - Verification: record workload, duration, task/FD/byte counters and RSS; compare retained state and teardown after load stops.
+  - Acceptance/status: resource plateau and cleanup measured rather than inferred; **Not Started**.
 
 ### Phase 10 — Final Verification
 
@@ -760,7 +748,7 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Findings: all. Objective: demonstrate the final implementation preserves IRC/database/deployment behavior.
   - Files: full repository, `doc/audit_results.md` verification/progress sections.
   - Instructions: all prompt commands, both-runtime integrations on GNU/musl, full release archive builder, ELF interpreter/NEEDED assertions, checksum/archive CLI smoke tests, pinned IRCv3/plumbing/gamja/differential harness. Validate existing schema 35 database backup/reopen and migration fixtures; do not use a production DB as a test input without a safe copy.
-  - Dependencies: STEP-026–027 and all P1 fixes; unresolved optional steps must be explicitly carried forward. Risks: external compatibility drift and native/target differences may expose failures missed by the host-only checks.
+  - Dependencies: in-scope P1 fixes and STEP-024–025; unresolved optional steps must be explicitly carried forward. Risks: external compatibility drift and native/target differences may expose failures missed by the host-only checks.
   - Verification: §12 full matrix rerun after implementation; `scripts/build-release.sh` and archive smoke checks without any remote release action.
   - Acceptance/status: required gates PASS, no unexplained protocol/schema differences, remaining findings assigned honest statuses; **Not Started**.
 
@@ -799,8 +787,6 @@ These results concern the **unchanged baseline**, not the proposed fixes. PASS m
 | Temporary metric/connection/history probes | PASS | Successfully reproduce defects/retention; not evidence of fixes |
 | Go/ergo/IRCv3/plumbing/gamja/differential compatibility | NOT RUN | External environment not provisioned in this run |
 | `cargo audit`, `cargo deny`, `cargo machete`, `cargo outdated` | BLOCKED | Commands absent in `cargo --list`; no tool installation performed |
-| Miri | BLOCKED | No rustup/Miri; native dependencies require a suitable isolated target |
-| ASan/LSan | NOT RUN | No supported sanitizer/native instrumentation configured |
 | Parser fuzzing | BLOCKED | No cargo-fuzz or targets/corpus yet |
 | Long-running memory/FD/task soak | NOT RUN | Finite probes and bounded-queue tests do not replace a soak |
 | Before/after performance | NOT RUN | Audit-only: no changed binary to compare |
@@ -853,9 +839,9 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 
 **Optional improvements:** cohesive function/module extraction, measured receipt deduplication, feature pruning and reproducibility refinements. None justify speculative architecture/allocator rewrites.
 
-**Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. STEP-030 removes chrono and the full cargo-deny policy passes without advisory ignores; duplicate-major warnings remain visible. cargo-outdated/Miri/fuzz tooling and native sanitizer coverage remain unavailable/not configured; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
+**Current verification limits:** cargo-audit/deny/machete are installed for the implementation run and their results are recorded below. STEP-030 removes chrono and the full cargo-deny policy passes without advisory ignores; duplicate-major warnings remain visible. cargo-outdated/fuzz tooling remains unavailable; external compatibility and soak checks remain not run. A refreshed Cargo index now reports no compatible updates. No approval rejection prevented an action; registry/socket checks used approved escalation.
 
-**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–3, STEP-008, the STEP-030 migration, and commit/push after each step. Other later phases remain outside the current request. Mark findings Completed only after implementation and verification.
+**Execution boundary:** the original audit deferred implementation under [audit_prompt.md §17.5](audit_prompt.md#175-execution-order--mandatory). The user subsequently authorized phases 1–6, the STEP-030 migration, and commit/push after each step. After STEP-017, implement STEP-018–020 before running tests and gates at the end. Native instrumentation and the CI-hardening phase are removed from the plan by user request; other later implementation phases remain outside the current request. Existing step/phase numbers are retained for stable references, so STEP-026–027 are retired rather than reassigned. Mark findings Completed only after implementation and verification.
 
 ## 15. Implementation Progress Log
 
@@ -866,7 +852,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / research | Verified official Rust 1.100 release; queried all direct/locked crate names; read rusqlite 0.43 release notes | Candidate migrations identified, none applied |
 | 2026-11-17 / focused probes | Cancelled metric guard, dropped connection ownership, 10,000 history targets | Defects/retention reproduced; tests not added in audit-only phase |
 | 2026-11-17 / planning | Created findings, 10 phases, 29 actionable steps with dependencies/risks/checks/acceptance criteria | STEP-001 completed; STEP-002–029 not started |
-| 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open for phase 9. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-002 | Release helpers now preflight the active remote release.yml against the local definition before mutation; six hermetic regression tests and bash syntax checks pass. Ruff and ShellCheck are unavailable. CI-001 remains open and outside the requested implementation scope. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-003 | Downstream and upstream counts now use one RAII guard; regressions cover completion, operational error, cancellation and unwind. fmt, check, default Clippy, 213 tests, reader smoke and doc tests pass. Rustdoc builds with the 13 pre-existing warnings. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-004 | Declared rust-version 1.100 with Edition 2024 unchanged; README and AGENTS now document the floor and distro/rustup support. Installed stable 1.100 passes fmt, check, Clippy and 213 tests on both GNU and musl, plus reader smoke and doc tests. CI Cargo commands enforce the manifest floor. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-005 | Applied seven compatible stable upgrades from the refreshed registry, including rand 0.10.4. fmt/check/Clippy, 213 GNU and musl tests, reader smoke/doc tests, both release builds and musl static linkage/CLI smoke pass. cargo-audit finds no known vulnerabilities and reports the unsuppressed chrono maintenance warning; graph downloads required network escalation. | Completed; commit/push follows verification |
@@ -884,10 +870,12 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-016 | One bounded/coalescing worker per user admits at most 128 pending conversations/1 MiB and one active job; sender-wide semaphore limits encryption/HTTP to 32 requests. Integrate delayed read checks, MARKREAD, overflow metrics, joined stop, network cancellation and registration-test stop tokens. Recheck scoped subscription snapshots and conditionally delete expiry to protect replacement IDs/keys; invalidate subscription caches. Flood/timing/byte/cancel/expiry/owner/global-cap/25-subscription/four-test-slot regressions pass. Full GNU/musl checks (264 tests each), strict Clippy/rustdoc and documentation checks pass; stale Unix-socket fixture now waits for actual refusal. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-017 | Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-019 remains for handler responsiveness. | Completed; commit/push follows verification |
 
+| 2026-11-17 / scope revision | Removed native instrumentation requirements and the CI-hardening phase; retained resource-soak work, local quality gates and open CI findings. Preserve retired step numbers. Remaining Phase 6 implementation precedes the final test/gate run, per user direction. | Markdown links and whitespace checks pass; Rust tests/gates deferred to final Phase 6 validation |
+
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 
 ## 16. Final Recommendations
 
-The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. STEP-008 now enforces the core compiler/Clippy policy. Next, finish the staged numeric, unwrap/expect, pedantic and error-mapping policy and address resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after same-commit CI/release gating, GNU/musl builds, protocol/database compatibility and supported security/resource checks have recorded actual results.
+The original phases 1–3 now establish release preflight, cancellation-safe metric accounting, the compiler floor and reviewed dependency upgrades. STEP-008 now enforces the core compiler/Clippy policy. Next, finish the staged numeric, unwrap/expect, pedantic and error-mapping policy and address resource/lifecycle hazards with focused regressions before broad refactoring. The completed STEP-030 Jiff migration resolves the maintenance advisory and makes the full dependency policy pass. Stage strict lint enforcement by meaningful category. Close the audit only after in-scope GNU/musl builds, protocol/database compatibility and security/resource checks have recorded actual results. Local quality gates remain required; CI automation findings remain open outside the current implementation plan.
 
 This document preserves the audit and its implementation checklist. Implementation outcomes are recorded by finding status and in §15; baseline measurements describe the original audit.

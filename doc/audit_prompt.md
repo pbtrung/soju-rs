@@ -256,7 +256,7 @@ Use bounded queues and explicit backpressure where appropriate.
 
 Investigate native dependencies and allocator behavior.
 
-Use Miri, sanitizers, and fuzzing where technically supported.
+Use bounded fuzzing where technically supported.
 
 Do not claim that safe Rust eliminates all memory-exhaustion or resource-lifecycle bugs.
 
@@ -505,7 +505,7 @@ Test important invariants, including:
 - Correct error propagation.
 - Stable protocol behavior.
 
-Use `proptest`, `cargo-fuzz`, Miri, and sanitizers where appropriate.
+Use `proptest` and `cargo-fuzz` where appropriate.
 
 Use Loom for selected concurrency primitives when practical.
 
@@ -571,10 +571,7 @@ Also evaluate:
 - `cargo audit`
 - `cargo deny`
 - `cargo machete`
-- Miri
 - Fuzzing
-- AddressSanitizer
-- LeakSanitizer
 - Dependency freshness checks
 
 Run expensive checks in dedicated or scheduled workflows where appropriate.
@@ -609,27 +606,29 @@ Upgrade direct and transitive dependencies, including major versions, and resolv
 
 Configure lints and resolve violations correctly.
 
-**Phase 5 — Memory and concurrency hardening**
+**Phase 5 — Memory and resource safety**
 
-Fix verified resource, async, and safety problems.
+Fix verified resource retention and admission problems.
 
-**Phase 6 — Architecture refactoring**
+**Phase 6 — Async and concurrency**
+
+Fix task ownership, persistence completion, timeouts and responsiveness.
+
+**Phase 7 — Architecture refactoring**
 
 Refactor large files, large functions, duplicated logic, and unnecessarily complex modules.
 
-**Phase 7 — Test expansion**
+**Phase 8 — Test expansion**
 
-Add regression, property-based, integration, and fuzzing coverage.
+Add regression, property-based, integration, fuzzing and resource-soak coverage.
 
-**Phase 8 — CI hardening**
-
-Enforce all practical quality gates.
-
-**Phase 9 — Final verification**
+**Phase 10 — Final verification**
 
 Run the complete test suite and supported release builds.
 
-After every significant phase, verify that the repository remains functional.
+After significant implementation work, verify that the repository remains functional.
+For the current Phase 6 execution, implement STEP-018–020 after STEP-017 before
+running tests and quality gates once at the end, as directed by the user.
 
 Do not combine unrelated breaking changes into one unreviewable modification.
 
@@ -696,7 +695,7 @@ After implementation, produce a structured report containing:
 
 - New tests added.
 - Existing tests preserved.
-- Fuzzing and sanitizer results.
+- Fuzzing and resource-soak results.
 - Commands executed and results.
 
 ### F. CI
@@ -803,7 +802,10 @@ Distinguish confirmed defects from potential risks and optional improvements.
 
 Create a detailed, prioritized implementation plan inside `doc/audit_results.md`.
 
-Organize the plan into sequential phases:
+Organize the plan into sequential phases. Native instrumentation and a dedicated
+CI-hardening phase are excluded by user request. Retain local quality gates and
+record CI findings without adding an implementation phase for them. Preserve
+existing phase/step numbers for stable references:
 
 1. Baseline verification and critical bug fixes.
 2. Rust toolchain and Edition 2024 modernization.
@@ -812,8 +814,7 @@ Organize the plan into sequential phases:
 5. Memory-safety and resource-lifecycle improvements.
 6. Async and concurrency correctness.
 7. Architectural refactoring of large files and functions.
-8. Testing, fuzzing, and sanitizer coverage.
-9. CI/CD hardening.
+8. Testing, fuzzing, and resource-soak coverage.
 10. Final regression testing and production readiness review.
 
 For **every implementation step**, specify:
@@ -851,8 +852,6 @@ Include a verification matrix covering:
 - `cargo doc`
 - Release builds
 - GNU/musl compatibility
-- Miri, where supported
-- Sanitizers, where supported
 - Fuzzing and regression tests
 
 Record actual results as **PASS / FAIL / BLOCKED / NOT RUN**.
@@ -900,7 +899,6 @@ The final `doc/audit_results.md` must contain:
 ### Phase 6 — Async and Concurrency
 ### Phase 7 — Architecture Refactoring
 ### Phase 8 — Testing and Fuzzing
-### Phase 9 — CI Hardening
 ### Phase 10 — Final Verification
 
 ## 12. Verification Matrix
