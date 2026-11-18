@@ -135,7 +135,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** A recently received message can remain in history without its mention marker after orderly restart, or after transient persistence failure.
 - **Recommended fix:** Make mention flushing user/network-owned, preserve batches until successful persistence, and drain them before signalling user completion. Define retry/backoff and deletion behavior; avoid writing markers for a deleted network.
 - **Verification:** Receive a mention then stop before one second; reopen a file DB and assert marker persisted. Inject write failure then recovery, and delete network/user during a pending flush.
-- **Status:** Not Started.
+- **Status:** Completed. Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-019 remains for handler responsiveness.
 
 #### ASYNC-004 — Dropping connection handles does not terminate the writer
 
@@ -660,13 +660,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: mock slow endpoint flood, repeated MARKREAD, shutdown/deletion, subscription-expiry and registration-limit tests.
   - Acceptance/status: queue/task/request limits hold; no unbounded waiter tasks; **Completed**.
 
-- [ ] **STEP-017 (P1): Drain durable mention work before user completion.**
+- [x] **STEP-017 (P1): Drain durable mention work before user completion.**
   - Findings: ASYNC-003. Objective: preserve mention state on orderly stop and retry transient failures.
   - Files: `src/upstream/messages.rs`, `src/user/events.rs`, `src/user/network.rs`, DB helpers and persistence tests.
   - Instructions: own flush scheduling, retain failed batches and merge timestamps monotonically; flush/join before completion; cancel work safely on network/user deletion; keep DB calls off executor threads as settled in STEP-019.
   - Dependencies: STEP-015; responsiveness verification after STEP-019. Risks: shutdown hangs, resurrection after deletion.
   - Verification: stop-before-delay/reopen regression, injected write failure/recovery, delete-during-flush.
-  - Acceptance/status: successful orderly shutdown includes the latest durable mention; errors reported with defined policy; **Not Started**.
+  - Acceptance/status: successful orderly shutdown includes the latest durable mention; errors reported with defined policy; **Completed**.
 
 - [ ] **STEP-018 (P1): Implement autonomous pending-command timeout.**
   - Findings: PROTO-001, PANIC-001. Objective: avoid permanently stuck serial queues and lost terminal replies.
@@ -882,6 +882,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-014 | Bound persistent receipt dirty caches per user to 4,096 entries/4 MiB with write-through pressure handling, lazy 128-row reconnect pages, upsert-only partial flushes and failure-safe accounting. Preserve memory-only receipt lifetime and explicitly exclude it from whole-user memory claims. Seven-sample many-client benchmark documents small-client overhead and removes quadratic enumeration (4,096 clients: 393.526 ms to 3.052 ms). Shared pressure, 10k-row file reload, aliases/legacy bytes, failure/atomic initialization and reconnect/restart tests pass. Full GNU/musl checks (246 tests each), strict Clippy/rustdoc, cargo audit/deny/machete pass; schema 35 and durable rows preserved. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-015 | Remove writer-owned senders/session owners. Explicit shared ownership keeps clones/views valid, cancels abandonment and rate/write waits, and preserves requested graceful draining. Attachment guards remove actor clones and persist receipts after serving-task abort. Idle/blocked/rate/drain/view and both-runtime abort regressions pass, including the ten-second abandoned-writer close bound. Full GNU/musl checks (254 tests each), strict Clippy/rustdoc and documentation checks pass. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-016 | One bounded/coalescing worker per user admits at most 128 pending conversations/1 MiB and one active job; sender-wide semaphore limits encryption/HTTP to 32 requests. Integrate delayed read checks, MARKREAD, overflow metrics, joined stop, network cancellation and registration-test stop tokens. Recheck scoped subscription snapshots and conditionally delete expiry to protect replacement IDs/keys; invalidate subscription caches. Flood/timing/byte/cancel/expiry/owner/global-cap/25-subscription/four-test-slot regressions pass. Full GNU/musl checks (264 tests each), strict Clippy/rustdoc and documentation checks pass; stale Unix-socket fixture now waits for actual refusal. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-017 | Replace detached mention flushes with actor-owned maps/deadlines and joined blocking batch transactions. Clear only after commit, retain/merge failures and retry autonomously; stop flushes all batches with three attempts and explicit failure metrics/logs. Network updates transfer state, deletion is serialized and foreign keys prevent stale resurrection. Stop-before-delay/reopen, rollback/recovery, monotonic/delete-during-flush and permanent-error tests pass. Full GNU/musl checks (269 tests each), strict Clippy/rustdoc and documentation checks pass. STEP-019 remains for handler responsiveness. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

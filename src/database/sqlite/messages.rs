@@ -158,6 +158,32 @@ impl Database {
         Ok(())
     }
 
+    /// Atomically persists a coalesced mention batch without moving timestamps
+    /// backwards. An error rolls back the whole batch for actor-owned retry.
+    ///
+    /// # Errors
+    /// Returns SQLite errors or timestamp encoding failures.
+    pub fn store_message_target_highlights<'a>(
+        &self,
+        network: i64,
+        mentions: impl IntoIterator<Item = (&'a str, Timestamp)>,
+    ) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached("INSERT INTO TargetHighlight(network,target,time) VALUES(?,?,?) ON CONFLICT(network,target) DO UPDATE SET time=excluded.time WHERE time < excluded.time")?;
+            for (target, time) in mentions {
+                stmt.execute(rusqlite::params![
+                    network,
+                    target,
+                    xirc::format_server_time(time)
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     ///
     /// # Errors
     ///

@@ -29,6 +29,7 @@ use crate::{logf, msg};
 mod channels;
 mod delivered;
 mod events;
+mod mentions;
 mod network;
 mod notifications;
 mod upstream_conn;

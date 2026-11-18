@@ -23,6 +23,8 @@ pub struct Metrics {
     pub downstream_in_messages_total: AtomicU64,
     pub upstream_connect_errors_total: AtomicU64,
     pub worker_panics_total: AtomicU64,
+    pub mention_flush_errors_total: AtomicU64,
+    pub mention_shutdown_failures_total: AtomicU64,
 }
 
 pub fn inc(c: &AtomicU64) {
@@ -82,6 +84,16 @@ impl Metrics {
             &self.push.active.load(Ordering::Relaxed),
         );
         let counters = [
+            (
+                "soju_mention_flush_errors_total",
+                "Failed durable mention batch writes",
+                &self.mention_flush_errors_total,
+            ),
+            (
+                "soju_mention_shutdown_failures_total",
+                "Users stopped with unpersisted mentions after retries",
+                &self.mention_shutdown_failures_total,
+            ),
             (
                 "soju_webpush_overflow_total",
                 "Notifications rejected by queue limits",

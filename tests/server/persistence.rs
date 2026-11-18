@@ -243,3 +243,67 @@ pub(super) async fn receipt_playback_survives_disconnect_and_restart() {
         srv.shutdown().await;
     }
 }
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixture setup and assertions must fail immediately on invalid data."
+)]
+pub(super) async fn mention_shutdown_before_delay() {
+    let dir = TestDatabaseDir::new();
+    let path = dir.0.join("mention-stop.db");
+    let source = path.to_str().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db = Database::open(source).unwrap();
+    let mut user = database::User::new(TEST_USERNAME);
+    db.store_user(&mut user).unwrap();
+    let mut network = database::Network::new(&format!(
+        "irc+insecure://{}",
+        listener.local_addr().unwrap()
+    ));
+    network.name = "mention-stop".into();
+    db.store_network(user.id, &mut network).unwrap();
+    let server = Server::new(db, Logger::new(false));
+    server.start().unwrap();
+    let (stream, _) = tokio::time::timeout(TIMEOUT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut upstream = TestConn::new(Box::new(stream));
+    register_upstream(&mut upstream).await;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    assert!(
+        server
+            .get_user(TEST_USERNAME)
+            .unwrap()
+            .send(soju::user::Event::Run(Box::new(move |user| {
+                // Keep the coalescing deadline in the future deterministically, even on
+                // a loaded test host. The normal message path still records the mention.
+                user.networks.first_mut().unwrap().mention_deadline =
+                    Some(tokio::time::Instant::now() + Duration::from_secs(3600));
+                assert!(send.send(()).is_ok());
+            })))
+    );
+    receive.await.unwrap();
+    upstream.send(
+        msg!("PRIVMSG", TEST_USERNAME, "pending at shutdown").with_prefix(Prefix::new("peer")),
+    );
+    upstream.roundtrip().await;
+    server.shutdown().await;
+    assert_eq!(
+        server
+            .metrics
+            .mention_shutdown_failures_total
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    drop(server);
+    let reopened = rusqlite::Connection::open(path).unwrap();
+    let time: String = reopened
+        .query_row(
+            "SELECT time FROM TargetHighlight WHERE network=? AND target='peer'",
+            [network.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(xirc::parse_server_time(&time).is_some());
+}

@@ -60,18 +60,32 @@ impl User {
         }
 
         loop {
-            let ev = match early.pop_front() {
-                Some(ev) => ev,
-                None => match rx.recv().await {
-                    Some(ev) => ev,
+            let ev = if let Some(event) = early.pop_front() {
+                event
+            } else {
+                let next = if let Some(deadline) = self.next_mention_deadline() {
+                    tokio::select! {
+                        biased;
+                        () = tokio::time::sleep_until(deadline) => {
+                            self.flush_mentions(false).await;
+                            continue;
+                        }
+                        event = rx.recv() => event,
+                    }
+                } else {
+                    rx.recv().await
+                };
+                match next {
+                    Some(event) => event,
                     None => break,
-                },
+                }
             };
             crate::server::blocking(|| self.handle_event(ev));
             if self.stopped {
                 break;
             }
         }
+        self.flush_mentions_on_stop().await;
         self.notifications.shutdown().await;
         self.close_msg_store();
     }

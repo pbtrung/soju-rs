@@ -216,3 +216,32 @@ cancellation, delay transitions, latest read receipts, expiry/replacement/owner
 isolation, the full global request semaphore and subscription/test-slot limits
 on both Tokio runtimes. The stalled delivery test uses an injected pending
 future; it is not a remote endpoint throughput or whole-server soak result.
+
+## Durable mentions
+
+The user actor owns each network's pending mention map and coalesces the latest
+timestamp per conversation. One actor deadline flushes due batches after one
+second; no detached per-network flush task holds a second copy of live state.
+SQLite writes a batch transactionally and only advances stored timestamps.
+The actor awaits started blocking work and clears pending state only after a
+successful commit. Failed batches remain pending, merge newer timestamps and
+retry after five seconds even without another incoming message.
+
+Orderly user stop cancels network activity and flushes every remaining batch,
+regardless of its coalescing deadline, before the user completion signal. Stop
+makes up to three attempts with 100-ms pauses. SQLite's existing five-second
+busy timeout applies to each attempt; total stop time also depends on the
+number and size of networks/batches. Permanent errors are logged explicitly
+and counted by `soju_mention_shutdown_failures_total`; such a stop may have
+incomplete durable mentions. `soju_mention_flush_errors_total` counts failed
+batch attempts. Pending mention maps are outside the history/receipt/push
+budgets described above; this is a durability policy, not a whole-user bound.
+
+Actor serialization orders a network deletion after any active flush. Removing
+a network drops its pending map; foreign keys reject a stale batch if deletion
+occurs externally while it waits for a writer lock. Network updates transfer
+the pending map and deadline together. Regressions verify stop before a future
+coalescing deadline followed by file reopen, transaction rollback, retained
+failure/recovery, monotonic timestamps, deletion during a blocked flush and
+reported permanent shutdown failures. Current-thread actor-handler database
+responsiveness remains the separate STEP-019 work.

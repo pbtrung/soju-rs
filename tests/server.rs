@@ -66,6 +66,7 @@ test_on_both_runtimes!(
     receipt_playback_survives_disconnect_and_restart,
     aborted_downstream_session,
     webpush_subscription_limit,
+    mention_shutdown_before_delay,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -505,8 +506,8 @@ use cases_read_markers::{read_marker, unread_targets};
 #[path = "server/persistence.rs"]
 mod cases_persistence;
 use cases_persistence::{
-    disconnected_client_history, receipt_playback_survives_disconnect_and_restart,
-    sqlite_history_survives_restart,
+    disconnected_client_history, mention_shutdown_before_delay,
+    receipt_playback_survives_disconnect_and_restart, sqlite_history_survives_restart,
 };
 
 #[path = "server/messages.rs"]

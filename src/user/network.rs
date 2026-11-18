@@ -39,8 +39,9 @@ pub struct Network {
     /// The user's event loop is their only writer: incoming messages check
     /// them without a database query.
     pub message_targets: HashMap<String, db::MessageTarget>,
-    /// Mentions to store, by conversation, see `upstream::record_mention`
-    pub pending_mentions: Arc<Mutex<HashMap<String, Timestamp>>>,
+    /// Actor-owned mentions awaiting the delayed durable flush, by conversation.
+    pub pending_mentions: HashMap<String, Timestamp>,
+    pub mention_deadline: Option<tokio::time::Instant>,
 }
 
 impl Network {
@@ -71,7 +72,8 @@ impl Network {
             casemap: xirc::CASEMAPPING_RFC1459,
             push_targets: Arc::new(Mutex::new(CaseMappingMap::new(cm))),
             message_targets: HashMap::new(),
-            pending_mentions: Arc::default(),
+            pending_mentions: HashMap::new(),
+            mention_deadline: None,
         }
     }
 
@@ -475,6 +477,7 @@ impl User {
         updated.push_targets = old.push_targets;
         updated.message_targets = old.message_targets;
         updated.pending_mentions = old.pending_mentions;
+        updated.mention_deadline = old.mention_deadline;
         if updated.record.enabled {
             updated.last_error = old.last_error;
         }

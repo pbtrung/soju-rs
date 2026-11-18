@@ -1,7 +1,7 @@
 //! Messages relayed to downstreams, batches, errors and the message store.
 
 use super::{
-    Duration, ERR_ERRONEUSNICKNAME, ERR_NEEDMOREPARAMS, ERR_NICKCOLLISION, ERR_NICKNAMEINUSE,
+    ERR_ERRONEUSNICKNAME, ERR_NEEDMOREPARAMS, ERR_NICKCOLLISION, ERR_NICKNAMEINUSE,
     ERR_NOPERMFORHOST, ERR_NOSUCHNICK, ERR_NOSUCHSERVER, ERR_PASSWDMISMATCH, ERR_UNAVAILRESOURCE,
     ERR_UNKNOWNCOMMAND, ERR_UNKNOWNERROR, ERR_YOUREBANNEDCREEP, Message, RPL_CREATED,
     RPL_GLOBALUSERS, RPL_LOCALUSERS, RPL_LUSERCHANNELS, RPL_LUSERCLIENT, RPL_LUSERME, RPL_LUSEROP,
@@ -182,7 +182,7 @@ pub(super) fn handle_message(
             if mention && u.has_chathistory_store() {
                 // Clients learn which conversations mention them from
                 // CHATHISTORY TARGETS, without loading their history
-                record_mention(u, ni, cm(&buffer_name), timestamp);
+                u.record_mention(ni, cm(&buffer_name), timestamp);
             }
 
             if send_web_push {
@@ -428,46 +428,6 @@ fn handle_detached_message(u: &mut User, ni: usize, name: &str, msg: &Message, h
         u.attach_channel(ni, name);
         u.store_channel(ni, name);
     }
-}
-
-/// How long mentions are coalesced before they're stored: a flood of
-/// private messages costs one write per conversation and period.
-const MENTION_FLUSH_DELAY: Duration = Duration::from_secs(1);
-
-/// Records the latest mention of a conversation, stored by one background
-/// task per network along with the others of the period.
-fn record_mention(u: &mut User, ni: usize, target_cm: String, time: Timestamp) {
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Actor indices are resolved by lookup or bounded iteration and stay stable during this synchronous handler."
-    )]
-    let net = &u.networks[ni];
-    let mut pending = crate::state_lock::lock(&net.pending_mentions);
-    let first = pending.is_empty();
-    let t = pending.entry(target_cm).or_insert(time);
-    *t = (*t).max(time);
-    if !first {
-        return;
-    }
-    drop(pending);
-    let pending = net.pending_mentions.clone();
-    let srv = u.srv.clone();
-    let logger = net.logger.clone();
-    let net_id = net.id();
-    tokio::spawn(async move {
-        tokio::time::sleep(MENTION_FLUSH_DELAY).await;
-        let mentions = std::mem::take(&mut *crate::state_lock::lock(&pending));
-        let r = db::run(&srv.db, move |db| {
-            for (target, time) in &mentions {
-                db.store_message_target_highlight(net_id, target, *time)?;
-            }
-            Ok(())
-        })
-        .await;
-        if let Err(e) = r {
-            logf!(logger, "failed to record mentions: {e}");
-        }
-    });
 }
 
 /// Appends a message to the message store. Returns the internal message
