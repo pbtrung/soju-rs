@@ -541,12 +541,14 @@ async fn pending_timeout_is_autonomous_labeled_and_isolates_late_replies() {
     // both requests. Pausing after TCP setup avoids timing the OS handshake.
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(31)).await;
+    // Actor handlers now run on real blocking threads; resume before waiting
+    // for their replies so paused-time auto-advance cannot outrun the handoff.
+    tokio::time::resume();
     for (target, label) in [("ghost", "first"), ("next", "second")] {
         let reply = env.downstream.read_until("318").await;
         assert_eq!(reply.params.get(1).map(String::as_str), Some(target));
         assert_eq!(reply.tags.get("label"), Some(label));
     }
-    tokio::time::resume();
     assert_eq!(env.srv.metrics.pending_command_timeouts_total.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert!(handle.send(crate::user::Event::UpstreamMessage {net_id: network, conn_id: connection, msg: msg!("318", USERNAME, "next", "late terminal reply"), permit: None}));
     env.downstream.send(msg!("PING", "late-reply-barrier"));

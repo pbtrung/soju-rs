@@ -30,7 +30,8 @@ migration/reopen behavior, FTS, foreign keys, delivery cursors and ID allocation
 Tokio explicitly enables filesystem, buffered I/O, macros, networking, runtime,
 signals, synchronization and timers. Unused process/stdio support is removed.
 The existing parking_lot locking backend is retained; the dev dependency adds
-only test-util to the production feature set.
+only test-util to the production feature set. Tokio-util explicitly enables `rt`
+for owned maintenance task tracking in STEP-019.
 
 rusqlite explicitly enables bundled native SQLite, statement caching and scalar
 functions. STEP-014 uses connection-local scalar functions for bounded receipt

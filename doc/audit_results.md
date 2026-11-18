@@ -688,7 +688,7 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Instructions: measure the existing stall, then choose the smallest ownership-safe runtime/blocking-worker design; retain event serialization. Ensure started blocking work and shutdown have defined completion semantics.
   - Dependencies: STEP-008. Risks: worker handoff overhead and actor ordering.
   - Verification: current-thread/multi-thread contention, expiry/VACUUM, latency and normal-throughput comparison.
-  - Acceptance/status: stated timer/connection latency bound met under controlled contention; no per-message unbounded spawning; **Not Started**.
+  - Acceptance/status: stated timer/connection latency bound met under controlled contention; no per-message unbounded spawning; **In Progress**. Implementation written; contention/throughput measurements and gates deferred until STEP-020 per user direction.
 
 - [ ] **STEP-020 (P1): Validate OAuth discovery trust and body limits.**
   - Findings: AUTH-001. Objective: bind provider metadata to the configured issuer.

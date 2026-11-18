@@ -29,16 +29,25 @@ pub use configuration::load_server_config;
 
 pub const DOWNSTREAM_REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Runs synchronous code that may block on SQLite calls (e.g. a user's
-/// event handlers). On a multi-threaded runtime, the runtime moves its
-/// other tasks to another worker meanwhile. A current-thread runtime has no
-/// other worker: the code just runs.
-pub fn blocking<R>(f: impl FnOnce() -> R) -> R {
-    use tokio::runtime::{Handle, RuntimeFlavor};
-    if Handle::current().runtime_flavor() == RuntimeFlavor::MultiThread {
-        tokio::task::block_in_place(f)
-    } else {
+/// Runs one owned actor job off async workers, with at most 16 admitted jobs
+/// across the process. Callers await completion before handling another event.
+/// Started work runs to completion even if its awaiting future is cancelled.
+///
+/// # Errors
+/// Returns an error if runtime shutdown cancels a job before it starts.
+///
+/// # Panics
+/// Resumes a panic from the actor job so existing worker supervision records it.
+pub async fn blocking<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> Result<R> {
+    static ACTOR_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+    let permit = ACTOR_WORKERS.acquire().await?;
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         f()
+    }).await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => Err(anyhow!(error).context("actor job cancelled before completion")),
     }
 }
 
@@ -84,6 +93,8 @@ pub struct Server {
     shutdown: AtomicBool,
     stop: CancellationToken,
     next_downstream_id: AtomicU64,
+    maintenance_tasks: tokio_util::task::TaskTracker,
+    expiry_state: Mutex<maintenance::ExpiryState>,
     pub(crate) accepted_sessions: Arc<crate::listen::SessionBudget>,
     /// Shared with the TLS client certificate verifier
     pub client_cert_auth: Arc<AtomicBool>,
@@ -103,6 +114,8 @@ impl Server {
             shutdown: AtomicBool::new(false),
             stop: CancellationToken::new(),
             next_downstream_id: AtomicU64::new(1),
+            maintenance_tasks: tokio_util::task::TaskTracker::new(),
+            expiry_state: Mutex::default(),
             accepted_sessions: Arc::default(),
             client_cert_auth: Arc::new(AtomicBool::new(false)),
         })
@@ -135,8 +148,7 @@ impl Server {
         let expiry_changed = cfg.basic.message_expiry != cur.basic.message_expiry;
         self.set_config(cfg);
         if expiry_changed {
-            let srv = self.clone();
-            tokio::spawn(async move { srv.run_message_expiry(true).await });
+            self.schedule_message_expiry(true);
         }
     }
 
@@ -182,7 +194,7 @@ impl Server {
         }
 
         let srv = self.clone();
-        tokio::spawn(async move {
+        self.maintenance_tasks.spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_hours(4));
             ticker.tick().await;
             loop {
@@ -199,7 +211,7 @@ impl Server {
         // Expired messages are deleted daily, the first time on startup,
         // see startup_maintenance
         let srv = self.clone();
-        tokio::spawn(async move {
+        self.maintenance_tasks.spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_hours(24));
             ticker.tick().await;
             loop {
@@ -207,7 +219,7 @@ impl Server {
                     _ = ticker.tick() => {}
                     () = srv.stop.cancelled() => return,
                 }
-                srv.run_message_expiry(false).await;
+                srv.schedule_message_expiry(false);
             }
         });
         Ok(())
@@ -248,8 +260,15 @@ impl Server {
     /// Stops all users and waits for them to finish.
     pub async fn shutdown(&self) {
         logf!(self.logger, "shutting down server");
-        self.stop.cancel();
         self.shutdown.store(true, Ordering::SeqCst);
+        self.stop.cancel();
+        {
+            // Scheduling registers tracked work while holding this same lock.
+            // Once closed, no later reload can enqueue maintenance.
+            let mut expiry = crate::state_lock::lock(&self.expiry_state);
+            expiry.requested = None;
+            self.maintenance_tasks.close();
+        }
         let handles: Vec<UserHandle> = crate::state_lock::lock(&self.users)
             .values()
             .cloned()
@@ -261,6 +280,7 @@ impl Server {
         for h in handles {
             h.done.cancelled().await;
         }
+        self.maintenance_tasks.wait().await;
     }
 
     pub fn stopped(&self) -> CancellationToken {
@@ -420,6 +440,10 @@ impl Server {
     pub fn accepted_sessions(&self) -> usize {
         self.accepted_sessions.active()
     }
+
+    /// Fixed maintenance timers and any coalesced expiry worker still running.
+    #[must_use]
+    pub fn maintenance_tasks(&self) -> usize { self.maintenance_tasks.len() }
 
     pub fn render_metrics(&self) -> String {
         format!(

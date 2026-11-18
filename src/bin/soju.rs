@@ -115,9 +115,8 @@ fn main() -> ExitCode {
         println!("soju-rs v{}", soju::VERSION);
         return ExitCode::SUCCESS;
     }
-    // With a single CPU, a multi-threaded runtime has nothing to run in
-    // parallel: it only adds thread hand-offs on every event, and spreads
-    // allocations over more threads.
+    // Keep async networking on one worker on single-CPU hosts. User handlers
+    // and SQLite work use the bounded blocking boundary on either runtime.
     let single_cpu = std::thread::available_parallelism().map_or(true, |n| n.get() == 1);
     let mut builder = if single_cpu {
         tokio::runtime::Builder::new_current_thread()

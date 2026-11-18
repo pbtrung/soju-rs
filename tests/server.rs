@@ -67,6 +67,7 @@ test_on_both_runtimes!(
     aborted_downstream_session,
     webpush_subscription_limit,
     mention_shutdown_before_delay,
+    sqlite_contention_does_not_stall_network_timers,
 );
 
 const TEST_USERNAME: &str = "soju-test-user";
@@ -525,3 +526,7 @@ use cases_service::{service_blocking_work, service_other_user, user_network_chan
 #[path = "server/lifecycle.rs"]
 mod cases_lifecycle;
 use cases_lifecycle::{aborted_downstream_session, webpush_subscription_limit};
+
+#[path = "server/blocking.rs"]
+mod cases_blocking;
+use cases_blocking::sqlite_contention_does_not_stall_network_timers;

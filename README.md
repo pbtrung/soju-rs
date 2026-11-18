@@ -154,7 +154,9 @@ Behaviour changes:
 
 `cargo test` runs unit tests and the integration tests ported from upstream,
 the latter on both the multi-threaded and the current-thread runtime (soju-rs
-uses the current-thread one on machines with a single CPU). GitHub Actions
+uses the current-thread one on machines with a single CPU). Owned actor
+handlers run on bounded blocking workers on either runtime so SQLite contention
+does not block the async networking thread. GitHub Actions
 runs the Cargo suite for GNU and musl in the latest Arch Linux image when
 manually triggered with **Run workflow**. It also runs the following
 compatibility checks:

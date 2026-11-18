@@ -267,3 +267,32 @@ queued; queued requests can wait behind responsive commands. Timer handling
 occurs at actor event boundaries and therefore also depends on the current
 handler's completion. STEP-019 provides the separate blocking-work execution
 boundary. STEP-018 implementation and regressions await the final Phase 6 gates.
+
+## Actor database work and maintenance
+
+Every user event transfers exclusive actor ownership to a blocking job, and the
+async loop awaits that job before handling another event. The process admits
+at most 16 actor jobs before spawning blocking work. This applies on both Tokio
+runtimes, including the single-CPU current-thread networking runtime. Queued
+input retains its existing connection permits; no separate waiter task is
+spawned for each message. A started job completes even if its awaiting future
+is cancelled, and actor panics are resumed for existing worker supervision.
+
+A contended operation still delays that user's subsequent serialized events;
+the boundary keeps independent async networking/timers from blocking on its
+SQLite mutex/write wait. It does not make SQLite concurrent or remove its
+five-second busy timeout. Handoffs add overhead to light handlers; the controlled
+baseline/worker comparison is `cargo bench --bench reader -- --actor-boundary`.
+The comparison includes a 10-ms timer during a 250-ms SQLite writer lock and
+seven-sample lightweight event-handoff costs on both runtimes. Measurements and
+regression outcomes are deferred to the final Phase 6 gates.
+
+Expiry reloads coalesce into one tracked maintenance worker with one pending
+request instead of spawning a waiter per reload. Fixed maintenance timers and
+started expiry/VACUUM work are tracked; server shutdown prevents new scheduling
+and waits for started work after stopping users. Startup maintenance is awaited
+by its caller. Regression code holds a separate writer transaction for 600 ms,
+checks independent duplex I/O and a 10-ms timer within 200 ms, preserves event
+order, coalesces 1,000 expiry reloads into at most three tracked tasks and checks
+that shutdown leaves none. This controlled bound does not promise latency under
+arbitrary host load or for a user's own operation waiting on the database.

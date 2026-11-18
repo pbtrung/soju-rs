@@ -81,7 +81,14 @@ impl User {
                     None => break,
                 }
             };
-            crate::server::blocking(|| self.handle_event(ev));
+            let logger = self.logger.clone();
+            self = match crate::server::blocking(move || {
+                self.handle_event(ev);
+                self
+            }).await {
+                Ok(actor) => actor,
+                Err(error) => { logf!(logger, "actor execution failed: {error}"); return; }
+            };
             if self.stopped {
                 break;
             }

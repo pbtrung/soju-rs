@@ -196,3 +196,35 @@ async fn concurrent_creation_cannot_escape_the_shutdown_snapshot() {
         assert_eq!(server.user_records(), [] as [crate::database::User; 0]);
     }
 }
+
+#[tokio::test]
+async fn actor_blocking_admission_is_bounded_and_started_work_is_joined() -> Result<()> {
+    use std::sync::atomic::AtomicUsize;
+    struct Release(Arc<AtomicBool>);
+    impl Drop for Release {
+        fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+    }
+    let released = Arc::new(AtomicBool::new(false));
+    let release = Release(released.clone());
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let mut tasks = Vec::new();
+    for _ in 0..32 {
+        let (released, active, maximum) = (released.clone(), active.clone(), maximum.clone());
+        tasks.push(tokio::spawn(blocking(move || {
+            let count = active.fetch_add(1, Ordering::Relaxed) + 1;
+            maximum.fetch_max(count, Ordering::Relaxed);
+            while !released.load(Ordering::Acquire) { std::thread::sleep(Duration::from_millis(1)); }
+            active.fetch_sub(1, Ordering::Relaxed);
+        })));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while active.load(Ordering::Relaxed) != 16 { tokio::task::yield_now().await; }
+    }).await?;
+    assert_eq!(maximum.load(Ordering::Relaxed), 16);
+    drop(release);
+    for task in tasks { task.await??; }
+    assert_eq!(active.load(Ordering::Relaxed), 0);
+    assert_eq!(maximum.load(Ordering::Relaxed), 16);
+    Ok(())
+}
