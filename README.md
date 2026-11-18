@@ -22,6 +22,9 @@ soju -config /etc/soju/config
 sojuctl -config /etc/soju/config user create -username alice -password '<password>' -admin
 ```
 
+For upstream TLS handshake failures, see [TLS troubleshooting](doc/tls-troubleshooting.md),
+including the P2P-NET server-selection workaround.
+
 The SQLite database holds credentials, keys and history. Keep its directory
 private and back it up before upgrading. The current schema is 35; older
 soju-rs and upstream soju cannot open an upgraded database. Read the

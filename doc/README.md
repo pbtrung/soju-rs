@@ -8,6 +8,7 @@ commands and configuration; the audit records describe dated verification.
 | Guide | What it covers |
 | --- | --- |
 | [Getting started](getting-started.md) | Complete configuration, TLS, systemd, accounts and clients |
+| [TLS troubleshooting](tls-troubleshooting.md) | Upstream handshake failures and the P2P-NET server-selection workaround |
 | [Server manual](soju.1.scd) | Configuration directives and BouncerServ commands |
 | [Administration manual](sojuctl.1.scd) | Admin socket and `sojuctl` |
 | [Resource limits](resource-limits.md) | Admission, history/cache limits, overload and shutdown behavior |
