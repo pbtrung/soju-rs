@@ -4,14 +4,21 @@
 
 ## 11. Step-by-Step Implementation Plan
 
-Native instrumentation requirements are excluded. STEP-026 retains resource-soak
-measurements. CI findings remain open outside the implementation scope.
-Final verification is Phase 9; step IDs follow checklist order. After STEP-018,
-the remaining Phase 6 implementations preceded one final test/gate run. For Phases 7–8,
-the user requested compilation checks only between steps and combined tests,
-lint and gates after all implementations in the phase were written.
+This is the authoritative checklist for the 2026-11-17–18 audit. All nine phases
+and 28 steps are verified with the limitations in
+[final verification](final-verification.md). Finding status remains in
+[findings](findings.md); CI findings are open outside implementation scope.
 
-This is the authoritative implementation checklist; Phases 1–9 are verified with the limitations in [final verification](final-verification.md). P0 means immediate operational protection; P1 means correctness/resource/required gates; P2 means maintainability/extended verification. Completed checkboxes record verified audit or implementation work. Each step must update its related findings, record executed checks, and keep the checkout functional before proceeding. The user authorized implementation through the final Phase 9. Earlier steps used the requested commit/push workflow; Phases 7–8 implement all steps in the phase before combined testing/lint/gates, with only compilation checks permitted between steps. Release publication and other remote mutations remain outside authorization.
+Priorities: P0 is immediate operational protection; P1 is correctness, resource
+control or required gates; P2 is maintainability or extended verification.
+A completed checkbox records executed work and verification, not a guarantee
+about untested deployments. Step descriptions preserve their implementation
+instructions and acceptance criteria for review.
+
+The historical execution sequence is recorded in [progress](progress.md).
+Native instrumentation was excluded; STEP-026 retains resource measurements.
+Phases 7–8 used compilation checks between steps and combined gates after each
+phase. This checklist does not authorize remote mutations or release publication.
 
 ### Phase 1 — Baseline and Critical Fixes
 

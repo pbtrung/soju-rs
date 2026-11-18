@@ -4,7 +4,7 @@
 
 ## 5. Dependency Upgrade Assessment
 
-The completed upgrade/feature review and all 34 retained parent-version
+The completed upgrade/feature review and retained parent-version
 constraints are documented in [dependency maintenance](dependencies.md).
 The original dated inventory below remains for comparison.
 
@@ -33,7 +33,7 @@ vulnerabilities or advisory warnings and the full deny policy passes.
 
 All 35 direct dependencies and every registry package name in Cargo.lock were queried against the live crates.io API during this run; no API query errors remained. Stable, non-yanked versions are the comparison target. These results are a dated inventory, **not proof that each latest transitive can satisfy its parents**. No upgrade was applied during the original audit; implementation updates are recorded above.
 
-Source for each row: `https://crates.io/api/v1/crates/<crate>` (linked below). The full raw query snapshot is temporarily in `/tmp/soju-audit-deps.json`; this report preserves actionable version differences so that implementation does not depend on that temporary file.
+Source for each row: `https://crates.io/api/v1/crates/<crate>` (linked below). The tables preserve the actionable version differences observed on the audit date.
 
 | Direct crate | Declared / locked | Latest stable (2026-11-17) | Assessment |
 | --- | --- | --- | --- |
@@ -122,6 +122,6 @@ All remaining locked-to-latest differences (excluding direct crates already abov
 
 Compatible candidates include bumpalo, cc, errno, mio, rustls-webpki and zeroize patch updates. Parent-constrained breaking lines include parking_lot/lock_api, tower-http, nom, syn, ASN.1/Windows/WASI dependencies and older getrandom/untrusted. Some entries are platform-only or optional rather than part of the tested Linux feature graph. Upgrade parents where supported, or document the constraint; do not require every package to share its global latest release. Default active-target `cargo tree --duplicates` reports only `untrusted` 0.7.1 (AWS-LC) and 0.9.0 (webpki); neither duplication alone establishes waste or a vulnerability.
 
-`cargo update --dry-run --offline` found zero updates using the **cached index**. This does not contradict the live API: it shows why a refreshed index is required before the implementation refresh. Neither Cargo.lock nor manifests changed during that original dry run. At audit time `cargo outdated`, `cargo audit`, `cargo deny`, and `cargo machete` were unavailable. Current implementation results are in [§12](verification.md#12-verification-matrix): audit/deny/machete were subsequently installed; cargo-outdated remains absent. No memory-safety proof or advisory suppression is claimed. Direct source usage was reviewed; no dependency was proven safely removable. Tokio's broad `full` feature merits a later feature audit, not an untested feature reduction.
+`cargo update --dry-run --offline` found zero updates using the **cached index**. This does not contradict the live API: it shows why a refreshed index is required before the implementation refresh. Neither Cargo.lock nor manifests changed during that original dry run. At audit time `cargo outdated`, `cargo audit`, `cargo deny`, and `cargo machete` were unavailable. Later implementation results are in [verification](verification.md): audit/deny/machete were installed and ran during implementation, but were absent again in the final session; cargo-outdated was not provisioned. No memory-safety proof or advisory suppression is claimed. Direct source usage was reviewed; no dependency was proven safely removable. Tokio's original `full` feature was subsequently replaced with an explicit feature list during STEP-007; the original inventory above describes the baseline.
 
 Native assessment: application code has no unsafe/FFI calls to justify bypassing safety checks. Native code remains in SQLite, AWS-LC and mimalloc. Both deployment targets must retain native build/static-link checks. Keep the current allocator until representative memory measurements justify a change. Dependency freshness is not a substitute for an advisory/native security review.

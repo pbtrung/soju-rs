@@ -3,7 +3,9 @@
 Mutable user and network state belongs to the user actor. Each event completes
 before the next event runs. Handlers execute through the bounded blocking
 boundary described in [resource limits](resource-limits.md#actor-database-work-and-maintenance).
-The Phase 7 refactor preserves this ownership and existing wire behavior.
+See the [development guide](../development.md) for the source map and checks.
+The Phase 7 refactor preserved this ownership and wire behavior; its verification
+is recorded separately from this description of the boundaries.
 
 ## History requests
 

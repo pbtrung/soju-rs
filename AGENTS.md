@@ -18,7 +18,9 @@ It is one Edition 2024 Cargo package with a library and two binaries:
 | `tests/compat/` | Go soju, ergo, IRCv3 and gamja compatibility tooling |
 | `doc/`, `scripts/` | Maintained documentation and build/release/benchmark tooling |
 
-Start with [doc/README.md](doc/README.md) for documentation. Historical
+Start with [doc/README.md](doc/README.md) for documentation and
+[the development guide](doc/development.md) for the human-oriented source map
+and verification workflow. Historical
 investigations are under `doc/archive/`; their old measurements and commands
 are not current implementation requirements.
 
@@ -78,9 +80,8 @@ scenarios use both current-thread and multi-thread Tokio runtimes; retain both.
 Socket tests need permission to bind local TCP/Unix sockets. Report sandbox
 failures separately and use the available approval mechanism to rerun them.
 
-`Cargo.toml` enforces the complete practical compiler/Clippy baseline after
-STEP-012, including unsafe prohibition, pedantic, numeric/indexing, unwrap/expect,
-must-use/future and error-mapping checks. Keep exceptions on the specific
+`Cargo.toml` enforces the compiler/Clippy baseline, including unsafe prohibition,
+pedantic, numeric/indexing, unwrap/expect, must-use/future and error-mapping checks. Keep exceptions on the specific
 statement, block, parameter or test that needs them, with an explicit reason.
 Current exceptions describe validated actor/IRC indices, bounded parser cursors,
 fixed UTF-8/constants, cancelled deliveries, the final stderr sink, deliberate
@@ -94,7 +95,7 @@ recovers after transaction rollback, with regression coverage. Operational error
 must be handled or propagated.
 
 - Rustdoc changes: run `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`.
-  Strict rustdoc passes after STEP-012; retain a warning-clean documentation build.
+  Retain a warning-clean documentation build.
 - Markdown-only changes: check relative links/anchors, obsolete references
   and `git diff --check`; a full Rust rebuild is unnecessary.
 - Shell changes: `bash -n` changed shell scripts; use ShellCheck if installed.
@@ -109,8 +110,8 @@ must be handled or propagated.
   `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc` as in CI when needed.
 - Dependency review: run cargo audit, `cargo deny --all-features --locked check`
   and `cargo machete --with-metadata` when available. The full deny policy
-  passes after STEP-008 replaced chrono with Jiff. Do not suppress advisories
-  to bypass future failures. See
+  passed in the Jiff migration review; refresh it when dependencies change.
+  Do not suppress advisories to bypass future failures. See
   [dependency maintenance](doc/audit/dependencies.md) for constraints and results.
 
 CI currently has separate manually dispatched Tests and Build and Release

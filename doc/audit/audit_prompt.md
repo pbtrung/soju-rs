@@ -8,6 +8,11 @@
 
 **Scope:** Entire repository, including source code, dependencies, build scripts, tests, CI, and documentation.
 
+This is the preserved audit request and reporting template. Its original
+audit-only execution rule applies when invoking that workflow. For ordinary
+repository work, use [development](../development.md) and [AGENTS.md](../../AGENTS.md);
+for completed results, start with the [audit summary](../audit_results.md).
+
 > Current record layout: [summary](../audit_results.md), [findings](findings.md),
 > [implementation checklist](implementation-plan.md), [verification](verification.md)
 > and [progress](progress.md). Native instrumentation is excluded.

@@ -2,11 +2,14 @@
 
 Reviewed on 2026-11-17 with Rust 1.100.0. The package uses 35 direct
 dependencies; the reduced lockfile contains 266 packages including soju.
+This is a dated assessment, not a live dependency or advisory inventory. The
+final session could not rerun dependency scanners; see
+[final verification](final-verification.md#inputs-and-local-gates).
 The original inventory remains in [the audit report](dependency-assessment.md#5-dependency-upgrade-assessment).
 
 ## Completed updates
 
-| Dependency | Previous | Current |
+| Dependency | Before review | After review |
 | --- | --- | --- |
 | rand | 0.10.3 | 0.10.4 |
 | rusqlite | 0.42.0 | 0.43.0 |
@@ -55,15 +58,22 @@ Duplicate major versions remain visible warnings; they are not suppressed.
 No advisory IDs are ignored.
 
 **Resolved:** [DEPS-002 / STEP-008](findings.md#deps-002--replace-unmaintained-chrono-with-jiff)
-replaces chrono with [Jiff 1.0.0](https://docs.rs/jiff/1.0.0/jiff/), the current
-stable release reviewed on 2026-11-17. chrono and its timezone backend are absent
-from the lockfile. A fresh RustSec scan reports zero known vulnerabilities and
-no advisory warnings. The full cargo-deny check passes without advisory ignores;
+replaces chrono with [Jiff 1.0.0](https://docs.rs/jiff/1.0.0/jiff/), the
+stable release selected on 2026-11-17. chrono and its timezone backend are absent
+from the lockfile. The scan after that migration reported zero known vulnerabilities and
+no advisory warnings. The full cargo-deny check passed without advisory ignores;
 its existing duplicate-major warnings for syn and untrusted remain visible.
 
 Checks used cargo-audit 0.23.0, cargo-deny 0.21.0 and cargo-machete 0.10.1.
 Tools were installed into a temporary directory for this run; they are not
-repository dependencies. With those tools installed on PATH, repeat:
+repository dependencies. For future reviews, install the tools on PATH and follow the procedure below.
+
+## Reviewing future updates
+
+Inspect dry-run changes before updating the lockfile. Review breaking parent
+updates and native SQLite/crypto changes separately, then run the GNU/musl gates
+in [development](../development.md#native-and-protocol-changes). To refresh the
+version graph and dependency checks:
 
 ```sh
 cargo update --dry-run
@@ -113,9 +123,9 @@ for system zoneinfo and platform fallback support.
 
 ## Remaining parent-constrained versions
 
-A refreshed registry dry run finds no remaining compatible updates. The
-following locked versions differ from the latest stable releases in the
-live crates.io inventory. The parent requirements explain why ordinary
+The registry dry run on the review date found no remaining compatible updates. The
+following locked versions differ from the stable releases in the
+crates.io inventory captured on the review date. The parent requirements explain why ordinary
 resolution cannot advance them. Some parents are optional or platform-specific;
 GNU/musl verification does not establish support for other targets. Revisit
 these rows when parents publish compatible updates.

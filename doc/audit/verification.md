@@ -50,14 +50,14 @@ later hardening verification is recorded separately below.
 | STEP-009 core lint policy | PASS | fmt/check, strict all-target Clippy on GNU/musl, 223 tests per target, reader smoke/doc tests; four new operational boundary regressions; rustdoc retains 13 existing warnings |
 | STEP-008 Jiff migration | PASS | fmt/check/strict Clippy; 219 tests per GNU/musl target plus reader smoke/doc tests; legacy TEXT/schema/FTS/cursor/ID preservation; timezone/DST and temporal boundary fixtures; both optimized releases/static-link/CLI; rustdoc with 13 existing warnings |
 | Live registry dry run after upgrades | PASS | `cargo update --dry-run`: zero compatible updates |
-| Current advisory scan | PASS | STEP-008: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
+| Advisory scan after STEP-008 | PASS | STEP-008: cargo-audit 0.23.0 reports zero known vulnerabilities and no advisory warnings |
 | Full dependency policy | PASS | STEP-008: cargo-deny 0.21.0 accepts advisories, bans, licenses and sources; existing syn/untrusted duplicate warnings remain; no advisory ignored |
 | License/source/duplicate policy subset | PASS | `cargo deny --all-features --locked check bans licenses sources`; parent-owned duplicates remain warnings |
 | Unused direct dependency analysis | PASS | cargo-machete 0.10.1 with metadata finds no unused direct requirements |
 
 Tool installation and registry-fetch failures under the restricted sandbox
-were retried with approved access. Tools live under `/tmp/soju-audit-tools`;
-registry/analysis logs use `/tmp/soju-step-<step>-*.log` and advisory JSON files.
+were retried with approved access. Tools were installed for those checks;
+the recorded versions and outcomes above describe that execution.
 The STEP-008 dependency graph removes chrono; the advisory gate now passes without exceptions.
 
 ### Final verification through Phase 6
@@ -81,11 +81,8 @@ resolved failures rather than counted as passes.
 | External Go/ergo/IRCv3/plumbing/gamja comparison | NOT RUN | External environment remains unprovisioned; no transcript-equivalence claim |
 | Sustained resource soak and parser fuzz corpus | NOT RUN | Remain future STEP-025–026 work; finite regressions and benchmarks are not a long soak |
 
-Final check logs use `/tmp/soju-step-phase6-final-check-*.log` and
-`/tmp/soju-phase6-final-*.log`. Benchmarks use fixed finite workload counts;
-their timing values are specific to the measured host and runtime choices.
-
-Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, `soju-audit-all-targets.log`, `soju-audit-musl.log`, `soju-audit-doc.log`, `soju-audit-strict-doc.log`, `soju-audit-strict-clippy.log`, `soju-audit-release.log`, `soju-audit-musl-release.log`, `soju-audit-update-dry-run.log`. Paths after the first share `/tmp/`. Temporary files are convenience evidence, not durable repository artifacts; key outcomes are recorded here.
+Benchmarks use fixed finite workload counts; their timing values are specific
+to the measured host and runtime choices.
 
 ### Final verification through Phase 7
 
@@ -120,15 +117,10 @@ package artifacts were cleared and final GNU/musl gates rerun, explicitly checki
 the new registry test and 213-library-test counts. The later baseline binaries
 use a separate explicit GNU target directory. Original Go and Rust comparison
 failures are retained rather than counted as passing raw runs. Fixture corrections
-live in the temporary comparison driver; the repository harness is unchanged.
+were applied only to that comparison; the repository harness was unchanged at Phase 7.
 
-Local logs: `/tmp/soju-step-phase7-final-check-*.log`,
-`/tmp/soju-phase7-{musl-clippy,rustdoc,bins}.log`. Original assertion logs use
-`/tmp/soju-phase7-baseline-*.log`; Go differences are in
-`/tmp/soju-phase7-compat/difflatest.txt`, and Rust comparison reports are
-`/tmp/soju-phase7-rust-diff.log` and `/tmp/soju-phase7-rust-diff-stable.log`.
-Temporary services were stopped after both comparisons. Key outcomes and pins
-are recorded here because temporary logs are not durable repository artifacts.
+Temporary services were stopped after both comparisons. The results, pins and
+fixture corrections above preserve the assessment without session artifacts.
 
 ### Final verification through Phase 8
 
@@ -184,5 +176,5 @@ ranges, corrected failures, raw transcript differences and reproduction details.
 The compatibility harness now waits for deferred service completion before
 issuing dependent commands. Both changed scenarios were functionally rerun
 against original/final Rust and Go/Rust. Python syntax passes; Ruff is unavailable.
-Markdown links/anchors and whitespace are checked before commit. Logs and
-measurements use `/tmp/soju-phase9-*`; key results are retained in the final guide.
+Markdown links/anchors and whitespace passed. Settings, measurements and
+limitations are retained in the final guide.

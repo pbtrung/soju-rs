@@ -7,8 +7,9 @@ coverage completeness; fixed semantic properties live in
 [parser_properties.rs](../parser_properties.rs) and the internal storage tests.
 
 Every input is at most 4,096 bytes, each mutation makes at most eight edits, and
-a campaign accepts at most one million mutations. Seed files are replayed first. Corpus files are marked binary to preserve
-exact wire bytes, including CRLF, across checkouts.
+a campaign accepts at most one million mutations. Seed files are replayed first.
+Corpus files are marked binary to preserve exact wire bytes, including CRLF,
+across checkouts.
 PROXY input is an EOF-terminated byte slice, so declared lengths cannot stall on
 network I/O. The BARE target exercises the actual message-ID decoder both from
 raw bytes encoded as base64url and from directly supplied cursor strings.
@@ -24,13 +25,13 @@ done
 
 The final argument is a nonzero decimal seed. Repeating target/seed/count and
 the corpus reproduces the same inputs. A panic writes a reduced input under
-`artifacts/` after at most 128 reduction attempts. Replay it with:
+`tests/fuzz/artifacts/` after at most 128 reduction attempts. Replay it with:
 
 ```sh
 cargo run --manifest-path tests/fuzz/Cargo.toml --locked --bin irc -- --replay tests/fuzz/artifacts/irc-SEED-ITERATION
 ```
 
-If a failure is found, retain the minimal reproducer under `corpus/<target>/`
+If a failure is found, retain the minimal reproducer under `tests/fuzz/corpus/<target>/`
 with an explanatory regression and rerun it. Arbitrary generated artifacts and
 build output are ignored. The checked-in seeds include truncated/overflowing
 lengths, PROXY signatures, Unicode/tag escaping and malformed configuration.
@@ -42,3 +43,5 @@ leading space, and serializing that token makes it look like a tag marker.
 Canonical roundtrip assertions therefore apply only to lexical IRC commands
 (ASCII letters or three digits); malformed command tokens are still parsed.
 This corrected a harness assumption and did not change parser compatibility.
+
+[Development checks](../../doc/development.md) · [Recorded campaigns](../../doc/audit/resource-soaks.md)

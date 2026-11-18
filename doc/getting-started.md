@@ -1,106 +1,123 @@
 # Getting started
 
-## Server side
+This guide sets up a private SQLite-backed bouncer, enables TLS and creates an
+account. Use the [server manual](soju.1.scd) for the full configuration and
+BouncerServ reference, and [compatibility](compatibility.md) for upstream differences.
 
-Download a release archive for your platform from the [releases page], or build
-from source with `cargo build --release` (see the [README]).
+## Install the executables
 
-soju's configuration file (for instance `/etc/soju/config`, passed with
-`-config`) needs to be adjusted to enable TLS. This can be done in several
-ways:
+Extract a [release archive] for the target platform, verify it against its
+`SHA256SUMS`, and install both `soju` and `sojuctl` on the server. Alternatively,
+[build from source](../README.md#building). The examples below assume both
+executables are in `/usr/local/bin` and a system account named `soju` exists.
 
-- By setting up a reverse proxy which takes care of terminating TLS
-  connections, and configuring soju to listen on local unencrypted connections
-  on port 6667:
+## Configure storage and TLS
 
-      listen irc://localhost
+Create `/etc/soju/config` with a configuration such as:
 
-- By specifying the path to the TLS certificate in the soju configuration file:
+```text
+hostname bouncer.example.org
+db sqlite3 /var/lib/soju/main.db
+message-store db
+listen ircs://
+tls /etc/soju/cert.pem /etc/soju/key.pem
+listen unix+admin://
+```
 
-      tls <cert> <key>
+Replace the hostname and certificate paths for your installation. `ircs://`
+listens on the default TLS port, 6697. The service account must be able to read
+the certificate and key. Reload with SIGHUP after certificate renewal.
 
-  The certificate must be readable by soju, and soju needs to be reloaded
-  (SIGHUP) when the certificate is renewed.
+For a TLS-terminating TCP reverse proxy, replace the TLS listener and `tls`
+directive with a loopback plaintext listener:
 
-Users are managed through the admin socket with `sojuctl`. Enable it in the
-configuration file:
+```text
+listen irc://localhost
+```
 
-    listen unix+admin://
+This defaults to port 6667 and is intended to be reachable through the proxy.
+WebSocket/HTTPS listeners and trusted forwarded-identity configuration are
+separate options described in the manual. Only configure proxy trust for the
+actual proxy peers.
 
-The default socket path is `/run/soju/admin`: its directory must exist and be
-writable by soju (with systemd, `RuntimeDirectory=soju` creates it).
+The database contains upstream passwords, private keys and history. Its
+directory should be owned by `soju` with mode 0700. The default admin socket is
+`/run/soju/admin`; its directory must exist and be writable by the service.
+`sojuctl` connects to that socket, so it needs filesystem access to it.
 
-The database (`db sqlite3 <path>`) holds upstream passwords, private keys and
-chat history: keep it in a directory only soju can access, for instance
-`/var/lib/soju` owned by the soju user with mode 0700 (with systemd,
-`StateDirectory=soju` and `UMask=0077`).
+## Run as a service
 
-A minimal systemd unit:
+A minimal systemd unit is:
 
-    [Unit]
-    Description=soju IRC bouncer
-    After=network-online.target
-    Wants=network-online.target
+```ini
+[Unit]
+Description=soju IRC bouncer
+After=network-online.target
+Wants=network-online.target
 
-    [Service]
-    ExecStart=/usr/local/bin/soju -config /etc/soju/config
-    ExecReload=/bin/kill -HUP $MAINPID
-    User=soju
-    RuntimeDirectory=soju
-    StateDirectory=soju
-    WorkingDirectory=/var/lib/soju
-    UMask=0077
-    Restart=on-failure
+[Service]
+ExecStart=/usr/local/bin/soju -config /etc/soju/config
+ExecReload=/bin/kill -HUP $MAINPID
+User=soju
+RuntimeDirectory=soju
+RuntimeDirectoryMode=0700
+StateDirectory=soju
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/soju
+UMask=0077
+Restart=on-failure
 
-    [Install]
-    WantedBy=multi-user.target
+[Install]
+WantedBy=multi-user.target
+```
 
-Start soju (e.g. via systemd or another supervisor daemon), then create an
-initial user:
+`RuntimeDirectory` and `StateDirectory` create private socket/storage directories.
+Install the unit as `/etc/systemd/system/soju.service`, then run as root:
 
-    sojuctl -config /etc/soju/config user create -username <soju username> -password <password> -admin
+```sh
+systemctl daemon-reload
+systemctl enable --now soju
+```
 
-soju-rs can migrate an existing upstream SQLite database on startup. Back it up
-before opening it: the current schema is 35, and upstream soju and older
-soju-rs versions cannot open the upgraded database. See
-[database upgrades and compatibility](message-text-index.md#upgrades-and-compatibility).
+For a foreground run,
+prepare the directories first and run `soju -config /etc/soju/config` as the
+service account.
 
-## Client side
+Once the server is running, create the initial administrator using an account
+with access to the admin socket:
 
-### Client supporting `soju.im/bouncer-networks`
+```sh
+sojuctl -config /etc/soju/config user create -username alice -password '<password>' -admin
+```
 
-If you are using a client supporting the `soju.im/bouncer-networks` IRC
-extension (for instance [gamja]), then you can just connect to soju with your
-username and password.
+Choose the username and password. Client accounts are distinct from the
+system account running the service.
 
-If your client doesn't provide a UI to manage IRC networks, you can talk to
-`BouncerServ`. See the [man page](soju.1.scd) or use `/msg BouncerServ help`.
+## Connect a client
 
-### Other clients
+Connect to the bouncer's TLS hostname and port, using the bouncer account's
+username and password. A client supporting `soju.im/bouncer-networks`, such as
+the tested Gamja/Senpai forks, discovers networks without a username suffix.
+Create or manage networks through its UI or `/msg BouncerServ help`.
 
-You will need to setup one separate server in your client for each server you
-want soju to connect to.
+For other clients, configure a separate connection to the bouncer for each
+upstream network. The username `alice/irc.libera.chat` selects that network;
+if it does not exist, the bouncer can create it from the server address. The
+password remains the bouncer account password. BouncerServ provides advanced
+network and upstream-authentication settings.
 
-The easiest way to get started is to specify the IRC server address directly in
-the username in the client configuration. For example to connect to Libera Chat,
-your username will be: `<soju username>/irc.libera.chat`. Also set your soju
-password in the password field of your client configuration.
+Give separate client installations stable names when they need independent
+delivery cursors: for example `alice/irc.libera.chat@laptop` and
+`alice/irc.libera.chat@workstation`. These names are part of the bouncer login,
+not upstream IRC nicknames.
 
-This will autoconfigure soju by adding a network with the address
-`irc.libera.chat` and then autoconnect to it. You will now be able to join
-any channel like you would normally do.
+## Upgrade an existing installation
 
-For more advanced configuration options, you can talk to `BouncerServ`. See the
-[man page](soju.1.scd) or use `/msg BouncerServ help`.
+Back up before opening an existing SQLite database with a newer binary.
+Supported older databases migrate on startup to schema 35. Upstream Go soju
+and earlier soju-rs cannot open the upgraded database; rollback requires a
+compatible backup. See [backup and upgrade details](message-text-index.md#upgrades-and-compatibility).
 
-If you intend to connect to the bouncer from multiple clients, you will need to
-append a client name in your username. For instance, to connect from a laptop
-and a workstation, you can setup each client to use the respective usernames
-`<soju username>/irc.libera.chat@laptop` and
-`<soju username>/irc.libera.chat@workstation`.
+[Documentation index](README.md) · [Resource limits](resource-limits.md)
 
-[releases page]: https://github.com/pbtrung/soju-rs/releases
-[README]: ../README.md
-[gamja]: https://codeberg.org/emersion/gamja
-
-[Documentation index](README.md) · [Configuration reference](soju.1.scd)
+[release archive]: https://github.com/pbtrung/soju-rs/releases

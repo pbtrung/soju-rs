@@ -14,14 +14,19 @@ Start with the [audit summary](../audit_results.md). The original audit was on
 | [Original baseline](baseline.md) | Audit context, toolchain and compiler assessment |
 | [Dependency assessment](dependency-assessment.md) | Original version/feature inventory and upgrade decisions |
 | [Design review](design-review.md) | Resource, concurrency, architecture and compatibility analysis |
-| [Source prompt](audit_prompt.md) | Audit-only workflow and current reporting/scope rules |
+| [Source prompt](audit_prompt.md) | Preserved audit request and reporting template |
 
-Supporting guides from this audit run:
+Implementation detail and measurement records from this audit run:
 
 - [Dependency maintenance](dependencies.md), including Jiff migration compatibility.
 - [Resource limits](resource-limits.md), including actor-boundary measurements.
 - [Protocol handlers](protocol-handlers.md), including typed service scope.
 - [Parser/resource stress checks](resource-soaks.md), including Phase 8 reproduction and results.
+
+For everyday work, use the [documentation index](../README.md) and
+[development guide](../development.md). Operational budgets are summarized in
+[resource limits](../resource-limits.md); the records above retain the detailed
+accounting and evidence.
 
 All nine implementation phases and 28 sequential steps are verified with documented limits.
 CI findings stay open outside the implementation scope.

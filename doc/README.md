@@ -1,45 +1,50 @@
 # Documentation
 
-## Running soju-rs
+Choose a guide for the task you are doing. The manuals describe accepted
+commands and configuration; the audit records describe dated verification.
 
-- [Getting started](getting-started.md): TLS, service setup, accounts and clients.
-- [Server manual](soju.1.scd): configuration and BouncerServ commands.
-- [Administration manual](sojuctl.1.scd): using the local admin socket.
+## Run and administer a bouncer
 
-For installation, supported builds and differences from upstream, see the
-[project README](../README.md).
+| Guide | What it covers |
+| --- | --- |
+| [Getting started](getting-started.md) | Complete configuration, TLS, systemd, accounts and clients |
+| [Server manual](soju.1.scd) | Configuration directives and BouncerServ commands |
+| [Administration manual](sojuctl.1.scd) | Admin socket and `sojuctl` |
+| [Resource limits](resource-limits.md) | Admission, history/cache limits, overload and shutdown behavior |
+| [Message storage](message-text-index.md) | Schema 35, backup/migration, history indexes and maintenance |
+| [Building and releasing](releasing.md) | GNU/musl archives, checksums, workflows and release helpers |
 
-## Protocol extensions
+## Connect or implement a client
 
-- [Multiplexing](multiplex.md): carry multiple networks on one connection.
-- [Unread and mention state](unread.md): tags on `CHATHISTORY TARGETS` replies.
+- [Compatibility](compatibility.md): upstream differences, supported client behavior
+  and the limits of recorded test results.
+- [Multiplexing](multiplex.md): several networks on one physical connection.
+- [Unread and mention state](unread.md): snapshot tags on `CHATHISTORY TARGETS`.
+- [Compatibility tests](../tests/compat/README.md): IRCv3, transport, Go comparison,
+  local Gamja and Senpai checks.
 
-## Storage and performance
+## Develop and verify changes
 
-- [Parser/resource stress checks](audit/resource-soaks.md): deterministic properties,
-  mutation fuzzing and timed resource measurements.
-- [Resource limits](audit/resource-limits.md): memory-history budgets, eviction and cursor lifetimes.
-
-- [Message storage and indexes](message-text-index.md): current schema,
-  migrations, history queries and maintenance.
-- [Performance measurement](performance-layout.md): reader and storage
-  benchmarks, memory layout and measurement limits.
-- [Compatibility tests](../tests/compat/README.md): IRCv3, Go soju, listener
-  plumbing and gamja checks.
-
-## Development and audit
-
+- [Development](development.md): source map, ownership rules and required checks.
 - [Protocol handler ownership](audit/protocol-handlers.md): typed history requests,
-  command boundaries, service scope and ordered configuration validation.
+  service scope, command dispatch and configuration validation.
+- [Dependency maintenance](audit/dependencies.md): selected features, timestamp
+  migration, dependency policy and the dated version assessment.
+- [Performance measurement](performance-layout.md): reader/storage benchmarks,
+  actor dispatch, memory layout and resource soaks.
+- [Parser mutation campaigns](../tests/fuzz/README.md): bounded inputs, seeds,
+  replay and failure reduction.
 
-- [Dependency maintenance](audit/dependencies.md): completed upgrades, selected
-  features, dependency policy and remaining advisories/parent constraints.
-- [Audit summary](audit_results.md): why/what/how, verified outcomes and remaining scope.
-- [Audit records](audit/README.md): findings, authoritative checklist, verification,
-  progress, source prompt and supporting assessments.
+## Read the verification record
 
-## Historical records
+[Audit summary](audit_results.md) is the entry point. The
+[audit index](audit/README.md) separates findings, the implementation checklist,
+progress, baseline and final results. The
+[final assessment](audit/final-verification.md) records the 2026-11-18 client,
+deployment, performance and resource checks, including failures and limits.
 
-[The archive](archive/README.md) preserves earlier audits and benchmark results.
-Use the current guides above for operational instructions; archived measurements
-describe their original compiler, schema and workload.
+The [archive](archive/README.md) preserves earlier investigations. Its commands,
+measurements and proposed optimizations apply to the versions stated there;
+use the maintained guides above for current operating instructions.
+
+[Project README](../README.md)

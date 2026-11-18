@@ -1,4 +1,8 @@
-# Resource limits
+# Resource policies and implementation evidence
+
+For the operational overview, use [resource limits](../resource-limits.md).
+This record preserves accounting details and dated implementation measurements;
+results from different runs should not be treated as one benchmark series.
 
 ## Memory history
 
@@ -118,7 +122,8 @@ together. Registered SQLite scalar functions apply the same IRC mapping and
 lossy UTF-8 policy as the eager Rust loader, including legacy Go databases.
 Paging can scan/sort a client's durable rows repeatedly; it bounds Rust reload
 storage but does not claim constant-cost queries. No new persistent SQL function
-index is installed, so upstream Go can still open/write the database.
+index is installed. This does not restore upstream compatibility: the database
+remains schema 35, which upstream Go soju cannot open.
 
 Memory-only message stores keep their previous receipt lifetime: target/client
 cursors remain until network/user teardown, including historical client names.
@@ -330,8 +335,9 @@ payload and release its input permit; values below are three-sample medians.
 The boundary reduces current-thread lock-induced timer stalls and slows this
 lightweight, uncontended pipeline. These measurements quantify the latency and
 throughput tradeoff. TLS, persistence and full user-state work are outside the
-pipeline workload; production capacity still needs the separately planned
-controlled resource soaks.
+pipeline workload. Later [finite resource soaks](resource-soaks.md) and the
+[final assessment](final-verification.md) record additional measurements;
+production capacity remains unestablished.
 
 ## OAuth metadata and introspection
 

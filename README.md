@@ -1,187 +1,85 @@
 # soju-rs
 
-A Rust port of [soju], the user-friendly IRC bouncer. soju connects to
-upstream IRC servers on behalf of the user to provide extra functionality:
-multiple users and networks, detached channels, chat history playback, and
-numerous [IRCv3] extensions.
+A Rust port of [soju], a multi-user IRC bouncer. It stays connected to upstream
+IRC servers while your clients are offline, stores chat history and supports
+multiple networks, detached channels and IRCv3 extensions.
 
-soju-rs aims to behave exactly like upstream soju (v0.11): same
-configuration file, migration of existing SQLite databases, same BouncerServ
-commands and the same protocol extensions. It works with [gamja] and other
-soju-aware clients.
-Database upgrades are one-way: back up before migration. The current schema is
-35; earlier soju-rs versions and upstream soju cannot open an upgraded database.
+soju-rs targets upstream soju v0.11 configuration and protocol compatibility,
+with documented differences and Rust extensions for multiplexing and unread
+state. The local Gamja and Senpai forks pass the recorded client checks;
+exact Go transcript equivalence is not established. See
+[compatibility](doc/compatibility.md) for supported behavior and verification limits.
 
 ## Usage
 
-* [Getting started](doc/getting-started.md)
-* [Man page](doc/soju.1.scd) ([sojuctl](doc/sojuctl.1.scd))
-* [Documentation index](doc/README.md)
+Start with [getting started](doc/getting-started.md) for a complete configuration,
+TLS, service setup, accounts and client connections. The server must be running
+with an admin socket before `sojuctl` can manage users:
 
-```
+```sh
 soju -config /etc/soju/config
-sojuctl -config /etc/soju/config user create -username alice -password secret -admin
+# In another terminal, using an account name and password you choose:
+sojuctl -config /etc/soju/config user create -username alice -password '<password>' -admin
 ```
+
+The SQLite database holds credentials, keys and history. Keep its directory
+private and back it up before upgrading. The current schema is 35; older
+soju-rs and upstream soju cannot open an upgraded database. Read the
+[upgrade instructions](doc/message-text-index.md#upgrades-and-compatibility)
+before migrating an existing installation.
 
 ## Building
 
-Requires Rust 1.100.0 or newer (Edition 2024) and a C compiler (SQLite, the TLS
-library and the mimalloc allocator are built from source):
+Use Rust 1.100.0 or newer (Edition 2024). Distro Rust and rustup are both
+supported. Native SQLite, AWS-LC and mimalloc builds require a C compiler,
+CMake, Make and Perl.
 
-    cargo build --release
+```sh
+cargo build --release --locked
+```
 
-Both distro-packaged Rust and rustup toolchains are supported. CI uses Arch
-Linux's stable Rust package; Cargo enforces the minimum version declared in
-`Cargo.toml`. No nightly compiler or edition migration is required.
-
-The `soju` and `sojuctl` binaries are written to `target/release/`. Release
-archives for Linux x86_64 can be built with `scripts/build-release.sh`
-for GNU and static musl. Install both Rust targets, a native C compiler and
-`musl-gcc`, plus CMake, Make and Perl. On Arch Linux, `rust`, `rust-musl`
-and `musl` supply the Rust targets and C compilers (with `gcc` for GNU).
-A local musl compiler wrapper can be selected with
-`CC_x86_64_unknown_linux_musl=/path/to/musl-gcc`.
-
-With these tools installed, run:
-
-    ./scripts/build-release.sh
-
-This writes the two x86_64 archives and `SHA256SUMS` to `dist/`. It uses
-the installed native toolchains directly and verifies both musl executables
-are fully static. Set `DIST_DIR` to choose a
-different archive directory.
-
-To build on GitHub, open **Actions → Build and Release → Run workflow** and
-select the ref to build. The run produces both x86_64 archives and
-`SHA256SUMS` as a downloadable artifact. Enable **Publish the
-archives as a GitHub Release** to publish those files under the
-`v<version>` tag from `Cargo.toml`. The workflow creates the tag at the
-selected commit if needed. Bump the package version and update `Cargo.lock`
-before publishing a new release.
-
-Run the separate **Tests** workflow against the same ref before publishing.
-The release workflow currently does not require that test run.
-
-From a clean `main` checkout, `scripts/release-new.sh 0.99.26` bumps the
-version, commits and pushes it, then dispatches **Build and Release**.
-`scripts/release-replace.sh` replaces the current version's tag/release and
-starts a new build. Replacement deletes existing release assets; use it only
-when you intend to replace that release. Both require authenticated `gh` and
-Git; the new-version helper also requires Python 3.11+.
-
-Before modifying manifests, tags or releases, the helpers verify that
-`release.yml` is active and its definition on remote `main` matches the local
-workflow, including its publishing input. Push workflow changes first.
-This preflight catches missing/disabled/stale workflows, but later network or
-service failures can still prevent dispatch after mutations.
-
-Run their hermetic regression tests with `python3 tests/release_scripts.py`.
-The tests stub all Git/GitHub commands and never publish or replace a release.
+The executables are `target/release/soju` and `target/release/sojuctl`.
+[Release archives](https://github.com/pbtrung/soju-rs/releases) target Linux
+x86_64 GNU and static musl. For local archive builds, checksums, GitHub workflows
+and release helpers, see [building and releasing](doc/releasing.md).
 
 ## Differences from upstream soju
 
-Not supported:
-
-- File uploads (`file-upload`, `/uploads`, `soju.im/FILEHOST`)
-- PostgreSQL (`db postgres`), PAM authentication (`auth pam`) and
-  `http+pprof://` listeners
-- The `fs` message store (`message-store fs`, ZNC-format log files): use
-  `db` (the default)
-- `sojudb` and the tools from upstream's `contrib/` directory: users are
-  managed with `sojuctl` over the admin socket
-
-Additions:
-
-- `soju.im/multiplex`: a client can attach its bouncer networks to its
-  bouncer connection instead of opening one connection per network, see
-  [doc/multiplex.md](doc/multiplex.md). gamja uses it when available
-- `soju.im/unread`: CHATHISTORY TARGETS replies tell which conversations
-  have unread messages or mentions after their read marker, so a client can
-  show them without loading any history, see [doc/unread.md](doc/unread.md).
-  gamja uses it when available
-
-Behaviour changes:
-
-- `/msg NickServ SET <anything>` no longer overwrites the saved SASL
-  credentials with empty ones; only `SET PASSWORD` is saved
-- `METADATA <target> SET <key> <invalid value>` leaves the stored value alone
-  (upstream resets it while replying with an error)
-- TLS listeners negotiate the `irc` ALPN protocol (`http/1.1` for HTTPS),
-  where upstream advertises it but drops it from the per-client
-  configuration. Clients offering ALPN protocols but none of these are
-  rejected during the TLS handshake
-- `certfp generate -bits` accepts RSA key sizes of 2048, 3072 (the default),
-  4096 and 8192
-- Upstream TLS error messages come from rustls rather than Go's crypto/tls
-- Received lines only use the text up to the first CR or LF, including CRs
-  in the middle of a TCP line and text after a line break in a WebSocket
-  frame; lines with invalid UTF-8 are decoded lossily
-- Line breaks in sent messages are replaced with spaces; upstream writes
-  them as is, which splits the message into several lines
-- Text read back from a database or message logs written by upstream (which
-  doesn't validate UTF-8) is decoded lossily
-- Server times (e.g. CHATHISTORY bounds) may have from one to nine
-  fractional second digits, or none; upstream requires exactly three
-- Timestamps use Jiff's Unix timescale: leap seconds are constrained to second
-  59 and dates outside Jiff's timestamp range are rejected. See the
-  [time-library migration notes](doc/audit/dependencies.md#timestamp-compatibility).
-- Memory-only history has aggregate retention budgets and store-scoped cursors;
-  see [resource limits](doc/audit/resource-limits.md).
-- HTTP listeners only speak HTTP/1.1 (no HTTP/2)
-- Behind a trusted proxy, the client address is the last element of
-  `X-Forwarded-For` (the one the proxy added), and must be an IP address.
-  Upstream uses the whole header, so a `client, proxy` list put spaces into
-  IRC prefixes and broke clients. Forwarded addresses with whitespace are
-  ignored
-- Upstream servers whose clock is ahead of the bouncer's are handled (from
-  the unmerged upstream PR #430): CHATHISTORY LATEST/AFTER/AROUND aren't
-  bounded by the bouncer's clock, and MARKREAD may set a read marker up to
-  the latest message even when it's in the future
-- `soju -version` prints the version, which is also logged on startup
-- With `message-expiry` and the `db` message store, the search index is
-  optimized after expired messages are deleted, and the SQLite database is
-  vacuumed on startup, before users start, and when `message-expiry` is
-  changed by a reload, if at least 25% of its pages are free (upstream
-  leaves it to the admin)
-- The message table is clustered by target and time, so a client loading
-  recent history reads a few consecutive pages per channel instead of rows
-  scattered over the whole file (see [message storage](doc/message-text-index.md#current-layout)).
-  Sparse FTS and guarded updates reduce unnecessary work. The current
-  database schema is version 35; earlier soju-rs and upstream versions
-  cannot open the upgraded database
+Rust-specific capabilities provide [multiplexing](doc/multiplex.md) and
+[unread/mention snapshots](doc/unread.md). Notable unsupported upstream features
+include file uploads, PostgreSQL, PAM and the filesystem message store.
+Timestamp handling, memory retention, transport behavior and storage layout
+also have intentional differences. The complete list is in
+[compatibility](doc/compatibility.md#differences-from-upstream-soju).
 
 ## Testing
 
-`cargo test` runs unit tests and the integration tests ported from upstream,
-the latter on both the multi-threaded and the current-thread runtime (soju-rs
-uses the current-thread one on machines with a single CPU). Owned actor
-handlers run on bounded blocking workers on either runtime so SQLite contention
-does not block the async networking thread. GitHub Actions
-runs the Cargo suite for GNU and musl in the latest Arch Linux image when
-manually triggered with **Run workflow**. It also runs the following
-compatibility checks:
+[Development](doc/development.md) describes source ownership, required checks
+and GNU/musl verification. Server integration scenarios run on both Tokio
+runtime flavors; blocking actor work is admitted through a bounded worker
+boundary to keep independent networking responsive during SQLite contention.
 
-- end-to-end tests using the latest default-branch commit of
-  [pbtrung/gamja] in headless Chromium against soju-rs and upstream Go soju
-- IRCv3 specification checks (CAP 302, SASL 3.2, labeled-response, batch,
-  echo-message, server-time, chathistory, read-marker, metadata-2,
-  bouncer-networks)
-- listener checks for TLS, client certificates, PROXY protocol, identd and
-  Prometheus
+[Compatibility tools](tests/compat/README.md) test IRCv3, transports, Go soju
+transcripts and Gamja browser flows. Senpai's real-bouncer integration runs
+from its own checkout. [Parser mutation campaigns](tests/fuzz/README.md),
+[resource limits](doc/resource-limits.md) and
+[performance measurements](doc/performance-layout.md) cover other focused checks.
 
-The [compatibility tools](tests/compat/README.md) also include a manual
-transcript comparison against upstream Go soju, with both bouncers connected
-to [ergo]. The comparison reports differences from Rust-specific features
-such as multiplexing and multiline support.
+The **Tests** and **Build and Release** GitHub workflows are manually dispatched.
+Publishing does not require a successful Tests run; run tests against the same
+commit before publishing. [Audit records](doc/audit_results.md) preserve actual
+results, unresolved CI findings and verification limits.
+
+## Documentation
+
+The [documentation index](doc/README.md) groups operator, client and developer
+guides. Command and configuration references are in the
+[server manual](doc/soju.1.scd) and [admin-client manual](doc/sojuctl.1.scd).
 
 ## License
 
-AGPLv3, see LICENSE.
+AGPL-3.0-only; see [LICENSE](LICENSE).
 
 Copyright (C) 2020 The soju Contributors
 
 [soju]: https://soju.im
-[IRCv3]: https://ircv3.net/
-[gamja]: https://codeberg.org/emersion/gamja
-[pbtrung/gamja]: https://github.com/pbtrung/gamja
-[ergo]: https://ergo.chat

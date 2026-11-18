@@ -168,7 +168,7 @@ None confirmed. Bounded mutation campaigns and three-minute workload soaks pass;
 - **Impact:** Resource and cancellation regressions can pass the current suite; compiler/Clippy success does not validate native allocator/SQLite/AWS-LC behavior.
 - **Recommended fix:** Add finding-specific regressions, property tests for parsers/IDs, separate fuzz targets/corpus, file-backed integrity/rollback/concurrent-initializer cases.
 - **Verification:** Commands/coverage targets in phases 8 and 9. Preserve all existing tests; record unsupported tools as blocked rather than silently skipping.
-- **Status:** Completed for STEP-025–026. Deterministic parser properties, bounded mutation corpora, transactional/migration/concurrent-initializer regressions and actual three-minute resource soaks pass. A WAL startup race found by the new tests is fixed with bounded retry. Final GNU/musl suites pass 298 tests each. Coverage-guided continuous fuzzing, browser/deployment comparison and multi-hour workload coverage remain explicit verification limits rather than inferred successes.
+- **Status:** Completed for STEP-025–026. Deterministic parser properties, bounded mutation corpora, transactional/migration/concurrent-initializer regressions and actual three-minute resource soaks pass. A WAL startup race found by the new tests is fixed with bounded retry. Final GNU/musl suites pass 298 tests each. Phase 9 subsequently adds browser/client and restored-archive deployment checks; see [final verification](final-verification.md). Coverage-guided continuous fuzzing, complete production deployment coverage and multi-hour workloads remain unestablished.
 
 #### AUTH-001 — OAuth discovery requires issuer presence, not equality
 

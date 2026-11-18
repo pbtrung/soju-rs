@@ -36,7 +36,8 @@ this run does not refresh the advisory database. No manifest or lockfile changed
 
 ## Release and restored-database checks
 
-`DIST_DIR=/tmp/soju-phase9-dist scripts/build-release.sh` passes for v0.99.25.
+`scripts/build-release.sh` with a separate archive output directory passes for
+v0.99.25.
 Both archives pass `sha256sum -c SHA256SUMS`, extraction and CLI smoke checks:
 `soju -version` exits 0; `sojuctl -help` exits 2 with usage. Both musl binaries
 have neither ELF INTERP nor dynamic NEEDED entries.
@@ -92,9 +93,9 @@ contain missing-git-metadata notices because setup copies tracked Gamja files
 without its `.git` directory; the build and all browser assertions pass.
 
 Reproduction uses [tests/compat/README.md](../../tests/compat/README.md), with
-`COMPAT_WORK=/tmp/soju-phase9-compat`, the pins above, `GAMJA_SRC=../gamja`
-and `CHROMIUM_EXECUTABLE=/usr/bin/chromium`. Run environment-resetting harnesses
-sequentially. The Rust comparison substitutes the original Rust release for the
+a dedicated `COMPAT_WORK` directory, the pins above, an absolute `GAMJA_SRC`
+path to the local Gamja checkout and `CHROMIUM_EXECUTABLE=/usr/bin/chromium`.
+Run environment-resetting harnesses sequentially. The Rust comparison substitutes the original Rust release for the
 Go executable in an isolated copy of `env-up.sh`; both sides retain separate
 Ergo instances and databases.
 
@@ -170,10 +171,5 @@ real push delivery and public-certificate/reverse-proxy deployments are not
 established. The measured actor handoff cost and memory-only receipt retention
 remain explicit. Final verification does not remove those limitations.
 
-Local evidence uses `/tmp/soju-phase9-*`: GNU/musl tests and lint logs, archive
-and deployment checks, fuzz campaigns, browser/client outputs, Go and Rust
-comparison reports, `performance.log`, `connect-pages.log` and `soaks/`.
-Temporary drivers are `measure.py`, `dbperf.py`, `deploy.py` and `rust-diff.py`.
-Their key settings/results are recorded here because temporary files are not
-durable evidence. Compatibility processes are stopped after verification;
-no release is published by these checks.
+Settings and key results are retained in this record. Compatibility processes
+were stopped after verification; no release was published by these checks.

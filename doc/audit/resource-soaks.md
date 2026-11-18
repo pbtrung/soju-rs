@@ -8,8 +8,10 @@ soaks and report them ignored; the explicit runner executes them.
 From the repository root:
 
 ```sh
-python3 scripts/resource-soak.py --seconds 180 --output /tmp/soju-resource-soak
+python3 scripts/resource-soak.py --seconds 180 --output "$HOME/soju-soak-results"
 ```
+
+Choose a fresh output directory for the samples to retain.
 
 The runner starts isolated optimized test processes concurrently, with the
 requested load duration and five seconds of cooldown. Linux `/proc` supplies RSS
@@ -95,8 +97,3 @@ doc tests. The two timed tests remain opt-in/ignored in the normal suite and
 were executed separately as recorded above. Strict Clippy on both targets,
 strict rustdoc, standalone fuzz formatting/Clippy/build and documentation link
 checks pass. Python syntax and the actual soak runner pass; Ruff was unavailable.
-
-Logs: `/tmp/soju-phase8-soaks/`, `/tmp/soju-phase8-fuzz-smoke.log` and
-`/tmp/soju-step-phase8-final-check-*.log`. The initial harness assertion is in
-`/tmp/soju-phase8-fuzz-initial-failure.log`. These temporary paths are convenience
-evidence; the workload, outcomes, pins and limits are retained here.

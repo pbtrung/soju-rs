@@ -149,8 +149,10 @@ The following directives are supported:
 
 	Supported drivers:
 
-	- _sqlite3_ expects _source_ to be a path to the SQLite file. The database
-	  format is the same as upstream soju's.
+	- _sqlite3_ expects _source_ to be a path to the SQLite file. soju-rs
+	  migrates supported older upstream SQLite databases on startup. Upgrades
+	  to schema 35 are one-way; upstream soju and older soju-rs cannot open the upgraded
+	  file. Make a SQLite-consistent backup before upgrading.
 
 *message-store* <driver>
 	Set the database location for IRC messages. By default, _db_ is used.
@@ -160,7 +162,9 @@ The following directives are supported:
 	- _db_ stores messages in the database. A full-text search index is used to
 	  speed up search queries.
 	- _memory_ stores messages in memory. For each channel/user, only the
-	  latest 4K messages are kept in memory, older messages are discarded. This
+	  latest 4K messages are kept in memory, subject also to per-user aggregate
+	  limits of 1,024 targets, 16,384 messages and 16 MiB of accounted storage.
+	  Target/message eviction can truncate history earlier than the 4K cap. This
 	  driver is very basic and doesn't support features such as the
 	  _chathistory_ extension and search.
 

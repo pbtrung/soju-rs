@@ -3,8 +3,9 @@
 Measure the path a change affects: parsing, history lookup, connection handling
 and notification work have different costs. The
 [archived review](archive/performance-layout.md) retains the Rust 1.99.1 layout
-and reader timing results. Those measurements have not been rerun for this
-documentation cleanup.
+and reader timing results. The [2026-11-18 final assessment](audit/final-verification.md#performance-and-resource-measurements)
+records newer reader, actor, receipt, SQL and resource results. Neither set of
+measurements is a universal throughput claim.
 
 ## Reader benchmark
 
@@ -30,6 +31,28 @@ For a before/after comparison, save the baseline and changed optimized
 executables, then alternate runs on the same machine after compilation has
 finished. Record commit, compiler, target, CPU, allocator, payloads and sample
 ranges. Compare equivalent build settings and workloads.
+
+## Actor, receipt and resource workloads
+
+```sh
+cargo bench --bench reader -- --actor-boundary
+cargo bench --bench reader -- --receipt-clients
+cargo bench --bench reader -- --memory-churn
+python3 scripts/resource-soak.py --seconds 180 --output "$HOME/soju-soak-results"
+```
+
+The actor workload compares legacy dispatch models and bounded blocking jobs,
+including SQLite lock contention and parsed-message handoffs on both runtimes.
+The receipt workload compares enumeration algorithms on identical in-memory
+rows; it does not measure persistent-cache capacity. Memory churn prints
+accounted history usage and RSS. The timed soak runner exercises connection
+admission/teardown, sender churn and slow-push queue ownership, then checks drain.
+Use a new output directory for the samples you intend to keep.
+
+The soaks need local socket access and Linux `/proc` counters. They run as
+opt-in optimized tests, outside normal `cargo test`; see
+[workloads and interpretation](audit/resource-soaks.md). Finite regression tests,
+mutation campaigns and timed resource models answer different questions.
 
 ## Storage benchmark
 
@@ -70,6 +93,7 @@ For resource changes, track active tasks, open file descriptors, retained
 queue/history bytes and RSS during repeated connection churn and sustained
 traffic. Test slow readers, many distinct senders and slow push endpoints.
 Per-connection limits alone do not establish a process-wide memory bound;
-the [audit checklist](audit/implementation-plan.md) tracks the remaining resource risks.
+the [resource guide](resource-limits.md) describes current policies and their
+unbounded exclusions.
 
 [Documentation index](README.md) · [Compatibility tests](../tests/compat/README.md)

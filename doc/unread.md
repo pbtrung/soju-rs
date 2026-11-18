@@ -58,7 +58,8 @@ message reads it.
 The server keeps, for each conversation, the time of the latest message
 mentioning the user, in the `TargetHighlight` table (schema 35), keyed by
 network and target name. Mention updates are coalesced for one second before
-being written; target listings reflect persisted state. Reading a target
+being written; actor/database delays or retries can extend that interval.
+Target listings reflect persisted state, not pending updates. Reading a target
 updates its read marker rather than its mention timestamp.
 
 Comparing text and mention times with `ReadReceipt` gives the two tags.
