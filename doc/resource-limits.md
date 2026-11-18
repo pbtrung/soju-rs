@@ -296,3 +296,40 @@ checks independent duplex I/O and a 10-ms timer within 200 ms, preserves event
 order, coalesces 1,000 expiry reloads into at most three tracked tasks and checks
 that shutdown leaves none. This controlled bound does not promise latency under
 arbitrary host load or for a user's own operation waiting on the database.
+
+## OAuth metadata and introspection
+
+OAuth discovery now binds the returned issuer exactly to the configured issuer
+without client credentials. The comparison preserves code points, path escapes,
+explicit ports and trailing slash; it does not normalize provider identity.
+Discovery inserts the well-known path before the issuer path, trimming its
+terminating slash as specified by [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414.html#section-3.3).
+
+Production issuer/introspection URLs require HTTPS and normal certificate
+verification. Redirects are rejected for both discovery and token POSTs. An
+introspection endpoint may use another HTTPS host when the verified issuer
+explicitly supplies it, but cannot embed userinfo or a fragment. Issuer queries,
+fragments, whitespace and backslashes are rejected. Configure direct final URLs
+and make the issuer string match the provider exactly when migrating older
+configurations that relied on redirects or normalized issuer aliases.
+
+The explicit Rust extension `http+insecure://127.0.0.1:PORT/realm` permits local
+HTTP fixtures only. It requires a literal loopback address, disables proxies,
+and restricts introspection to the same HTTP origin and port. Metadata reports
+`http://127.0.0.1:PORT/realm` as issuer. Plain HTTP configuration, localhost DNS
+names and delegation to other origins are rejected by this test-only policy.
+
+Both response bodies are limited to 64 KiB, checking advertised length and
+counting actual streamed bytes when length is missing/chunked. The HTTP client
+has a ten-second request/body timeout. Decoder errors report only category and
+position, never response values; HTTP errors omit URL/query data and response
+bodies. Tokens remain form-encoded POST data and client-secret Basic auth keeps
+its existing percent-encoding behavior. Inactive tokens and missing usernames
+cannot authenticate. [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662.html#section-4)
+provides the token-introspection transport and credential-handling context.
+
+New regression code covers matching/missing/mismatched issuers, exact identity,
+HTTP/HTTPS policy, untrusted TLS certificates, cross-origin local delegation,
+redirects, known/chunked body limits, inactive tokens, external PLAIN wiring,
+client credentials and error redaction. Execution is deferred until the final
+Phase 6 test/gate run.

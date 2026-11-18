@@ -7,10 +7,12 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use serde::Deserialize;
 
 use crate::config::{self, AuthDriver};
 use crate::database::{Database, parse_url, split_host_port};
+
+mod oauth;
+pub use oauth::OAuth2;
 
 /// An authentication error. The internal error is logged, the external
 /// message can safely be sent to the user.
@@ -224,32 +226,6 @@ impl PlainAuthenticator {
     }
 }
 
-/// OAuth 2.0 token introspection (RFC 7662), with server discovery (RFC
-/// 8414).
-pub struct OAuth2 {
-    introspection_url: String,
-    client_id: String,
-    client_secret: String,
-    client: reqwest::Client,
-}
-
-#[derive(Deserialize)]
-struct OAuth2Server {
-    #[serde(default)]
-    issuer: String,
-    #[serde(default)]
-    introspection_endpoint: String,
-    introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct OAuth2Introspection {
-    #[serde(default)]
-    active: bool,
-    #[serde(default)]
-    username: String,
-}
-
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -309,130 +285,6 @@ pub fn query_escape(s: &str) -> String {
         }
     }
     out
-}
-
-impl OAuth2 {
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
-    pub async fn new(auth_url: &str) -> Result<OAuth2> {
-        let u = parse_url(auth_url)
-            .map_err(|e| anyhow!("failed to parse OAuth 2.0 server URL: {e}"))?;
-        let (mut client_id, mut client_secret) = (String::new(), String::new());
-        let rest = auth_url.split_once("://").map_or("", |(_, r)| r);
-        let authority = rest.split('/').next().unwrap_or("");
-        if let Some((userinfo, _)) = authority.rsplit_once('@') {
-            match userinfo.split_once(':') {
-                Some((id, secret)) => {
-                    client_id = percent_decode(id);
-                    client_secret = percent_decode(secret);
-                }
-                None => client_id = percent_decode(userinfo),
-            }
-        }
-
-        let path = format!("/.well-known/oauth-authorization-server{}", u.path)
-            .trim_end_matches('/')
-            .to_owned();
-        let discovery_url = format!("{}://{}{}", u.scheme, u.host, path);
-        let client = http_client()?;
-        let server =
-            tokio::time::timeout(Duration::from_secs(10), discover(&client, &discovery_url))
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!(error).context(anyhow!(
-                        "OAuth 2.0 discovery failed: context deadline exceeded"
-                    ))
-                })?
-                .map_err(|e| anyhow!("OAuth 2.0 discovery failed: {e}"))?;
-
-        if server.introspection_endpoint.is_empty() {
-            bail!("OAuth 2.0 server doesn't support token introspection");
-        }
-        if let Some(methods) = &server.introspection_endpoint_auth_methods_supported {
-            let supports_none = methods.iter().any(|m| m == "none");
-            let supports_basic = methods.iter().any(|m| m == "client_secret_basic");
-            if client_id.is_empty() && !supports_none {
-                bail!("OAuth 2.0 server requires authentication for introspection");
-            }
-            if !client_id.is_empty() && !supports_basic {
-                bail!(
-                    "OAuth 2.0 server doesn't support Basic HTTP authentication for introspection"
-                );
-            }
-        }
-
-        Ok(OAuth2 {
-            introspection_url: server.introspection_endpoint,
-            client_id,
-            client_secret,
-            client,
-        })
-    }
-
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if configuration, credentials, discovery, or the authentication backend cannot be validated.
-    pub async fn auth_oauth_bearer(&self, token: &str, remote_addr: &str) -> Result<String> {
-        let body = format!("token={}", query_escape(token));
-        let mut req = self
-            .client
-            .post(&self.introspection_url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Accept", "application/json")
-            .body(body);
-        req = set_forwarded(req, remote_addr);
-        if !self.client_id.is_empty() {
-            let creds = format!(
-                "{}:{}",
-                query_escape(&self.client_id),
-                query_escape(&self.client_secret)
-            );
-            req = req.header("Authorization", format!("Basic {}", BASE64.encode(creds)));
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| anyhow!("failed to send OAuth 2.0 introspection request: {e}"))?;
-        if resp.status().as_u16() != 200 {
-            bail!("OAuth 2.0 introspection error: {}", resp.status());
-        }
-        let data: OAuth2Introspection = resp
-            .json()
-            .await
-            .map_err(|e| anyhow!("failed to decode OAuth 2.0 introspection response: {e}"))?;
-        if !data.active {
-            return Err(invalid_credentials(anyhow!("invalid access token")));
-        }
-        if data.username.is_empty() {
-            // We really need the username here, otherwise an OAuth 2.0 user
-            // can impersonate any other user.
-            bail!("missing username in OAuth 2.0 introspection response");
-        }
-        Ok(data.username)
-    }
-}
-
-async fn discover(client: &reqwest::Client, url: &str) -> Result<OAuth2Server> {
-    let resp = client
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| anyhow!("failed to send request: {e}"))?;
-    if resp.status().as_u16() != 200 {
-        bail!("OAuth 2.0 HTTP error: {}", resp.status());
-    }
-    let data: OAuth2Server = resp
-        .json()
-        .await
-        .map_err(|e| anyhow!("failed to decode response: {e}"))?;
-    if data.issuer.is_empty() {
-        bail!("missing issuer in response");
-    }
-    Ok(data)
 }
 
 #[cfg(test)]

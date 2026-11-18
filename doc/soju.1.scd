@@ -287,7 +287,18 @@ The following directives are supported:
 		be provided. The client ID and client secret can be provided as username
 		and password in the URL. The authorization server must support OAuth 2.0
 		Authorization Server Metadata (RFC 8414) and OAuth 2.0 Token
-		Introspection (RFC 7662).
+		Introspection (RFC 7662). The metadata issuer must exactly equal the
+		configured URL after removing client credentials, including path,
+		encoding and trailing slash. Both issuer and introspection endpoint
+		must use HTTPS with normal certificate verification. Redirects are
+		rejected; configure the final issuer/endpoint URLs. Metadata and
+		introspection bodies are limited to 64 KiB with a 10-second request
+		timeout. Endpoint URL userinfo and fragments are rejected.
+
+		For local tests only, the Rust-specific _http+insecure://_ scheme
+		explicitly permits HTTP on a literal loopback address. The metadata
+		issuer uses _http://_; introspection must use that same loopback
+		origin and port. Plain _http://_ issuer configuration is rejected.
 
 *client-cert-auth* true|false
 	Enable/disable client certificate authentication. By default, client

@@ -696,7 +696,7 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Instructions: RFC issuer equality validation, secure endpoint/redirect policy and byte-bounded response decoding; retain intentional local testing support only through explicit policy. Preserve token/secret redaction.
   - Dependencies: STEP-010. Risks: provider configurations previously accepted become rejected; document required changes.
   - Verification: matching/mismatch discovery, HTTP/HTTPS/redirect/oversized/error/token cases, external auth integration tests.
-  - Acceptance/status: mismatched issuer cannot authenticate, configured compatibility documented, secrets absent from logs; **Not Started**.
+  - Acceptance/status: mismatched issuer cannot authenticate, configured compatibility documented, secrets absent from logs; **In Progress**. Implementation and mock-provider regressions written; final Phase 6 test/gate execution follows.
 
 ### Phase 7 — Architecture Refactoring
 
