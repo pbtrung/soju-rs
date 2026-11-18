@@ -373,6 +373,9 @@ async fn registration_timeout() {
     database.store_network(user.id, &mut network).unwrap();
     let srv = Server::new(database, Logger::new(false));
     srv.set_config(ServerConfig::default());
+    // The registration deadline starts before the fake server reads the
+    // handshake, so include that elapsed time in the lower-bound assertion.
+    let start = tokio::time::Instant::now();
     srv.start().unwrap();
 
     let (s, _) = tokio::time::timeout(TIMEOUT, listener.accept())
@@ -385,7 +388,6 @@ async fn registration_timeout() {
     upstream.expect("USER").await;
     // The server never completes registration
     tokio::time::pause();
-    let start = tokio::time::Instant::now();
     assert!(upstream.reader.read_message().await.unwrap().is_none());
     assert!(start.elapsed() >= crate::upstream::REGISTER_TIMEOUT);
     srv.shutdown().await;

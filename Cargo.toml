@@ -1,6 +1,6 @@
 [package]
 name = "soju"
-version = "0.99.25"
+version = "0.99.26"
 edition = "2024"
 rust-version = "1.100"
 description = "A user-friendly IRC bouncer (Rust port of soju)"

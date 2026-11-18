@@ -121,6 +121,15 @@ async fn websocket_disconnect_releases_the_user_and_allows_reconnection() {
         })
         .await
         .expect("WebSocket registration did not complete");
+        // Welcome output can reach the client before the actor finishes
+        // attachment accounting on its blocking worker.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while handle.num_downstream_conns.load(Ordering::SeqCst) != 1 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("registered WebSocket was not counted");
         assert_eq!(handle.num_downstream_conns.load(Ordering::SeqCst), 1);
         if graceful {
             client.close(None).await.unwrap();
