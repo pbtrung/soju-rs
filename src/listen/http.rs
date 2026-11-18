@@ -270,23 +270,11 @@ fn handle_websocket(
         peer_cert: cert,
     };
     tokio::spawn(async move {
-        let upgraded = match upgrade.await {
-            Ok(u) => u,
-            Err(e) => {
-                logf!(srv.logger, "failed to serve HTTP connection: {e}");
-                return;
-            }
-        };
-        let io: BoxIo = Box::new(TokioIo::new(upgraded));
-        let ws = WebSocketStream::from_raw_socket(io, Role::Server, Some(websocket_config())).await;
-        crate::metrics_guard(&srv, async {
-            let logger = srv
-                .logger
-                .with_prefix(format!("downstream {remote_addr:?}: "));
-            let (conn, reader) = Conn::new_websocket(ws, logger.clone());
-            crate::downstream::serve(srv.clone(), conn, reader, info, logger).await;
-        })
-        .await;
+        let stop = srv.stopped();
+        tokio::select! {
+            () = serve_websocket(srv, upgrade, info, remote_addr) => {},
+            () = stop.cancelled() => {},
+        }
     });
 
     let mut r = response(StatusCode::SWITCHING_PROTOCOLS, Bytes::new());
@@ -311,6 +299,31 @@ fn handle_websocket(
         h.insert(header::SEC_WEBSOCKET_PROTOCOL, v);
     }
     r
+}
+
+async fn serve_websocket(
+    srv: Arc<Server>,
+    upgrade: hyper::upgrade::OnUpgrade,
+    info: ConnInfo,
+    remote_addr: String,
+) {
+    let upgraded = match upgrade.await {
+        Ok(u) => u,
+        Err(e) => {
+            logf!(srv.logger, "failed to serve HTTP connection: {e}");
+            return;
+        }
+    };
+    let io: BoxIo = Box::new(TokioIo::new(upgraded));
+    let ws = WebSocketStream::from_raw_socket(io, Role::Server, Some(websocket_config())).await;
+    crate::metrics_guard(&srv, async {
+        let logger = srv
+            .logger
+            .with_prefix(format!("downstream {remote_addr:?}: "));
+        let (conn, reader) = Conn::new_websocket(ws, logger.clone());
+        crate::downstream::serve(srv.clone(), conn, reader, info, logger).await;
+    })
+    .await;
 }
 
 /// Upstream's WebSocket library limits messages to 32 KiB by default:

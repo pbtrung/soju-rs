@@ -10,7 +10,18 @@ use std::sync::Arc;
 
 impl Server {
     /// Serves an administrative connection (sojuctl).
-    pub async fn serve_admin(self: Arc<Self>, conn: Conn, mut reader: ConnReader, logger: Logger) {
+    pub async fn serve_admin(self: Arc<Self>, conn: Conn, reader: ConnReader, logger: Logger) {
+        let guard = crate::conn::SessionGuard::new(&conn);
+        self.serve_admin_session(conn, reader, logger).await;
+        guard.finish();
+    }
+
+    async fn serve_admin_session(
+        self: Arc<Self>,
+        conn: Conn,
+        mut reader: ConnReader,
+        logger: Logger,
+    ) {
         let prefix = self.prefix();
         if self.is_shutting_down() {
             conn.send_message(msg!("ERROR", "Server is shutting down"));

@@ -115,7 +115,7 @@ None confirmed. Advisory scanning, fuzzing, sanitizers and long-running load tes
 - **Impact:** Connection bursts multiply bounded per-connection allocations and consume file descriptors/handshake work. Deployment proxy/OS limits may mitigate this but are not enforced here.
 - **Recommended fix:** Add configurable listener/global admission permits held for the full accepted connection lifetime, including WebSocket upgrades; avoid spawning tasks merely to wait for a permit. Document resource-limit deployment guidance. Consider per-peer policy only where trusted proxy semantics are correct.
 - **Verification:** Saturate the limit with incomplete handshakes/idle sessions; assert active task/FD ceiling, permit release on errors and no upgrade bypass.
-- **Status:** Not Started.
+- **Status:** Completed. Global accepted-session admission defaults to 256, is reloadable, rejects before spawning, and follows physical streams through TLS/PROXY/HTTP/WebSocket upgrades. Cancellation closes session writers. Concurrent admission, 300 overload attempts, close/error/upgrade/reload/admin/shutdown/abort regressions pass; full GNU/musl checks (240 tests each), strict Clippy/rustdoc and documentation links pass.
 
 #### ASYNC-002 — Single-thread runtime executes blocking DB handlers inline
 
@@ -626,13 +626,13 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Verification: high-cardinality/large-message/cursor/eviction tests; byte/entry counters and sustained RSS experiment.
   - Acceptance/status: bounded counters independent of sender count; retained-history semantics explicitly tested; **Completed**.
 
-- [ ] **STEP-013 (P1): Bound accepted sessions including upgrades.**
+- [x] **STEP-013 (P1): Bound accepted sessions including upgrades.**
   - Findings: MEM-002. Objective: cap sockets/tasks/handshake work globally.
   - Files: `src/listen.rs`, `src/listen/http.rs`, server/configuration/config docs, `tests/listeners.rs`.
   - Instructions: acquire admission without spawning unlimited waiters; transfer owned permit through TLS/PROXY/HTTP/WebSocket lifecycle; define operational default and overload response. Do not confuse forwarded identity with transport peer for limits.
   - Dependencies: STEP-008. Risks: connection rejection under legitimate load, upgrade lifetime errors.
   - Verification: incomplete-handshake/upgrade/error/close bursts; task/FD caps and release on all paths.
-  - Acceptance/status: no permit leak or upgrade bypass; **Not Started**.
+  - Acceptance/status: no permit leak or upgrade bypass; **Completed**.
 
 - [ ] **STEP-014 (P2): Assess receipt-cache growth and enumeration cost.**
   - Findings: PERF-001, MEM-001. Objective: avoid claiming a whole-user budget while cursors grow unchecked.
@@ -878,6 +878,7 @@ Temporary logs: `/tmp/soju-audit-test.log`, `soju-audit-test-unrestricted.log`, 
 | 2026-11-17 / STEP-010 | Made HTTP/TLS/Web Push setup fallible, propagated runtime/signal errors, typed pending-command kinds, and checked registration/upstream/service state. Removed operational unwrap/expect paths and documented fail-closed actor/auth locking separately from SQLite rollback-based recovery. Added six setup/state/poison regressions; limited invariant/fixture expectations to reasoned local scopes. Enabled unwrap/expect lints. fmt/check/strict Clippy and 233 GNU/musl tests plus reader smoke/doc tests pass. Rustdoc retains the 13 existing warnings for STEP-011. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-011 | Completed the prompt compiler/Clippy baseline, including pedantic, indexing/string-slice and error-mapping checks. Added API error/panic contracts, repaired rustdoc links/grammar, reused clones and preserved fixed protocol messages while retaining safe error causes. Reviewed statement-level bounds contracts and function-specific ordered-dispatch exceptions; ARCH-001 extraction remains a separate Phase-7 task and is not claimed resolved. No crate/module-wide lint suppression was added. fmt/check and strict GNU/musl all-target Clippy pass; all 233 tests per target plus reader smoke/doc tests pass. Strict rustdoc now passes with zero warnings. | Completed; commit/push follows verification |
 | 2026-11-17 / STEP-012 | Bound per-user memory history to 1,024 targets, 16,384 messages and 16 MiB accounted storage with coherent eviction and incarnation-scoped cursors. Churn/cursor/accounting tests and full GNU/musl checks (235 tests each), strict Clippy/rustdoc pass. Finite 800k-target/40k-large-record experiment plateaus at 1,024 targets / 1,010 large records; RSS measurements and accounting limits documented in resource-limits.md. Receipt-cache portion of MEM-001 remains for STEP-014. | Completed; commit/push follows verification |
+| 2026-11-17 / STEP-013 | Global accepted-session admission defaults to 256, is reloadable, rejects before spawning, and follows physical streams through TLS/PROXY/HTTP/WebSocket upgrades. Cancellation closes session writers. Concurrent admission, 300 overload attempts, close/error/upgrade/reload/admin/shutdown/abort regressions pass; full GNU/musl checks (240 tests each), strict Clippy/rustdoc and documentation links pass. | Completed; commit/push follows verification |
 
 On every subsequent implementation phase: append changes and actual command results, update finding statuses, record deviations, and retain failed-check evidence. Final verification must be rerun against the changed code; baseline passes are not transferable.
 

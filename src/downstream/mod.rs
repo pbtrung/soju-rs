@@ -846,6 +846,18 @@ pub fn parse_nickserv_credentials(text: &str, nick: &str) -> Option<(String, Str
 pub async fn serve(
     srv: Arc<Server>,
     conn: Conn,
+    reader: ConnReader,
+    info: ConnInfo,
+    logger: Logger,
+) {
+    let guard = crate::conn::SessionGuard::new(&conn);
+    serve_session(srv, conn, reader, info, logger).await;
+    guard.finish();
+}
+
+async fn serve_session(
+    srv: Arc<Server>,
+    conn: Conn,
     mut reader: ConnReader,
     info: ConnInfo,
     logger: Logger,

@@ -201,6 +201,15 @@ The following directives are supported:
 	This currently only applies to _unix://_ listeners: _ws+unix://_ and
 	_http+unix://_ listeners ignore proxy headers.
 
+*max-accepted-connections* <limit>
+	Maximum simultaneous accepted physical sessions across all listeners,
+	including incomplete TLS/PROXY/HTTP handshakes, WebSockets, admin and ident.
+	The default is 256; the limit must be positive. At capacity, newly accepted
+	sockets are closed immediately before parsing a request or handshake.
+	Reloading a lower limit lets existing sessions drain; it prevents new
+	admission until the active count falls below the limit. This Rust-specific
+	extension counts the transport connection, regardless of forwarded identity.
+
 *max-user-networks* <limit>
 	Maximum number of enabled networks per user. By default, there is no limit.
 

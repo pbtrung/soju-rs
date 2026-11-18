@@ -140,3 +140,187 @@ async fn websocket_disconnect_releases_the_user_and_allows_reconnection() {
     assert_eq!(server.user_records().len(), 1);
     server.shutdown().await;
 }
+
+async fn wait_for_sessions(server: &Server, expected: usize) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while server.accepted_sessions() != expected {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "waiting for {expected} sessions, observed {}: {error}",
+            server.accepted_sessions()
+        )
+    })?;
+    Ok(())
+}
+
+fn limited_server(limit: usize) -> anyhow::Result<std::sync::Arc<Server>> {
+    let server = Server::new(Database::open_in_memory()?, Logger::new(false));
+    let mut cfg = server.config().as_ref().clone();
+    cfg.basic.max_accepted_connections = limit;
+    server.set_config(cfg);
+    Ok(server)
+}
+
+#[tokio::test]
+async fn admission_bounds_incomplete_handshakes_and_releases_errors() -> anyhow::Result<()> {
+    use soju::listen::{Address, Kind, Listener, TlsState};
+    use tokio::io::AsyncReadExt;
+
+    let server = limited_server(2)?;
+    let mut addresses = Vec::new();
+    for (kind, tls) in [(Kind::Irc, false), (Kind::Irc, true), (Kind::Http, false)] {
+        let address = spawn_listener(
+            server.clone(),
+            Listener {
+                label: format!("{kind:?}-{tls}"),
+                kind,
+                addr: Address::Tcp("127.0.0.1:0".into()),
+                tls,
+            },
+            Some(TlsState {
+                certs: std::sync::Arc::default(),
+            }),
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("TCP address missing"))?;
+        addresses.push((address, if tls { b"\x16" } else { b"P" }));
+    }
+    for (address, prefix) in &addresses {
+        // A partial PROXY line, TLS header or HTTP request occupies admission.
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            let mut stream = tokio::net::TcpStream::connect(address).await?;
+            stream.write_all(*prefix).await?;
+            held.push(stream);
+        }
+        wait_for_sessions(&server, 2)
+            .await
+            .map_err(|error| error.context(format!("admit on {address}")))?;
+        let task_count = tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks();
+        let fds_before = std::fs::read_dir("/proc/self/fd").ok().map(Iterator::count);
+        for _ in 0..100 {
+            // Every listener shares the same budget; no waiter task is spawned.
+            let mut excess = tokio::net::TcpStream::connect(
+                addresses
+                    .last()
+                    .ok_or_else(|| anyhow::anyhow!("no listeners"))?
+                    .0,
+            )
+            .await?;
+            let mut byte = [0];
+            let read = tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte)).await?;
+            assert!(matches!(read, Ok(0) | Err(_)));
+            assert_eq!(server.accepted_sessions(), 2);
+            assert!(
+                tokio::runtime::Handle::current()
+                    .metrics()
+                    .num_alive_tasks()
+                    <= task_count + 2
+            );
+        }
+        let fds_after = std::fs::read_dir("/proc/self/fd").ok().map(Iterator::count);
+        println!(
+            "admission burst on {address}: active={} tasks={} fds={fds_before:?}->{fds_after:?}",
+            server.accepted_sessions(),
+            tokio::runtime::Handle::current()
+                .metrics()
+                .num_alive_tasks()
+        );
+        drop(held);
+        wait_for_sessions(&server, 0)
+            .await
+            .map_err(|error| error.context(format!("release on {address}")))?;
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_survives_websocket_upgrade_reload_and_shutdown() -> anyhow::Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let server = limited_server(2)?;
+    let address = spawn_listener(
+        server.clone(),
+        parse_listen_uri("http+insecure://127.0.0.1:0")?,
+        None,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("TCP address missing"))?;
+    let mut clients = Vec::new();
+    for _ in 0..2 {
+        let (client, _) = tokio_tungstenite::client_async(
+            format!("ws://{address}/socket"),
+            tokio::net::TcpStream::connect(address).await?,
+        )
+        .await?;
+        clients.push(client);
+    }
+    wait_for_sessions(&server, 2).await?;
+    let mut cfg = server.config().as_ref().clone();
+    cfg.basic.max_accepted_connections = 1;
+    server.reload_config(cfg);
+    let mut excess = tokio::net::TcpStream::connect(address).await?;
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte)).await??,
+        0
+    );
+    let mut client = clients
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("missing client"))?;
+    client.close(None).await?;
+    drop(client);
+    wait_for_sessions(&server, 1).await?;
+    // The upgraded survivor still owns its physical-session permit. Shutdown
+    // cancels it even while it has not sent IRC registration.
+    server.shutdown().await;
+    wait_for_sessions(&server, 0).await?;
+    drop(clients);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn admission_includes_unix_admin_and_shutdown_cancellation() -> anyhow::Result<()> {
+    use soju::listen::{Address, Kind, Listener};
+    use tokio::io::AsyncReadExt;
+
+    let server = limited_server(1)?;
+    let path = std::env::temp_dir().join(format!(
+        "soju-admission-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    spawn_listener(
+        server.clone(),
+        Listener {
+            label: "admin admission test".into(),
+            kind: Kind::Admin,
+            addr: Address::Unix(path.to_string_lossy().into_owned()),
+            tls: false,
+        },
+        None,
+    )
+    .await?;
+    let mut held = tokio::net::UnixStream::connect(&path).await?;
+    // Complete PROXY sniffing, then wait in the administrative IRC reader.
+    held.write_all(b"PING :test\r\n").await?;
+    wait_for_sessions(&server, 1).await?;
+    let mut excess = tokio::net::UnixStream::connect(&path).await?;
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte)).await??,
+        0
+    );
+    server.shutdown().await;
+    wait_for_sessions(&server, 0).await?;
+    std::fs::remove_file(path)?;
+    Ok(())
+}

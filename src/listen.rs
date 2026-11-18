@@ -12,6 +12,9 @@ use crate::server::Server;
 use crate::{logf, proxyproto};
 
 mod address;
+mod admission;
+
+pub(crate) use admission::SessionBudget;
 mod forwarded;
 mod http;
 
@@ -213,11 +216,28 @@ pub async fn spawn_listener(
                     continue;
                 }
             };
+            // Reject immediately, before spawning or parsing TLS/PROXY/HTTP.
+            // The wrapper owns admission through every transport layer/upgrade.
+            let Some(io) = srv
+                .accepted_sessions
+                .admit(srv.config().basic.max_accepted_connections, a.io)
+            else {
+                continue;
+            };
+            let a = Accepted {
+                io,
+                remote: a.remote,
+                unix: a.unix,
+            };
             let srv = srv.clone();
             let acceptor = acceptor.clone();
             let kind = l.kind;
             tokio::spawn(async move {
-                handle_accepted(srv, kind, a, acceptor).await;
+                let stop = srv.stopped();
+                tokio::select! {
+                    () = handle_accepted(srv, kind, a, acceptor) => {},
+                    () = stop.cancelled() => {},
+                }
             });
         }
     });

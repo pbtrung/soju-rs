@@ -51,3 +51,35 @@ bytes; sampled RSS stayed between 9,716 and 11,892 KiB. The subsequent 40,000
 accounted bytes, and sampled RSS was 29,796 KiB in all four batches. These
 measurements describe this finite workload and allocator, not a universal RSS
 ceiling or a server soak result.
+
+## Accepted sessions
+
+`max-accepted-connections` defaults to 256 and must be positive. The budget is
+shared by every listener of the server: TCP, Unix, IRC, TLS, HTTP/WebSocket,
+Prometheus, admin and ident. Admission happens immediately after accept and
+before spawning handshake/session work. At capacity the raw socket is closed;
+there is no response or task waiting for a slot. Kernel listen backlogs and
+one transient accepted socket per listener are outside the admitted count.
+
+An owned permit wraps the physical stream and remains underneath PROXY/TLS,
+HTTP and WebSocket layers. Forwarded identities do not affect accounting.
+Upgrades transfer the stream and its permit. Errors, EOF, cancellation and
+shutdown drop the stream; a session cancellation guard also closes its writer.
+Normal completion still drains final replies. Slow writer cleanup remains
+counted until physical teardown (the existing write timeout is ten seconds).
+
+The setting can be reloaded. Lowering it does not evict existing connections;
+new admission waits for the count to fall below the new limit. Because admin
+and monitoring share the budget, capacity exhaustion also prevents a new admin
+or metrics connection. Size the limit for expected clients and available file
+descriptors; it does not limit outbound upstreams or replace queue limits.
+`soju_accepted_sessions` reports the current admitted physical-session count.
+
+Regressions exercise 300 overload attempts with partial PROXY/TLS/HTTP input,
+assert a two-session ceiling and bounded live Tokio tasks, and check release
+on close, errors, Unix admin shutdown and explicit downstream-task abort. Other
+checks cover concurrent admission, WebSocket upgrade/close, lowering the limit
+and shutdown of an unregistered upgraded session. These are finite regressions,
+not a whole-server soak. In the isolated GNU/Linux run on 2026-11-17,
+each 100-attempt burst kept two admitted sessions, five live Tokio tasks and
+17 process file descriptors before and after the burst.

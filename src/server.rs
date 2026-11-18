@@ -84,6 +84,7 @@ pub struct Server {
     shutdown: AtomicBool,
     stop: CancellationToken,
     next_downstream_id: AtomicU64,
+    pub(crate) accepted_sessions: Arc<crate::listen::SessionBudget>,
     /// Shared with the TLS client certificate verifier
     pub client_cert_auth: Arc<AtomicBool>,
 }
@@ -102,6 +103,7 @@ impl Server {
             shutdown: AtomicBool::new(false),
             stop: CancellationToken::new(),
             next_downstream_id: AtomicU64::new(1),
+            accepted_sessions: Arc::default(),
             client_cert_auth: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -412,9 +414,20 @@ impl Server {
         }
     }
 
+    /// Physical accepted streams still alive, including incomplete handshakes
+    /// and upgraded `WebSockets`. This excludes outbound upstream connections.
+    #[must_use]
+    pub fn accepted_sessions(&self) -> usize {
+        self.accepted_sessions.active()
+    }
+
     pub fn render_metrics(&self) -> String {
-        self.metrics
-            .render(crate::state_lock::lock(&self.users).len())
+        format!(
+            "{}# HELP soju_accepted_sessions Physical accepted sessions including handshakes and upgrades.\n# TYPE soju_accepted_sessions gauge\nsoju_accepted_sessions {}\n",
+            self.metrics
+                .render(crate::state_lock::lock(&self.users).len()),
+            self.accepted_sessions(),
+        )
     }
 }
 

@@ -388,3 +388,25 @@ pub fn host_of(addr: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Cancelling a session must wake its separately spawned writer. Normal
+/// completion disarms this guard so queued final replies can drain.
+pub(crate) struct SessionGuard(Option<Conn>);
+
+impl SessionGuard {
+    pub(crate) fn new(conn: &Conn) -> Self {
+        Self(Some(conn.clone()))
+    }
+
+    pub(crate) fn finish(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        if let Some(conn) = &self.0 {
+            conn.close();
+        }
+    }
+}

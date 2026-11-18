@@ -107,6 +107,8 @@ pub struct BasicServer {
     pub accept_proxy_ips: IpSet,
     pub accept_proxy_unix: bool,
     pub max_user_networks: i64,
+    /// Global accepted physical-session cap, including incomplete handshakes.
+    pub max_accepted_connections: usize,
     pub upstream_user_ips: Vec<IpNet>,
     pub disable_inactive_users_delay: Duration,
     pub message_expiry: Duration,
@@ -154,6 +156,7 @@ impl Server {
                 accept_proxy_ips: IpSet::default(),
                 accept_proxy_unix: false,
                 max_user_networks: -1,
+                max_accepted_connections: 256,
                 upstream_user_ips: Vec::new(),
                 disable_inactive_users_delay: Duration::ZERO,
                 message_expiry: Duration::ZERO,
@@ -299,6 +302,7 @@ const KNOWN_DIRECTIVES: &[&str] = &[
     "accept-proxy-ip",
     "accept-proxy-unix",
     "max-user-networks",
+    "max-accepted-connections",
     "upstream-user-ip",
     "disable-inactive-user",
     "message-expiry",
@@ -459,6 +463,13 @@ pub fn parse(s: &str) -> Result<Server> {
     {
         srv.basic.accept_proxy_unix =
             parse_bool(&s).map_err(|e| anyhow!("directive accept-proxy-unix: {e}"))?;
+    }
+    if let Some(value) = single_string(&get("max-accepted-connections"))? {
+        let limit = value.parse::<usize>()?;
+        if limit == 0 {
+            bail!("max-accepted-connections must be positive");
+        }
+        srv.basic.max_accepted_connections = limit;
     }
     let d = get("max-user-networks");
     if let Some(s) = single_string(&d)? {
@@ -637,6 +648,7 @@ client-cert-auth true
         assert_eq!(cfg.db.source, "soju.db");
         assert_eq!(cfg.basic.msg_store.driver, MsgStoreDriver::Db);
         assert_eq!(cfg.basic.max_user_networks, -1);
+        assert_eq!(cfg.basic.max_accepted_connections, 256);
         assert_eq!(cfg.basic.chat_history_limit, 1000);
         assert_eq!(cfg.auth[0].driver, AuthDriver::Internal);
     }
@@ -652,6 +664,13 @@ client-cert-auth true
         assert!(parse("disable-inactive-user 30").is_err());
         assert!(parse("upstream-user-ip 1.2.3.0/24 4.5.6.0/24").is_err());
         assert!(parse("max-user-networks x").is_err());
+        for value in ["0", "-1", "x", "18446744073709551616"] {
+            assert!(parse(&format!("max-accepted-connections {value}")).is_err());
+        }
+        assert!(
+            parse("max-accepted-connections 17")
+                .is_ok_and(|cfg| cfg.basic.max_accepted_connections == 17)
+        );
         for bad in ["0", "99", "1001", "-1", "x"] {
             assert!(parse(&format!("chathistory-limit {bad}")).is_err(), "{bad}");
         }
