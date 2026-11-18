@@ -518,3 +518,71 @@ async fn duplicate_regain_nick_start_preserves_running_retry() {
         .unwrap();
     env.srv.shutdown().await;
 }
+
+#[tokio::test]
+#[expect(clippy::unwrap_used, reason = "Fixture setup and assertions must fail immediately on invalid data.")]
+async fn pending_timeout_is_autonomous_labeled_and_isolates_late_replies() {
+    let mut env = setup().await;
+    env.downstream.send(msg!("CAP", "REQ", "message-tags batch labeled-response"));
+    let caps = env.downstream.read_until("CAP").await;
+    assert!(caps.params.iter().any(|parameter| parameter == "ACK"));
+    env.downstream.send(msg!("WHOIS", "ghost").with_tag("label", "first"));
+    env.downstream.send(msg!("WHOIS", "next").with_tag("label", "second"));
+    env.upstream.read_until("WHOIS").await;
+    let handle = env.srv.get_user(USERNAME).unwrap();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    assert!(handle.send(crate::user::Event::Run(Box::new(move |user| {
+        let conn = user.networks.first().unwrap().conn.as_ref().unwrap();
+        assert_eq!(conn.pending_cmds.get("WHOIS").unwrap().len(), 2);
+        assert!(send.send((conn.net_id, conn.id)).is_ok());
+    }))));
+    let (network, connection) = receive.await.unwrap();
+    // No reply and no third command: the actor deadline alone must terminate
+    // both requests. Pausing after TCP setup avoids timing the OS handshake.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31)).await;
+    for (target, label) in [("ghost", "first"), ("next", "second")] {
+        let reply = env.downstream.read_until("318").await;
+        assert_eq!(reply.params.get(1).map(String::as_str), Some(target));
+        assert_eq!(reply.tags.get("label"), Some(label));
+    }
+    tokio::time::resume();
+    assert_eq!(env.srv.metrics.pending_command_timeouts_total.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(handle.send(crate::user::Event::UpstreamMessage {net_id: network, conn_id: connection, msg: msg!("318", USERNAME, "next", "late terminal reply"), permit: None}));
+    env.downstream.send(msg!("PING", "late-reply-barrier"));
+    loop {
+        let reply = env.downstream.read().await;
+        assert_ne!(reply.command, "318", "late reply escaped the closed upstream generation");
+        if reply.command == "PONG" { break; }
+    }
+    env.srv.shutdown().await;
+}
+
+#[tokio::test]
+#[expect(clippy::unwrap_used, reason = "Fixture setup and assertions must fail immediately on invalid data.")]
+async fn stale_command_epochs_and_queue_capacity_are_enforced() {
+    let env = setup().await;
+    let handle = env.srv.get_user(USERNAME).unwrap();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    assert!(handle.send(crate::user::Event::Run(Box::new(move |user| {
+        let downstream = user.downstreams.first().unwrap().id;
+        let (network, connection, old_epoch) = {
+            let conn = user.networks.first_mut().unwrap().conn.as_mut().unwrap();
+            for i in 0..64 {
+                assert!(super::enqueue_command(conn, downstream, String::new(), msg!("WHOIS", format!("user{i}"))).is_ok());
+            }
+            assert!(super::enqueue_command(conn, downstream, String::new(), msg!("WHOIS", "overflow")).is_err());
+            assert_eq!(conn.pending_deadlines.len(), 1);
+            (conn.net_id, conn.id, conn.pending_deadlines.get(&super::PendingCommandKind::Whois).unwrap().epoch.clone())
+        };
+        assert!(super::commands::dequeue_command(user, 0, "WHOIS").is_some());
+        user.networks.first_mut().unwrap().conn.as_mut().unwrap().pending_deadlines.get_mut(&super::PendingCommandKind::Whois).unwrap().at = tokio::time::Instant::now();
+        super::pending_command_timeout(user, network, connection, super::PendingCommandKind::Whois, old_epoch);
+        let conn = user.networks.first().unwrap().conn.as_ref().unwrap();
+        assert!(!conn.conn.is_closed());
+        assert_eq!(conn.pending_cmds.get("WHOIS").unwrap().len(), 63);
+        assert!(send.send(()).is_ok());
+    }))));
+    receive.await.unwrap();
+    env.srv.shutdown().await;
+}

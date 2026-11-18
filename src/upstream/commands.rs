@@ -12,12 +12,15 @@ pub fn abort_pending_commands<S: std::hash::BuildHasher>(
     dcs: &mut [DownstreamConn],
     pending: HashMap<String, Vec<PendingCommand>, S>,
 ) {
-    // TODO: support labeled-response
     for l in pending.into_values() {
         for cmd in l {
             let Some(dc) = dcs.iter_mut().find(|d| d.id == cmd.downstream_id) else {
                 continue;
             };
+            let previous_label = dc.label.take();
+            if !cmd.downstream_label.is_empty() && dc.caps.is_enabled("labeled-response") {
+                dc.label = Some(crate::downstream::LabelContext {label: cmd.downstream_label.clone(), ..Default::default()});
+            }
             let nick = dc.nick.clone();
             match cmd.kind {
                 PendingCommandKind::List => {
@@ -65,11 +68,15 @@ pub fn abort_pending_commands<S: std::hash::BuildHasher>(
                     "Unsupported pending command"
                 )),
             }
+            dc.flush_batch();
+            dc.label = previous_label;
         }
     }
 }
 
 fn send_next_pending_command(uc: &mut UpstreamConn, cmd: &str) {
+    let kind = PendingCommandKind::parse(cmd);
+    uc.pending_deadlines.remove(&kind);
     let Some(first) = uc.pending_cmds.get_mut(cmd).and_then(|l| l.first_mut()) else {
         return;
     };
@@ -79,6 +86,9 @@ fn send_next_pending_command(uc: &mut UpstreamConn, cmd: &str) {
         first.downstream_label.clone(),
         first.msg.clone(),
     );
+    uc.pending_deadlines.insert(kind, super::PendingDeadline {
+        at: tokio::time::Instant::now() + Duration::from_secs(30), epoch: std::sync::Arc::new(()),
+    });
     uc.send_message_labeled(id, &label, msg);
 }
 
@@ -108,44 +118,11 @@ pub fn enqueue_command(
         msg,
         sent_at: None,
     };
-    if pending.kind == PendingCommandKind::Unsupported {
+    if pending.kind == PendingCommandKind::Unsupported || uc.conn.is_closed() {
         return Err(Box::new(pending));
     }
     let cmd = pending.msg.command.clone();
     let l = uc.pending_cmds.entry(cmd.clone()).or_default();
-
-    // If we didn't get a reply after a while, just give up
-    // TODO: consider sending an abort reply to downstream
-    let mut timed_out = 0;
-    while timed_out < l.len() {
-        {
-            #![expect(
-                clippy::indexing_slicing,
-                reason = "The surrounding length check or bounded iteration establishes this local collection index."
-            )]
-            match l[timed_out].sent_at {
-                Some(t) if t.elapsed() > Duration::from_secs(30) => {}
-                _ => break,
-            }
-        }
-        // Only log the command name: parameters may be secrets, e.g. the
-        // password of REGISTER
-        {
-            #![expect(
-                clippy::indexing_slicing,
-                reason = "The surrounding length check or bounded iteration establishes this local collection index."
-            )]
-            logf!(
-                uc.logger,
-                "timed out waiting for reply to pending command: {}",
-                l[timed_out].msg.command
-            );
-        }
-        timed_out += 1;
-    }
-    if timed_out > 0 {
-        l.drain(..timed_out);
-    }
 
     if l.len() >= MAX_PENDING_COMMANDS {
         return Err(Box::new(pending));
@@ -153,7 +130,6 @@ pub fn enqueue_command(
     l.push(pending);
 
     // Send the head of the queue unless it's already waiting for replies.
-    // After dropping timed out commands, it may not have been sent yet.
     if l.first().is_some_and(|p| p.sent_at.is_none()) {
         // The queue was idle: the end reply of a command ended early would
         // have arrived by now
@@ -242,4 +218,42 @@ pub(super) fn clear_ended_early(uc: &mut UpstreamConn, cmd: &str) {
     if uc.ended_early.as_ref().is_some_and(|e| e.command == cmd) {
         uc.ended_early = None;
     }
+}
+
+
+impl UpstreamConn {
+    pub(crate) fn clear_pending_deadlines(&mut self) { self.pending_deadlines.clear(); }
+}
+
+impl User {
+    pub(crate) fn next_pending_deadline(&self) -> Option<tokio::time::Instant> {
+        self.networks.iter().filter_map(|network| network.conn.as_ref())
+            .filter(|conn| !conn.conn.is_closed())
+            .flat_map(|conn| conn.pending_deadlines.values().map(|deadline| deadline.at)).min()
+    }
+
+    pub(crate) fn expired_pending_event(&self) -> Option<crate::user::Event> {
+        self.networks.iter().filter_map(|network| network.conn.as_ref())
+            .filter(|conn| !conn.conn.is_closed())
+            .flat_map(|conn| conn.pending_deadlines.iter().map(move |(kind, deadline)| (conn, *kind, deadline)))
+            .filter(|(_, _, deadline)| deadline.at <= tokio::time::Instant::now())
+            .min_by_key(|(_, _, deadline)| deadline.at)
+            .map(|(conn, kind, deadline)| crate::user::Event::PendingCommandTimeout {
+                net_id: conn.net_id, conn_id: conn.id, kind, epoch: deadline.epoch.clone(),
+            })
+    }
+}
+
+/// Aborts every serial queue on this upstream and reconnects after an active
+/// command deadline. Closing the transport isolates late unlabelled replies
+/// from subsequent requests; connection/command epochs reject stale events.
+pub fn pending_command_timeout(u: &mut User, net_id: i64, conn_id: u64, kind: PendingCommandKind, epoch: std::sync::Arc<()>) {
+    let Some(conn) = u.networks.iter_mut().find(|network| network.id() == net_id).and_then(|network| network.conn.as_mut()) else { return; };
+    if conn.id != conn_id || conn.conn.is_closed() || !conn.pending_deadlines.get(&kind).is_some_and(|deadline| std::sync::Arc::ptr_eq(&deadline.epoch, &epoch) && deadline.at <= tokio::time::Instant::now()) { return; }
+    logf!(conn.logger, "pending command timed out; reconnecting upstream: {kind:?}");
+    crate::metrics::inc(&u.srv.metrics.pending_command_timeouts_total);
+    let pending = std::mem::take(&mut conn.pending_cmds);
+    conn.pending_deadlines.clear();
+    conn.conn.close();
+    abort_pending_commands(&mut u.downstreams, pending);
 }

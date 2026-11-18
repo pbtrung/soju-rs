@@ -22,6 +22,7 @@ impl User {
             uch.stop_auto_detach();
         }
         let pending = std::mem::take(&mut uc.pending_cmds);
+        uc.clear_pending_deadlines();
         let net_id = net.id();
         upstream::abort_pending_commands(&mut self.downstreams, pending);
 

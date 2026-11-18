@@ -680,7 +680,7 @@ This is the authoritative checklist for the **next implementation execution**. P
   - Instructions: typed active deadline event keyed by connection/command generation; complete downstream failures, advance or reconnect per late-response policy; stop timers on disconnect/deletion; preserve early-error correlation.
   - Dependencies: STEP-010, STEP-015. Risks: late replies routed to next request.
   - Verification: paused-time no-reply/no-third-request regression; late reply, label, disconnect and queue-cap tests.
-  - Acceptance/status: requests terminate within policy without misrouting; **Not Started**.
+  - Acceptance/status: requests terminate within policy without misrouting; **In Progress**. Implementation written; tests and gates deferred until STEP-020 per user direction.
 
 - [ ] **STEP-019 (P1): Resolve current-thread database stalls.**
   - Findings: ASYNC-002. Objective: keep networking/timers responsive under persistence contention.

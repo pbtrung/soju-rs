@@ -8,7 +8,7 @@ use super::{Event, Network, User, UserRunMsg, dcs_for};
 use crate::database as db;
 use crate::downstream::{self, DownstreamConn, send_service_notice};
 use crate::irc::Tags;
-use crate::{logf, msg};
+use crate::{logf, msg, upstream};
 
 /// Retry delays of a user's loading, doubling from the first.
 const STARTUP_RETRY_MIN: std::time::Duration = std::time::Duration::from_secs(1);
@@ -63,12 +63,13 @@ impl User {
             let ev = if let Some(event) = early.pop_front() {
                 event
             } else {
-                let next = if let Some(deadline) = self.next_mention_deadline() {
+                let deadline = self.next_mention_deadline().into_iter().chain(self.next_pending_deadline()).min();
+                let next = if let Some(deadline) = deadline {
                     tokio::select! {
                         biased;
                         () = tokio::time::sleep_until(deadline) => {
-                            self.flush_mentions(false).await;
-                            continue;
+                            if let Some(event) = self.expired_pending_event() { Some(event) }
+                            else { self.flush_mentions(false).await; continue; }
                         }
                         event = rx.recv() => event,
                     }
@@ -204,6 +205,9 @@ impl User {
                 }
                 let attrs = Tags::from_iter([("error", err)]);
                 self.notify_bouncer_network_state(net_id, &attrs);
+            }
+            Event::PendingCommandTimeout { net_id, conn_id, kind, epoch } => {
+                upstream::pending_command_timeout(self, net_id, conn_id, kind, epoch);
             }
             Event::UpstreamRegistrationDelayDone { net_id, conn_id } => {
                 let Some(ni) = self.net_index(net_id) else {

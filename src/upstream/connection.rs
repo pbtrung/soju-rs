@@ -45,6 +45,7 @@ impl UpstreamConn {
             sasl_client: None,
             sasl_started: false,
             pending_cmds: HashMap::new(),
+            pending_deadlines: HashMap::new(),
             ended_early: None,
             pending_regain_nick: String::new(),
             regain_nick_timer: None,

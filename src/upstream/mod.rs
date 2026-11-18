@@ -77,7 +77,7 @@ mod server_tests;
 mod users;
 
 pub use channels::{auto_detach_timer_fired, update_channel_auto_detach};
-pub use commands::{abort_pending_commands, enqueue_command};
+pub use commands::{abort_pending_commands, enqueue_command, pending_command_timeout};
 pub use connect::{RunnerParams, go_errno_message, run_network};
 pub use dispatch::handle_message;
 use dispatch::{forward_message, forward_msg_by_id, need_params, parse_label};
@@ -285,8 +285,9 @@ impl UpstreamUser {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingCommandKind {
+/// Supported serial commands whose terminal replies need downstream correlation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PendingCommandKind {
     List,
     Who,
     Whois,
@@ -307,6 +308,11 @@ impl PendingCommandKind {
             _ => Self::Unsupported,
         }
     }
+}
+
+struct PendingDeadline {
+    at: tokio::time::Instant,
+    epoch: Arc<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -404,6 +410,7 @@ pub struct UpstreamConn {
     /// have not been sent yet.
     pub pending_cmds: HashMap<String, Vec<PendingCommand>>,
     ended_early: Option<EndedEarly>,
+    pending_deadlines: HashMap<PendingCommandKind, PendingDeadline>,
 
     pending_regain_nick: String,
     regain_nick_timer: Option<AbortHandle>,

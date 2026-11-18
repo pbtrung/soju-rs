@@ -245,3 +245,25 @@ coalescing deadline followed by file reopen, transaction rollback, retained
 failure/recovery, monotonic timestamps, deletion during a blocked flush and
 reported permanent shutdown failures. Current-thread actor-handler database
 responsiveness remains the separate STEP-019 work.
+
+## Pending upstream commands
+
+Each active serial command head has a 30-second Tokio deadline, and each type
+retains at most 64 active/queued commands. The actor includes command deadlines
+in its own timer selection; no later request is needed to trigger expiration
+and no per-command timer task is spawned. Connection IDs and owned command-epoch
+tokens reject stale events after dequeue/replacement or reconnect.
+
+On timeout the bouncer aborts every serial queue on that upstream, sends terminal
+replies with each downstream label, and closes the upstream transport so its
+runner can reconnect. It does not advance another request onto a stream that
+may still receive unlabelled replies from the timed-out request. Closed/stale
+connection generations discard late replies. Deadlines are removed when queues
+advance/empty or the connection disconnects. Only command kinds are logged;
+command parameters can contain secrets.
+
+The deadline applies to the active head starting when its upstream send is
+queued; queued requests can wait behind responsive commands. Timer handling
+occurs at actor event boundaries and therefore also depends on the current
+handler's completion. STEP-019 provides the separate blocking-work execution
+boundary. STEP-018 implementation and regressions await the final Phase 6 gates.

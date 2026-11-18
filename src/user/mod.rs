@@ -71,6 +71,12 @@ pub enum Event {
         runner_id: u64,
         err: String,
     },
+    PendingCommandTimeout {
+        net_id: i64,
+        conn_id: u64,
+        kind: upstream::PendingCommandKind,
+        epoch: Arc<()>,
+    },
     UpstreamRegistrationDelayDone {
         net_id: i64,
         conn_id: u64,
