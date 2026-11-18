@@ -43,6 +43,45 @@ The executables are `target/release/soju` and `target/release/sojuctl`.
 x86_64 GNU and static musl. For local archive builds, checksums, GitHub workflows
 and release helpers, see [building and releasing](doc/releasing.md).
 
+### Arch Linux dependencies
+
+For development, GNU builds and the Rust test suite:
+
+```sh
+sudo pacman -Syu --needed base-devel rust git cmake perl
+```
+
+[base-devel](https://archlinux.org/packages/core/any/base-devel/) supplies GCC,
+Make and binutils. Arch's [rust package](https://archlinux.org/packages/extra/x86_64/rust/files/)
+includes Cargo, rustfmt and Clippy; check `rustc --version` against the minimum
+above. Cargo fetches the Rust dependencies and builds bundled SQLite, AWS-LC
+and mimalloc.
+
+For x86_64 musl builds and tests, also install:
+
+```sh
+sudo pacman -Syu --needed musl rust-musl
+```
+
+For the external Go/IRCv3/transport/Gamja checks and SQLite benchmarks:
+
+```sh
+sudo pacman -Syu --needed go python nodejs npm chromium openssl iproute2 procps-ng sqlite
+```
+
+Go builds the reference bouncer and Ergo; Node.js/npm build Gamja; Chromium runs
+browser tests. OpenSSL generates test certificates, `iproute2` supplies `ss`,
+and `procps-ng` supplies `pgrep` for transport checks. The `sqlite` shell is for
+storage benchmarks, not a prerequisite for the bundled database build.
+Use `CHROMIUM_EXECUTABLE=/usr/bin/chromium` with the
+[compatibility runner](tests/compat/README.md#test-a-local-gamja-fork).
+
+Optional development tools are `rust-analyzer` (editor integration), `ruff`
+(Python formatting/lint), `shellcheck` (shell lint), `scdoc` (manual rendering)
+and `github-cli` (release helpers). Install only what your task needs; see
+[development checks](doc/development.md#required-checks) and
+[release prerequisites](doc/releasing.md).
+
 ## Differences from upstream soju
 
 Rust-specific capabilities provide [multiplexing](doc/multiplex.md) and
