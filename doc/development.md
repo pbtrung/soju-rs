@@ -94,7 +94,10 @@ For performance or ownership changes, choose the relevant
 
 [AGENTS.md](../AGENTS.md) is the repository guidance for automated contributors.
 The [commit skill](../.agents/skills/commit/SKILL.md) defines the authorized
-commit-and-push workflow. Editing documentation does not itself request a
-commit, push or release.
+commit-and-push workflow. Commit preparation uses formatting and static checks;
+it defers compilation and tests to the manually dispatched
+[Tests workflow](../.github/workflows/tests.yml). Committing or pushing does not
+dispatch CI. Editing documentation does not itself request a commit, push or
+release.
 
 [Documentation index](README.md) · [Compatibility](compatibility.md)

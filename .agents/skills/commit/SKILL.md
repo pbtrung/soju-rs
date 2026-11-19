@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Prepare and commit soju-rs changes with relevant checks and a detailed message without AI attribution; push when the user requests the commit-and-push workflow. Use for repository commit requests, not merely creating or editing this skill.
+description: Review and commit soju-rs changes without local compilation or tests, with a detailed message without AI attribution; push when the user requests the commit-and-push workflow. Use for repository commit requests, not merely creating or editing this skill.
 ---
 
 # Commit changes
@@ -22,20 +22,28 @@ any commit, push or release operation.
    to include more. Do not unstage, discard or incorporate unrelated work.
    For partially staged files, avoid staging the whole file just to include
    formatting changes. Resolve genuinely ambiguous scope before committing.
-3. Check the actual proposed content:
+3. Check the actual proposed content without compiling or running tests.
+   Do not run local builds, `cargo check`, Clippy, rustdoc, Cargo tests,
+   compatibility scenarios or other test suites as part of this workflow.
+   This overrides the local build/test checklist in AGENTS.md for commit
+   preparation. Compilation, Clippy, rustdoc and tests belong in the manually
+   dispatched [Tests workflow](../../../.github/workflows/tests.yml).
+   Do not dispatch CI automatically; a commit or push does not request a CI run.
 
    | Changed content | Verification |
    | --- | --- |
-   | Rust, `Cargo.toml`, `Cargo.lock` | `cargo fmt --all`, then the check/Clippy/test commands in AGENTS.md, including all-target and doc tests |
-   | Python under `tests/` | Ruff format/check on touched files if installed; relevant compatibility scenarios when provisioned |
+   | Rust | `cargo fmt --all`, then `cargo fmt --all -- --check` |
+   | `Cargo.toml`, `Cargo.lock` | Review manifest/lockfile consistency without compiling |
+   | Python under `tests/` | Ruff format/check on touched files if installed; do not run scenarios |
    | Shell scripts | `bash -n` on each changed shell script; ShellCheck if installed |
    | Dockerfiles, if present | Appropriate available Dockerfile validation; do not pass Dockerfiles to `bash -n` |
-   | Markdown/docs | Relative links/anchors and stale references; rustdoc for Rust doc comments |
+   | Markdown/docs | Relative links/anchors and stale references; defer rustdoc to CI |
 
    Run `git diff --check` and `git diff --cached --check`. Fix relevant
    failures and rerun affected checks. Review formatter output before staging.
-   Do not suppress Clippy across the crate to obtain a pass. Report unavailable
-   optional tools or environmental blockers; never report unrun checks as passed.
+   Report unavailable optional tools or environmental blockers. State that
+   compilation and tests were deferred to manual CI; never report unrun checks
+   or undispatched CI as passed.
 4. Exclude `target/`, `dist/`, local databases (`*.db`, `*.db-wal`, `*.db-shm`),
    TLS private keys and credentials, including accidentally staged artifacts.
    If such files are already staged, stop and identify the issue before

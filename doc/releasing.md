@@ -45,7 +45,7 @@ Both workflows are manually dispatched:
 
 | Workflow | Behavior |
 | --- | --- |
-| [Tests](../.github/workflows/tests.yml) | GNU/musl Cargo tests; GNU IRCv3, transport and Gamja checks |
+| [Tests](../.github/workflows/tests.yml) | GNU/musl formatting, check, Clippy, builds, tests and rustdoc; GNU IRCv3, transport and Gamja checks |
 | [Build and Release](../.github/workflows/release.yml) | Build/verify/upload archives; optionally publish them |
 
 Run **Tests** on the same commit before publishing. **Build and Release** does

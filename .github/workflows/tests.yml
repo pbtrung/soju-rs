@@ -53,11 +53,28 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust targets
+        run: cargo check --workspace --all-targets --all-features --locked --target "$TARGET"
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked --target "$TARGET" -- -D warnings
+
+      - name: Compile Rust targets
+        run: cargo build --workspace --all-targets --all-features --locked --target "$TARGET"
+
       - name: Run Rust tests
         run: |
           set -euo pipefail
-          cargo test --locked --all-targets --target "$TARGET"
-          cargo test --locked --doc --target "$TARGET"
+          cargo test --workspace --all-targets --all-features --locked --target "$TARGET"
+          cargo test --workspace --doc --all-features --locked --target "$TARGET"
+
+      - name: Build Rust documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps --locked --target "$TARGET"
 
       - name: Prepare compatibility tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
