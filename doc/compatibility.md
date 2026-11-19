@@ -82,7 +82,7 @@ to reproduce checks.
 - `soju -version` prints the version, which is also logged on startup
 - With `message-expiry` and the `db` message store, the search index is
   optimized after expired messages are deleted, and the SQLite database is
-  vacuumed on startup, before users start, and when `message-expiry` is
+  vacuumed on startup, during daily expiry, and when `message-expiry` is
   changed by a reload, if at least 25% of its pages are free (upstream
   leaves it to the admin)
 - The message table is clustered by target and time, so a client loading

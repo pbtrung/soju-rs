@@ -150,7 +150,7 @@ impl Server {
         let expiry_changed = cfg.basic.message_expiry != cur.basic.message_expiry;
         self.set_config(cfg);
         if expiry_changed {
-            self.schedule_message_expiry(true);
+            self.schedule_message_expiry();
         }
     }
 
@@ -221,7 +221,7 @@ impl Server {
                     _ = ticker.tick() => {}
                     () = srv.stop.cancelled() => return,
                 }
-                srv.schedule_message_expiry(false);
+                srv.schedule_message_expiry();
             }
         });
         Ok(())
@@ -268,7 +268,7 @@ impl Server {
             // Scheduling registers tracked work while holding this same lock.
             // Once closed, no later reload can enqueue maintenance.
             let mut expiry = crate::state_lock::lock(&self.expiry_state);
-            expiry.requested = None;
+            expiry.requested = false;
             self.maintenance_tasks.close();
         }
         let handles: Vec<UserHandle> = crate::state_lock::lock(&self.users)

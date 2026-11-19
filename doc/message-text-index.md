@@ -66,12 +66,13 @@ data, index preservation, FTS consistency and reopening an upgraded database.
 
 With `message-expiry` and the database message store, expired messages are
 deleted in chunks. The bouncer optimizes the search index after deletions.
-On startup, and when expiry changes on reload, it vacuums if at least 25% of
-database pages are free. The daily expiry job leaves freed pages available
-for reuse. See [maintenance code](../src/server/maintenance.rs).
+On startup, during daily expiry, and when expiry changes on reload, it
+vacuums if at least 25% of database pages are free. Below that threshold,
+freed pages remain available for reuse. See
+[maintenance code](../src/server/maintenance.rs).
 
-VACUUM rewrites the database and needs extra disk space. A reload-time vacuum
-blocks other database access while it runs. Expiry frees database pages;
+VACUUM rewrites the database and needs extra disk space. A daily or reload-time
+vacuum blocks other database access while it runs. Expiry frees database pages;
 it does not necessarily shrink the file immediately.
 
 For a manual VACUUM, stop the bouncer, make a consistent backup and ensure

@@ -21,16 +21,16 @@ const EXPIRY_CHUNK_PAUSE: Duration = Duration::from_millis(10);
 #[derive(Default)]
 pub(super) struct ExpiryState {
     pub(super) running: bool,
-    pub(super) requested: Option<bool>,
+    pub(super) requested: bool,
 }
 
 impl Server {
-    pub(super) fn schedule_message_expiry(self: &Arc<Self>, vacuum: bool) {
+    pub(super) fn schedule_message_expiry(self: &Arc<Self>) {
         let mut state = crate::state_lock::lock(&self.expiry_state);
         if self.is_shutting_down() {
             return;
         }
-        state.requested = Some(state.requested.unwrap_or(false) || vacuum);
+        state.requested = true;
         if state.running {
             return;
         }
@@ -41,18 +41,18 @@ impl Server {
                 let request = {
                     let mut state = crate::state_lock::lock(&server.expiry_state);
                     if server.is_shutting_down() {
-                        state.requested = None;
+                        state.requested = false;
                     }
-                    let pending = state.requested.take();
-                    if pending.is_none() {
+                    let pending = std::mem::take(&mut state.requested);
+                    if !pending {
                         state.running = false;
                     }
                     pending
                 };
-                let Some(vacuum) = request else {
+                if !request {
                     return;
-                };
-                server.run_message_expiry(vacuum).await;
+                }
+                server.run_message_expiry().await;
             }
         });
     }
@@ -61,14 +61,14 @@ impl Server {
     /// rewriting the whole database holds it for a while, and no user must
     /// wait on it, nor the only runtime thread on a single CPU.
     pub async fn startup_maintenance(self: &Arc<Self>) {
-        self.run_message_expiry(true).await;
+        self.run_message_expiry().await;
     }
 
-    pub(super) async fn run_message_expiry(self: &Arc<Self>, vacuum: bool) {
+    pub(super) async fn run_message_expiry(self: &Arc<Self>) {
         // Deleting and vacuuming can take a while: keep it off the async
         // runtime's workers
         let s = self.clone();
-        match tokio::task::spawn_blocking(move || s.delete_expired_messages(vacuum)).await {
+        match tokio::task::spawn_blocking(move || s.delete_expired_messages()).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => logf!(self.logger, "failed to delete expired messages: {e}"),
             Err(e) => logf!(self.logger, "failed to delete expired messages: {e}"),
@@ -130,12 +130,9 @@ impl Server {
         Ok(())
     }
 
-    /// Deletes expired messages, and vacuums local SQLite if asked: on
-    /// startup, before users start, and when message-expiry changes, which
-    /// may leave at least 25% of the database free. Otherwise, the space freed each
-    /// day is reused by the next day's messages, and rewriting the database
-    /// would hold it meanwhile.
-    pub(crate) fn delete_expired_messages(&self, vacuum: bool) -> Result<()> {
+    /// Deletes expired messages and vacuums local SQLite when at least 25% of
+    /// its pages are free, on startup, daily and when message-expiry changes.
+    pub(crate) fn delete_expired_messages(&self) -> Result<()> {
         let cfg = self.config();
         let expiry = cfg.basic.message_expiry;
         if expiry.is_zero() {
@@ -171,23 +168,21 @@ impl Server {
                         start.elapsed().as_secs_f64()
                     );
                 }
-                if vacuum {
-                    let free = self
-                        .db
-                        .free_page_ratio()
-                        .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
-                    if free >= 0.25 {
-                        let start = Instant::now();
-                        self.db
-                            .vacuum()
-                            .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
-                        logf!(
-                            self.logger,
-                            "vacuumed db in {:.1}s ({:.0}% of it was free)",
-                            start.elapsed().as_secs_f64(),
-                            free * 100.0
-                        );
-                    }
+                let free = self
+                    .db
+                    .free_page_ratio()
+                    .map_err(|e| anyhow!("failed to get db free space: {e}"))?;
+                if free >= 0.25 {
+                    let start = Instant::now();
+                    self.db
+                        .vacuum()
+                        .map_err(|e| anyhow!("failed to vacuum db: {e}"))?;
+                    logf!(
+                        self.logger,
+                        "vacuumed db in {:.1}s ({:.0}% of it was free)",
+                        start.elapsed().as_secs_f64(),
+                        free * 100.0
+                    );
                 }
                 {
                     self.db

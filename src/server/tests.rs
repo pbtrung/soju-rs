@@ -15,7 +15,7 @@ async fn oversized_maintenance_durations_return_errors() {
         cfg.basic.message_expiry = duration;
         cfg.basic.disable_inactive_users_delay = duration;
         srv.set_config(cfg);
-        assert!(srv.delete_expired_messages(false).is_err());
+        assert!(srv.delete_expired_messages().is_err());
         assert!(srv.disable_inactive_users().await.is_err());
     }
 }
@@ -25,7 +25,7 @@ async fn oversized_maintenance_durations_return_errors() {
     clippy::unwrap_used,
     reason = "Fixture setup and assertions fail immediately on invalid test data."
 )]
-fn vacuum_requires_25_percent_free_and_maintenance_request() {
+fn expiry_vacuums_only_when_at_least_25_percent_of_pages_are_free() {
     let srv = Server::new(Database::open_in_memory().unwrap(), Logger::new(false));
     let mut cfg = ServerConfig::default();
     cfg.basic.message_expiry = Duration::from_hours(24);
@@ -47,12 +47,12 @@ fn vacuum_requires_25_percent_free_and_maintenance_request() {
             .collect();
         srv.db.store_messages(net.id, "#a", &messages).unwrap();
     }
-    // Daily expiry frees some pages but does not rewrite the file.
-    srv.delete_expired_messages(false).unwrap();
+    // Expiry preserves free pages below the vacuum threshold.
+    srv.delete_expired_messages().unwrap();
     let low = srv.db.free_page_ratio().unwrap();
     assert!(low > 0.0 && low < 0.25, "{low}");
-    // Startup/reload maintenance must preserve free pages below 25%.
-    srv.delete_expired_messages(true).unwrap();
+    // A repeated expiry run must also preserve free pages below 25%.
+    srv.delete_expired_messages().unwrap();
     assert_eq!(srv.db.free_page_ratio().unwrap(), low);
 
     srv.db
@@ -60,10 +60,8 @@ fn vacuum_requires_25_percent_free_and_maintenance_request() {
         .unwrap();
     let high = srv.db.free_page_ratio().unwrap();
     assert!(high >= 0.25, "{high}");
-    // Even a mostly empty file is not vacuumed during daily expiry.
-    srv.delete_expired_messages(false).unwrap();
-    assert_eq!(srv.db.free_page_ratio().unwrap(), high);
-    srv.delete_expired_messages(true).unwrap();
+    // A daily expiry run vacuums above the threshold, even with no new deletions.
+    srv.delete_expired_messages().unwrap();
     assert_eq!(srv.db.free_page_ratio().unwrap(), 0.0);
 }
 
